@@ -128,16 +128,20 @@ export default function lobbyBrowser({ t }) {
 			s.emit('lobbybrowser', true);
 		});
 
-		ipcRenderer.on(IpcHandlerMessages.JOIN_LOBBY_ERROR, (event, code, server) => {
+		const onJoinLobbyError = (_event: Electron.IpcRendererEvent, code: string, server: string) => {
 			console.log('ERROR: ', code);
 			setCode(`${code}  ${servers[server] ? `on region ${servers[server]}` : `\n Custom Server: ${server}`}`);
-		});
+		};
+		ipcRenderer.on(IpcHandlerMessages.JOIN_LOBBY_ERROR, onJoinLobbyError);
 		const secondPassed = setInterval(() => {
 			forceRender({});
 		}, 1000);
 		return () => {
-			socket?.emit('lobbybrowser', false);
-			socket?.close();
+			// Must be `s`, not the `socket` state: this closure captures the value from
+			// the first render, which is still undefined, so the socket was never closed.
+			s.emit('lobbybrowser', false);
+			s.close();
+			ipcRenderer.off(IpcHandlerMessages.JOIN_LOBBY_ERROR, onJoinLobbyError);
 			clearInterval(secondPassed);
 		};
 	}, []);

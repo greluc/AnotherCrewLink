@@ -38,20 +38,54 @@ export interface HatDementions {
 }
 
 let requestingHats = false;
-export var initializedHats = false;
+export let initializedHats = false;
 
-export function initializeHats() {
-	if (initializedHats || requestingHats) {
+// Bumped whenever the collection changes, so components can depend on a real value
+// instead of on `initializedHats`, whose mutation never triggers a React render.
+let hatsRevision = 0;
+let nextRetryAt = 0;
+const hatListeners = new Set<() => void>();
+
+export function subscribeHats(listener: () => void): () => void {
+	hatListeners.add(listener);
+	return () => {
+		hatListeners.delete(listener);
+	};
+}
+
+export function getHatsRevision(): number {
+	return hatsRevision;
+}
+
+export function initializeHats(): void {
+	if (initializedHats || requestingHats || Date.now() < nextRetryAt) {
 		return;
 	}
 	requestingHats = true;
 	fetch(`${HAT_COLLECTION_URL}/hats.json`)
-		.then((response) => response.json())
+		.then((response) => {
+			if (!response.ok) {
+				throw new Error(`hats.json responded with HTTP ${response.status}`);
+			}
+			return response.json();
+		})
 		.then((data) => {
 			hatCollection = data;
 			initializedHats = true;
+			hatsRevision++;
+			for (const listener of hatListeners) {
+				listener();
+			}
+		})
+		.catch((error) => {
+			// Without this the rejection went unhandled and `requestingHats` stayed true
+			// forever, so hats never loaded again for the rest of the session.
+			nextRetryAt = Date.now() + 30_000;
+			console.warn('Failed to load the hat collection, retrying later:', error);
+		})
+		.finally(() => {
+			requestingHats = false;
 		});
-	return undefined;
 }
 
 const HAT_COLLECTION_URL =  'https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewLink-Hats@master/'; //'https://raw.githubusercontent.com/OhMyGuus/BetterCrewlink-Hats/master';

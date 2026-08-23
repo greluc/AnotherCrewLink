@@ -122,7 +122,10 @@ export async function GenerateHat(imagePath: URL, colors: string[][], colorId: n
 		const temp = `${app.getPath('userData')}/static/generated/hats/${pathToHash(
 			imagePath + '/' + color + '/' + shadow
 		)}.png`;
-		if (!fs.existsSync(temp) || Date.now() - (await fs.promises.stat(temp)).mtimeMs > 300000) {
+		// The filename is already a content hash of image + both colours, so a cached
+		// file can never be stale. The previous mtime check re-rendered every hat through
+		// jimp every 5 minutes.
+		if (!fs.existsSync(temp)) {
 			await colorImage(img, originalData, color, shadow, temp);
 		}
 		return temp;

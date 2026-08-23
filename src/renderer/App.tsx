@@ -135,7 +135,9 @@ export default function App({ t }): JSX.Element {
 		state: 'unavailable',
 	});
 	const playerColors = useRef<string[][]>(DEFAULT_PLAYERCOLORS);
-	const overlayInitCount = useRef<number>(0);
+	// State, not a ref: the effect below has to re-run when the overlay asks for its
+	// initial values, and mutating a ref never triggers a render.
+	const [overlayInitCount, setOverlayInitCount] = useState(0);
 
 	const [settings, setSettings] = useState(SettingsStore.store);
 	const [hostLobbySettings, setHostLobbySettings] = useState(settings.localLobbySettings);
@@ -147,7 +149,7 @@ export default function App({ t }): JSX.Element {
 		ipcRenderer.send(IpcMessages.SEND_TO_OVERLAY, IpcOverlayMessages.NOTIFY_PLAYERCOLORS_CHANGED, playerColors.current);
 		ipcRenderer.send(IpcMessages.SEND_TO_OVERLAY, IpcOverlayMessages.NOTIFY_SETTINGS_CHANGED, SettingsStore.store);
 		ipcRenderer.send(IpcMessages.SEND_TO_OVERLAY, IpcOverlayMessages.NOTIFY_GAME_STATE_CHANGED, gameState);
-	}, [overlayInitCount.current]);
+	}, [overlayInitCount, gameState]);
 
 	useEffect(() => {
 		const onOpen = (_: Electron.IpcRendererEvent, isOpen: boolean) => {
@@ -171,7 +173,7 @@ export default function App({ t }): JSX.Element {
 		};
 
 		const onOverlayInit = () => {
-			overlayInitCount.current++;
+			setOverlayInitCount((count) => count + 1);
 		};
 
 		let shouldInit = true;
@@ -201,6 +203,7 @@ export default function App({ t }): JSX.Element {
 			ipcRenderer.off(IpcRendererMessages.NOTIFY_GAME_STATE_CHANGED, onState);
 			ipcRenderer.off(IpcRendererMessages.ERROR, onError);
 			ipcRenderer.off(IpcOverlayMessages.NOTIFY_PLAYERCOLORS_CHANGED, onColorsChange);
+			ipcRenderer.off(IpcOverlayMessages.REQUEST_INITVALUES, onOverlayInit);
 			shouldInit = false;
 		};
 	}, []);

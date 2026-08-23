@@ -98,7 +98,7 @@ const Overlay: React.FC = function () {
 			ipcRenderer.off(IpcOverlayMessages.NOTIFY_GAME_STATE_CHANGED, onState);
 			ipcRenderer.off(IpcOverlayMessages.NOTIFY_VOICE_STATE_CHANGED, onVoiceState);
 			ipcRenderer.off(IpcOverlayMessages.NOTIFY_SETTINGS_CHANGED, onSettings);
-			ipcRenderer.on(IpcOverlayMessages.NOTIFY_PLAYERCOLORS_CHANGED, onColorChange);
+			ipcRenderer.off(IpcOverlayMessages.NOTIFY_PLAYERCOLORS_CHANGED, onColorChange);
 		};
 	}, []);
 
@@ -134,8 +134,6 @@ const AvatarOverlay: React.FC<AvatarOverlayProps> = ({
 	position,
 	compactOverlay,
 }: AvatarOverlayProps) => {
-	if (!gameState.players) return null;
-
 	const positionParse = position.replace('1', '');
 
 	const avatars: JSX.Element[] = [];
@@ -175,7 +173,11 @@ const AvatarOverlay: React.FC<AvatarOverlayProps> = ({
 			});
 
 		return playerss;
-	}, [gameState.players]);
+	}, [gameState.players, voiceState.otherDead, voiceState.localIsAlive]);
+
+	// Must stay below the hooks above: an early return before them changes the hook
+	// count between renders and crashes the overlay renderer.
+	if (!players) return null;
 
 	// const myPLayer = useMemo(() => {
 	// 	if (!gameState.players) return null;
@@ -258,13 +260,14 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 			let hudWidth = 0,
 				hudHeight = 0;
 			if (windowWidth / (windowheight * 0.96) > iPadRatio) {
-				hudHeight = windowWidth * 0.96;
+				// Window is wider than the tablet ratio, so height is the limiting side.
+				hudHeight = windowheight * 0.96;
 				hudWidth = hudHeight * iPadRatio;
 			} else {
 				hudWidth = windowWidth;
 				hudHeight = windowWidth * (1 / iPadRatio);
 			}
-			return [hudWidth, hudWidth];
+			return [hudWidth, hudHeight];
 		}
 
 		let resultW;
@@ -300,7 +303,7 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 			}
 			return a.id - b.id;
 		});
-	}, [gameState.gameState]);
+	}, [gameState.gameState, gameState.players]);
 	if (!players || gameState.gameState !== GameState.DISCUSSION) return null;
 
 	const overlays = players.map((player) => {

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Player } from '../common/AmongUsState';
 import {
 	getCosmetic,
@@ -7,6 +7,8 @@ import {
 	getHatDementions,
 	initializedHats as initializedHats,
 	initializeHats,
+	subscribeHats,
+	getHatsRevision,
 	HatDementions,
 } from './cosmetics';
 import makeStyles from '@mui/styles/makeStyles';
@@ -289,6 +291,13 @@ const useCanvasStyles = makeStyles(() => ({
 	},
 }));
 
+// Re-renders the avatar once the hat collection finishes downloading.
+function useHatsRevision(): number {
+	const [revision, setRevision] = useState(getHatsRevision);
+	useEffect(() => subscribeHats(() => setRevision(getHatsRevision())), []);
+	return revision;
+}
+
 function Canvas({
 	hat,
 	skin,
@@ -303,6 +312,7 @@ function Canvas({
 	onClick,
 	mod,
 }: CanvasProps) {
+	const hatsRevision = useHatsRevision();
 	const hatImg = useMemo(() => {
 		if (!initializedHats) {
 			initializeHats();
@@ -319,7 +329,7 @@ function Canvas({
 				skin: getHatDementions(skin, mod),
 			},
 		};
-	}, [color, hat, skin, visor, initializedHats, isAlive]);
+	}, [color, hat, skin, visor, isAlive, mod, hatsRevision]);
 
 	const classes = useCanvasStyles({
 		isAlive,

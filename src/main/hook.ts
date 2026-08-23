@@ -62,30 +62,34 @@ ipcMain.handle(IpcMessages.REQUEST_MOD, () => {
 ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 	if (!readingGame) {
 		readingGame = true;
-		let speaking: number = 0
+		// Tracks which shortcuts are currently held down. A set instead of a counter,
+		// because a counter can desync permanently: the impostor radio only counted up
+		// while the local player was an impostor, so a state change between keydown and
+		// keyup skipped the decrement and left the microphone open until restart.
+		const speakingKeys = new Set<string>();
+		const isLocalImpostor = (): boolean =>
+			gameReader?.lastState.players?.find((value) => value.clientId === gameReader.lastState.clientId)?.isImpostor ===
+			true;
+		const sendPushToTalk = () => {
+			event.sender.send(IpcRendererMessages.PUSH_TO_TALK, speakingKeys.size > 0);
+		};
 		resetKeyHooks();
 
 		keyboardWatcher.on('keydown', (keyId: number) => {
 			if (keyCodeMatches(pushToTalkShortcut!, keyId)) {
-				speaking += 1;
+				speakingKeys.add('pushToTalk');
 			}
-			if (keyCodeMatches(impostorRadioShortcut!, keyId) && gameReader.lastState.players?.find((value) => {return value.clientId === gameReader.lastState.clientId})?.isImpostor) {
-				speaking += 1;
+			if (keyCodeMatches(impostorRadioShortcut!, keyId) && isLocalImpostor()) {
+				speakingKeys.add('impostorRadio');
 				event.sender.send(IpcRendererMessages.IMPOSTOR_RADIO, true);
 			}
 
-			// Cover weird cases which shouldn't happen but just in case
-			if (speaking > 2) {
-				speaking = 2;
-			}
-			if (speaking) {
-				event.sender.send(IpcRendererMessages.PUSH_TO_TALK, true);
-			}
+			sendPushToTalk();
 		});
 
 		keyboardWatcher.on('keyup', (keyId: number) => {
 			if (keyCodeMatches(pushToTalkShortcut!, keyId)) {
-				speaking -= 1;
+				speakingKeys.delete('pushToTalk');
 			}
 			if (keyCodeMatches(deafenShortcut!, keyId)) {
 				event.sender.send(IpcRendererMessages.TOGGLE_DEAFEN);
@@ -93,18 +97,12 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 			if (keyCodeMatches(muteShortcut!, keyId)) {
 				event.sender.send(IpcRendererMessages.TOGGLE_MUTE);
 			}
-			if (keyCodeMatches(impostorRadioShortcut!, keyId) && gameReader.lastState.players?.find((value) => {return value.clientId === gameReader.lastState.clientId})?.isImpostor) {
-				speaking -= 1;
+			// Released unconditionally: the impostor state may have changed while held.
+			if (keyCodeMatches(impostorRadioShortcut!, keyId) && speakingKeys.delete('impostorRadio')) {
 				event.sender.send(IpcRendererMessages.IMPOSTOR_RADIO, false);
 			}
 
-			// Cover weird cases which shouldn't happen but just in case
-			if (speaking < 0) {
-				speaking = 0;
-			}
-			if (!speaking) {
-				event.sender.send(IpcRendererMessages.PUSH_TO_TALK, false);
-			}
+			sendPushToTalk();
 		});
 
 		keyboardWatcher.start();
@@ -165,9 +163,10 @@ const keycodeMap = {
 	Enter: 0x0d,
 	Up: 0x26,
 	Down: 0x28,
-	Left: 0x24,
+	Left: 0x25,
 	Right: 0x27,
 	Home: 0x24,
+	CapsLock: 0x14,
 	End: 0x23,
 	PageUp: 0x21,
 	PageDown: 0x22,

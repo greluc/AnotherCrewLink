@@ -95,6 +95,9 @@ interface SocketError {
 	message?: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type IpcListener = (event: Electron.IpcRendererEvent, ...args: any[]) => void;
+
 interface ClientPeerConfig {
 	forceRelayOnly: boolean;
 	iceServers: RTCIceServer[];
@@ -648,7 +651,12 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				connectionStuff.current.audioListener.init();
 			}
 		}
-	}, [settings.microphoneGain, settings.micSensitivity]);
+	}, [
+		settings.microphoneGain,
+		settings.micSensitivity,
+		settings.microphoneGainEnabled,
+		settings.micSensitivityEnabled,
+	]);
 
 	const updateLobby = () => {
 		console.log(gameState);
@@ -839,6 +847,16 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 		// Initialize variables
 		let audioListener: VadNode;
+		// Held so the effect cleanup can tear these down. Voice unmounts every time the
+		// game closes, so without this the microphone stream, the AudioContext and the
+		// IPC listeners below accumulate one set per game session.
+		let localStream: MediaStream | undefined;
+		let audioContext: AudioContext | undefined;
+		const ipcListeners: [string, IpcListener][] = [];
+		const addIpcListener = (channel: string, listener: IpcListener) => {
+			ipcListeners.push([channel, listener]);
+			ipcRenderer.on(channel, listener);
+		};
 
 		const audio: MediaTrackConstraintSet = {
 			deviceId: (undefined as unknown) as string,
@@ -860,6 +878,8 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		.then(async (inStream) => {
 			let stream = inStream;
 			const ac = new AudioContext();
+			localStream = inStream;
+			audioContext = ac;
 			let microphoneGain: GainNode | undefined;
 			const source = ac.createMediaStreamSource(inStream);
 			if (settings.microphoneGainEnabled || settings.micSensitivityEnabled) {
@@ -932,14 +952,14 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				setDeafened(connectionStuff.current.deafened);
 			};
 
-			ipcRenderer.on(IpcRendererMessages.TOGGLE_DEAFEN, connectionStuff.current.toggleDeafen);
+			addIpcListener(IpcRendererMessages.TOGGLE_DEAFEN, connectionStuff.current.toggleDeafen);
 
-			ipcRenderer.on(IpcRendererMessages.IMPOSTOR_RADIO, (_: unknown, pressing: boolean) => {
+			addIpcListener(IpcRendererMessages.IMPOSTOR_RADIO, (_: unknown, pressing: boolean) => {
 				connectionStuff.current.impostorRadio = pressing;
 			});
 
-			ipcRenderer.on(IpcRendererMessages.TOGGLE_MUTE, connectionStuff.current.toggleMute);
-			ipcRenderer.on(IpcRendererMessages.PUSH_TO_TALK, (_: unknown, pressing: boolean) => {
+			addIpcListener(IpcRendererMessages.TOGGLE_MUTE, connectionStuff.current.toggleMute);
+			addIpcListener(IpcRendererMessages.PUSH_TO_TALK, (_: unknown, pressing: boolean) => {
 				if (connectionStuff.current.pushToTalkMode === pushToTalkOptions.VOICE) return;
 				if (!connectionStuff.current.deafened && !connectionStuff.current.muted) {
 					inStream.getAudioTracks()[0].enabled =
@@ -1142,6 +1162,20 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			connectionStuff.current.socket?.close();
 
 			audioListener?.destroy();
+
+			for (const [channel, listener] of ipcListeners) {
+				ipcRenderer.off(channel, listener);
+			}
+			ipcListeners.length = 0;
+
+			// Release the microphone, otherwise the OS keeps showing the app as recording
+			// and every re-mount opens another capture on top of the old one.
+			localStream?.getTracks().forEach((track) => track.stop());
+			localStream = undefined;
+			audioContext?.close().catch(() => {
+				/* already closed */
+			});
+			audioContext = undefined;
 		};
 		// })();
 	}, []);
@@ -1471,7 +1505,8 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 type ValidPlayersPerRow = 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 function getPlayersPerRow(playerCount: number): ValidPlayersPerRow {
 	if (playerCount <= 9) return (12 / 3) as ValidPlayersPerRow;
-	else return Math.min(12, Math.floor(12 / Math.ceil(Math.sqrt(playerCount)))) as ValidPlayersPerRow;
+	// max(1, ...): the grid span must never reach 0, which MUI rejects.
+	else return Math.max(1, Math.floor(12 / Math.ceil(Math.sqrt(playerCount)))) as ValidPlayersPerRow;
 }
 
 export default Voice;
