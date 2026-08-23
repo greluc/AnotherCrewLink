@@ -1,6 +1,7 @@
 import { app, dialog, ipcMain, shell } from 'electron';
 import { platform, homedir } from 'os';
-import { enumerateValues, enumerateKeys, HKEY } from 'registry-js';
+import registry from 'registry-js';
+const { enumerateValues, enumerateKeys, HKEY } = registry;
 import {
 	DefaultGamePlatforms,
 	GamePlatform,

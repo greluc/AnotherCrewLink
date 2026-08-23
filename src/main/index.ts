@@ -4,10 +4,12 @@ import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
 import { windowStateKeeper } from './windowState';
 import { platform } from 'os';
-import { join as joinPath } from 'path';
+import { join as joinPath, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { format as formatUrl } from 'url';
 import './hook';
-import { overlayWindow } from 'electron-overlay-window';
+import overlayWindowModule from 'electron-overlay-window';
+const { overlayWindow } = overlayWindowModule;
 import { initializeIpcHandlers, initializeIpcListeners } from './ipc-handlers';
 import { GenerateHat } from './avatarGenerator';
 import { gameReader } from './hook';
@@ -19,6 +21,8 @@ import { ISettings } from '../common/ISettings';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
 import minimist from 'minimist';
 const args = minimist(process.argv);
+// __dirname does not exist in an ES module.
+const moduleDir = dirname(fileURLToPath(import.meta.url));
 // electron-vite only defines ELECTRON_RENDERER_URL while the dev server runs, which
 // is a more reliable signal here than NODE_ENV.
 const isDevelopment = !!process.env.ELECTRON_RENDERER_URL;
@@ -85,7 +89,7 @@ function createMainWindow() {
 	} else {
 		window.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, '../renderer/index.html'),
+				pathname: joinPath(moduleDir, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,
@@ -154,7 +158,7 @@ function createLobbyBrowser() {
 	} else {
 		window.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, '../renderer/index.html'),
+				pathname: joinPath(moduleDir, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,
@@ -200,7 +204,7 @@ function createOverlay() {
 	} else {
 		overlay.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, '../renderer/index.html'),
+				pathname: joinPath(moduleDir, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,

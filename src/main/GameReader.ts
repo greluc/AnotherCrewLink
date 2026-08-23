@@ -1,18 +1,18 @@
-import {
-	DataType,
+// Node cannot statically detect named exports from a native CommonJS module, so the
+// default import is destructured at runtime instead.
+import memoryjs, { DataType, ModuleObject, ProcessObject } from 'memoryjs';
+const {
 	findModule,
 	getProcesses,
-	ModuleObject,
 	openProcess,
-	ProcessObject,
 	readBuffer,
-	readMemory as readMemoryRaw,
-	findPattern as findPatternRaw,
+	readMemory: readMemoryRaw,
+	findPattern: findPatternRaw,
 	virtualAllocEx,
 	writeBuffer,
 	writeMemory,
 	getProcessPath,
-} from 'memoryjs';
+} = memoryjs;
 import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
 import { GameState, AmongUsState, Player } from '../common/AmongUsState';

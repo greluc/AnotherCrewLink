@@ -64,9 +64,9 @@ export default defineConfig({
 	main: {
 		// Native modules and everything else from node_modules stay external so the
 		// .node binaries are loaded from the app's node_modules at runtime.
-		// electron-store and color are ESM-only, and the main bundle is CommonJS, so they
-		// must be bundled rather than left as a runtime require().
-		plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'color'] })],
+		// The main bundle is ESM, so the ESM-only dependencies stay external instead of
+		// being bundled through a CommonJS interop shim.
+		plugins: [externalizeDepsPlugin()],
 		build: {
 			rollupOptions: {
 				input: resolve(__dirname, 'src/main/index.ts'),
