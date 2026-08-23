@@ -166,7 +166,8 @@ export default class GameReader {
 		) {
 			this.loadColors();
 
-			let state = GameState.UNKNOWN;
+			// Assigned on every branch of the switch below, which has a default.
+			let state: GameState;
 			const meetingHud = this.readMemory<number>('pointer', this.gameAssembly.modBaseAddr, this.offsets.meetingHud);
 			const meetingHud_cachePtr =
 				meetingHud === 0 ? 0 : this.readMemory<number>('pointer', meetingHud, this.offsets.objectCachePtr);
@@ -420,7 +421,7 @@ export default class GameReader {
 		this.disableWriting = false;
 
 		const offsetLookups = (await fetchOffsetLookup()) as IOffsetsLookup;
-		let broadcastVersionAddr = undefined;
+		let broadcastVersionAddr: number | undefined;
 		if (this.is_64bit) {
 			broadcastVersionAddr = this.findPattern(
 				offsetLookups.patterns.x64.broadcastVersion.sig,

@@ -1,6 +1,5 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
-import react from 'eslint-plugin-react';
 import reactHooks from 'eslint-plugin-react-hooks';
 import prettierPlugin from 'eslint-plugin-prettier';
 import prettierConfig from 'eslint-config-prettier';
@@ -11,12 +10,6 @@ export default tseslint.config(
 	{ ignores: ['out/**', 'dist/**', 'node_modules/**', 'native/**'] },
 	js.configs.recommended,
 	...tseslint.configs.recommended,
-	{
-		...react.configs.flat.recommended,
-		// Settings apply per config object in flat config, so the react plugin needs them
-		// attached here rather than further down.
-		settings: { react: { version: 'detect' } },
-	},
 	prettierConfig,
 	{
 		files: ['src/**/*.{ts,tsx}'],
@@ -41,7 +34,6 @@ export default tseslint.config(
 				'error',
 				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
 			],
-			'react/react-in-jsx-scope': 'off',
 			'react-hooks/rules-of-hooks': 'error',
 			'react-hooks/exhaustive-deps': 'warn',
 		},

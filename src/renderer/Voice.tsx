@@ -314,9 +314,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		const { pan, gain, muffle, reverb, destination } = audio;
 		const audioContext = pan.context;
 		const useLightSource = true;
-		let maxdistance = maxDistanceRef.current;
+		const maxdistance = maxDistanceRef.current;
 		let panPos = [other.x - me.x, other.y - me.y];
-		let endGain = 0;
+		let endGain: number;
 		let collided = false;
 		let skipDistanceCheck = false;
 		let muffleEnabled = false;
@@ -462,7 +462,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				audio.muffleConnected = true;
 				applyEffect(gain, muffle, destination, other);
 			}
-			maxdistance = isOnCamera ? 3 : 0.8;
+			// The two distance checks that read maxdistance both run earlier, so writing it
+			// here had no effect. Left out rather than moved: shortening the hearing range
+			// for cameras is an audible change that needs testing in game to get right.
 			muffle.frequency.value = isOnCamera ? 2300 : 2000;
 			muffle.Q.value = isOnCamera ? -15 : 20;
 			if (endGain === 1) endGain = isOnCamera ? 0.8 : 0.5; // Too loud at 1

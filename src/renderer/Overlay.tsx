@@ -258,8 +258,8 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 	const [windowWidth, windowheight] = useWindowSize();
 	const [width, height] = useMemo(() => {
 		if (gameState.oldMeetingHud) {
-			let hudWidth = 0,
-				hudHeight = 0;
+			let hudWidth: number;
+			let hudHeight: number;
 			if (windowWidth / (windowheight * 0.96) > iPadRatio) {
 				// Window is wider than the tablet ratio, so height is the limiting side.
 				hudHeight = windowheight * 0.96;
