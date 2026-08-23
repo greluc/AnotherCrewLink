@@ -880,7 +880,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			ipcRenderer.on(channel, listener);
 		};
 
-		const audio: MediaTrackConstraintSet = {
+		// Intersection with an index signature: latency and the goog* keys are
+		// non-standard Chrome constraints that lib.dom does not declare.
+		const audio: MediaTrackConstraintSet & Record<string, unknown> = {
 			deviceId: (undefined as unknown) as string,
 			autoGainControl: false,
 			channelCount: 2,
@@ -1141,7 +1143,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			socket.on('signal', ({ data, from, client }: { data: Peer.SignalData; from: string, client: Client }) => {
 				if (data.hasOwnProperty('mobilePlayerInfo')) {
 					// eslint-disable-line
-					const mobiledata = data as mobileHostInfo;
+					const mobiledata = data as unknown as mobileHostInfo;
 					if (
 						mobiledata.mobilePlayerInfo.code === hostRef.current.code &&
 						hostRef.current.gamestate !== GameState.MENU
