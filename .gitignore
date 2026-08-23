@@ -1,6 +1,8 @@
 .DS_Store
-dist/
-out/
+# Anchored: the packaged output lives at the repository root. Without the slash
+# this also swallowed the prebuilt dist/ of the vendored modules under native/.
+/dist/
+/out/
 node_modules/
 thumbs.db
 .idea/
