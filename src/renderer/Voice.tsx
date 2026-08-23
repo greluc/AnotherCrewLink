@@ -293,13 +293,29 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const [connected, setConnected] = useState(false);
 
 	function applyEffect(gain: AudioNode, effectNode: AudioNode, destination: AudioNode, player: Player) {
-		console.log('Apply effect->', effectNode);
+		// A convolver with no impulse response outputs silence rather than passing audio
+		// through, so routing voice into one that has not loaded yet makes the player
+		// inaudible. That is what the impostors hear ghosts setting did whenever the
+		// reverb had not finished decoding before the connection came up.
+		if (effectNode instanceof ConvolverNode && !effectNode.buffer) {
+			console.warn('Skipping the reverb for', player.name, ': its impulse response is not loaded');
+			return false;
+		}
 		try {
-			gain.disconnect(destination);
+			// Connect the effect before dropping the direct path: doing it the other way
+			// round leaves the player silent if the second step throws.
 			gain.connect(effectNode);
 			effectNode.connect(destination);
+			gain.disconnect(destination);
+			return true;
 		} catch {
 			console.log('error with applying effect: ', player.name, effectNode);
+			try {
+				gain.connect(destination);
+			} catch {
+				/* already connected */
+			}
+			return false;
 		}
 	}
 
@@ -377,15 +393,15 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					muffle.Q.value = 10;
 					muffleEnabled = true;
 					if (!audio.muffleConnected) {
-						audio.muffleConnected = true;
-						applyEffect(gain, muffle, destination, other);
+						audio.muffleConnected = applyEffect(gain, muffle, destination, other);
 					}
 				}
 
 				if (!me.isDead && other.isDead && me.isImpostor && lobbySettings.haunting) {
+					// Only record it as connected if it is: otherwise the restore below would
+					// disconnect a path that was never established.
 					if (!audio.reverbConnected) {
-						audio.reverbConnected = true;
-						applyEffect(gain, reverb, destination, other);
+						audio.reverbConnected = applyEffect(gain, reverb, destination, other);
 					}
 					collided = false;
 					endGain = settings.ghostVolumeAsImpostor / 100;
@@ -429,14 +445,20 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		let isOnCamera = state.currentCamera !== CameraLocation.NONE;
 		if (!skipDistanceCheck && Math.sqrt(panPos[0] * panPos[0] + panPos[1] * panPos[1]) > maxdistance) {
 			if (lobbySettings.hearThroughCameras && state.gameState === GameState.TASKS) {
+				// Reachable for the first time now that the map is read: while it was
+				// undefined the camera was always NONE, so neither branch ever ran. A map
+				// with no camera data, or a camera id the map does not list, would throw
+				// out of here and take the whole audio pass with it.
+				const cameras = AmongUsMaps[state.map]?.cameras ?? {};
 				if (state.currentCamera !== CameraLocation.NONE && state.currentCamera !== CameraLocation.Skeld) {
-					const camerapos = AmongUsMaps[state.map].cameras[state.currentCamera];
-					panPos = [other.x - camerapos.x, other.y - camerapos.y];
-					console.log('camerapos: ', camerapos);
+					const camerapos = cameras[state.currentCamera];
+					if (camerapos) {
+						panPos = [other.x - camerapos.x, other.y - camerapos.y];
+					}
 				} else if (state.currentCamera === CameraLocation.Skeld) {
 					let distance = 999;
 					let camerapos = { x: 999, y: 999 };
-					for (const camera of Object.values(AmongUsMaps[state.map].cameras)) {
+					for (const camera of Object.values(cameras)) {
 						const cameraDist = Math.sqrt((other.x - camera.x) ** 2 + (other.y - camera.y) ** 2);
 						if (distance > cameraDist) {
 							distance = cameraDist;
@@ -467,8 +489,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			state.gameState === GameState.TASKS
 		) {
 			if (!audio.muffleConnected) {
-				audio.muffleConnected = true;
-				applyEffect(gain, muffle, destination, other);
+				audio.muffleConnected = applyEffect(gain, muffle, destination, other);
 			}
 			// The two distance checks that read maxdistance both run earlier, so writing it
 			// here had no effect. Left out rather than moved: shortening the hearing range
@@ -801,10 +822,23 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	useEffect(() => {
 		(async () => {
 			const context = new AudioContext();
-			// Vite has no arraybuffer-loader equivalent, so fetch the emitted asset.
-			const reverbData = await (await fetch(reverbOgxUrl)).arrayBuffer();
-			convolverBuffer.current = await context.decodeAudioData(reverbData);
-			await context.close();
+			try {
+				// Vite has no arraybuffer-loader equivalent, so fetch the emitted asset.
+				const reverbData = await (await fetch(reverbOgxUrl)).arrayBuffer();
+				convolverBuffer.current = await context.decodeAudioData(reverbData);
+				// Connections that came up before the file finished decoding hold a convolver
+				// with no impulse response, and it is never assigned again. Nothing reported
+				// that, it just meant no reverb for those players.
+				for (const element of Object.values(audioElements.current)) {
+					if (element.reverb && !element.reverb.buffer) {
+						element.reverb.buffer = convolverBuffer.current;
+					}
+				}
+			} catch (error) {
+				console.error('Could not load the reverb impulse response:', error);
+			} finally {
+				await context.close();
+			}
 		})();
 	}, []);
 
