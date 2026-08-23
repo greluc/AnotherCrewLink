@@ -142,20 +142,45 @@ const BASE_URL_error = 'https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewlink-Offs
 const store = new Store<IOffsetsStore>({ name: 'offsets' });
 const lookupStore = new Store<IOffsetsLookup>({ name: 'lookup' });
 
-async function fetchOffsetLookupJson(error: boolean = false): Promise<IOffsetsLookup> {
-	const url = error ? BASE_URL_error : BASE_URL;
-	return fetch(`${url}/lookup.json`)
-		.then((response) => response.json())
-		.then((data) => {
-			return data as IOffsetsLookup;
-		})
-		.catch((_) => {
-			if (!error) {
-				return fetchOffsetLookupJson(true);
-			} else {
-				throw Errors.LOOKUP_FETCH_ERROR;
+// One attempt per host and nothing else used to stand between a working install and
+// an error message: raw.githubusercontent.com rate limits per IP, so a household where
+// several people start the app at once, or anyone behind a shared address, could be
+// turned away and told to check their internet connection. Both hosts are tried, then
+// tried again after a pause, and a request that hangs is cut off rather than holding
+// up the start.
+const FETCH_TIMEOUT = 10000;
+const FETCH_ROUNDS = 3;
+const RETRY_DELAY = 1500;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchJsonFromMirrors<T>(path: string, failure: string): Promise<T> {
+	let lastError: unknown;
+	for (let round = 0; round < FETCH_ROUNDS; round++) {
+		for (const base of [BASE_URL, BASE_URL_error]) {
+			try {
+				const response = await fetch(`${base}/${path}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+				// Without this a rate limit page or a 404 body was parsed as if it were the
+				// data, and whether that threw depended on what the host happened to return.
+				if (!response.ok) {
+					throw new Error(`${base}/${path} responded with HTTP ${response.status}`);
+				}
+				return (await response.json()) as T;
+			} catch (error) {
+				lastError = error;
+				console.warn('Offset fetch failed:', error instanceof Error ? error.message : String(error));
 			}
-		});
+		}
+		if (round < FETCH_ROUNDS - 1) {
+			await sleep(RETRY_DELAY * (round + 1));
+		}
+	}
+	console.error('Giving up on', path, lastError);
+	throw failure;
+}
+
+async function fetchOffsetLookupJson(): Promise<IOffsetsLookup> {
+	return fetchJsonFromMirrors<IOffsetsLookup>('lookup.json', Errors.LOOKUP_FETCH_ERROR);
 }
 
 export async function fetchOffsetLookup(): Promise<IOffsetsLookup> {
@@ -170,21 +195,8 @@ export async function fetchOffsetLookup(): Promise<IOffsetsLookup> {
 	}
 }
 
-async function fetchOffsetsJson(is_64bit: boolean, filename: string, error: boolean = false): Promise<IOffsets> {
-	const url = error ? BASE_URL_error : BASE_URL;
-	const OFFSETS_URL = `${url}/offsets`;
-	return fetch(`${OFFSETS_URL}/${is_64bit ? 'x64' : 'x86'}/${filename}`)
-		.then((response) => response.json())
-		.then((data) => {
-			return data as IOffsets;
-		})
-		.catch((_) => {
-			if (!error) {
-				return fetchOffsetsJson(is_64bit, filename, true);
-			} else {
-				throw Errors.OFFSETS_FETCH_ERROR;
-			}
-		});
+async function fetchOffsetsJson(is_64bit: boolean, filename: string): Promise<IOffsets> {
+	return fetchJsonFromMirrors<IOffsets>(`offsets/${is_64bit ? 'x64' : 'x86'}/${filename}`, Errors.OFFSETS_FETCH_ERROR);
 }
 export async function fetchOffsets(is_64bit: boolean, filename: string, offsetsVersion: number): Promise<IOffsets> {
 	// offsetsVersion in case we need to update people's cached file
