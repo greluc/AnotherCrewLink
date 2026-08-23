@@ -9,97 +9,10 @@ export enum pushToTalkOptions {
 }
 
 export const SettingsStore = new Store<ISettings>({
-	migrations: {
-		'2.0.6': (store) => {
-			if (
-				store.get('serverURL') === 'http://bettercrewl.ink' ||
-				store.get('serverURL') === 'https://bettercrewlink.app' ||
-				store.get('serverURL') === 'http://bettercrewlink.app' ||
-				store.get('serverURL') === 'https://bettercrewlink.app/' ||
-				store.get('serverURL') === 'http://bettercrewlink.app/' ||
-				store.get('serverURL') === 'https://bettercrewl.ink:6523' ||
-				store.get('serverURL') === 'http://bettercrewl.ink:6523' ||
-				store.get('serverURL') === 'https://crewlink.guus.info' ||
-				store.get('serverURL') === 'http://crewlink.guus.info' ||
-				store.get('serverURL') === 'https://crewlink.guus.ninja' ||
-				store.get('serverURL') === 'http://crewlink.guus.ninja' ||
-				store.get('serverURL') === 'https://github.com/OhMyGuus/BetterCrewLink' ||
-				store.get('serverURL') === 'https://mirror.bettercrewl.ink' ||
-				store.get('serverURL') === 'https://mirror.bettercrewl.ink/' ||
-				store.get('serverURL') === 'https://www.curseforge.com/among-us/all-mods/bettercrewlink-proximity-chat' ||
-				store.get('serverURL') === 'https://matadorprobr.itch.io/bettercrewlink' ||
-				store.get('serverURL') === 'https://gamebanana.com/tools/7079' ||
-				store.get('serverURL') === 'https://web.bettercrewl.ink' ||
-				store.get('serverURL') === 'https://obs.bettercrewlink.app' ||
-				store.get('serverURL') === 'https://discord.gg/qDqTzvj4SH'
-			) {
-				store.set('serverURL', 'https://bettercrewl.ink');
-			}
-		},
-		'2.0.7': (store) => {
-			if (
-				store.get('serverURL') === 'http://bettercrewl.ink' ||
-				store.get('serverURL') === 'https://bettercrewlink.app' ||
-				store.get('serverURL') === 'http://bettercrewlink.app' ||
-				store.get('serverURL') === 'https://bettercrewlink.app/' ||
-				store.get('serverURL') === 'http://bettercrewlink.app/' ||
-				store.get('serverURL') === 'https://bettercrewl.ink:6523' ||
-				store.get('serverURL') === 'http://bettercrewl.ink:6523' ||
-				store.get('serverURL') === 'https://crewlink.guus.info' ||
-				store.get('serverURL') === 'http://crewlink.guus.info' ||
-				store.get('serverURL') === 'https://crewlink.guus.ninja' ||
-				store.get('serverURL') === 'http://crewlink.guus.ninja' ||
-				store.get('serverURL') === 'https://github.com/OhMyGuus/BetterCrewLink' ||
-				store.get('serverURL') === 'https://mirror.bettercrewl.ink' ||
-				store.get('serverURL') === 'https://mirror.bettercrewl.ink/' ||
-				store.get('serverURL') === 'https://www.curseforge.com/among-us/all-mods/bettercrewlink-proximity-chat' ||
-				store.get('serverURL') === 'https://matadorprobr.itch.io/bettercrewlink' ||
-				store.get('serverURL') === 'https://gamebanana.com/tools/7079' ||
-				store.get('serverURL') === 'https://web.bettercrewl.ink' ||
-				store.get('serverURL') === 'https://obs.bettercrewlink.app' ||
-				store.get('serverURL') === 'https://discord.gg/qDqTzvj4SH'
-			) {
-				store.set('serverURL', 'https://bettercrewl.ink');
-			}
-		},
-		'2.1.4': (store) => {
-			store.set('playerConfigMap', {});
-		},
-		'2.2.0': (store) => {
-			store.set('mobileHost', true);
-		},
-		'2.2.5': (store) => {
-			const pushToTalkValue = store.get('pushToTalk');
-			if (typeof pushToTalkValue === 'boolean') {
-				store.set('pushToTalkMode', pushToTalkValue ? pushToTalkOptions.PUSH_TO_TALK : pushToTalkOptions.VOICE);
-			}
-			// @ts-ignore
-			store.delete('pushToTalk');
-		},
-		'2.3.6': (store) => {
-			if ((store.get('serverURL') as string).includes('//crewl.ink')) store.set('serverURL', 'https://bettercrewl.ink');
-		},
-		'2.4.0': (store) => {
-			const currentSensitivity = store.get('micSensitivity') as number;
-			if (currentSensitivity >= 0.3) {
-				store.set('micSensitivity', 0.15);
-				store.set('micSensitivityEnabled', false);
-			}
-		},
-		'3.0.6': (store) => {
-			// ghostVolume was removed from ISettings, so it is addressed through a widened
-			// view of the store rather than a @ts-ignore per call.
-			const legacy = store as unknown as {
-				has(key: string): boolean;
-				get(key: string, fallback: number): number;
-				delete(key: string): void;
-			};
-			if (legacy.has('ghostVolume')) {
-				store.set('crewVolumeAsGhost', legacy.get('ghostVolume', 100));
-				legacy.delete('ghostVolume');
-			}
-		},
-	},
+	// No migrations: 1.0.0 is the first release under this name, so the store starts
+	// empty in a new userData directory. The inherited pre-1.0 entries only detected
+	// server URLs of the upstream project and would have fired unexpectedly the first
+	// time the version passed 2.x.
 	schema: {
 		alwaysOnTop: {
 			type: 'boolean',
@@ -131,9 +44,7 @@ export const SettingsStore = new Store<ISettings>({
 		},
 		serverURL: {
 			type: 'string',
-			// The official bettercrewl.ink stays on socket.io 2, whose Engine.IO v3 wire
-			// protocol this client can no longer speak. Point this at your own server.
-			default: 'http://localhost:9736',
+			default: 'https://aucl.greluc.me',
 			format: 'uri',
 		},
 		pushToTalkShortcut: {

@@ -1,3 +1,14 @@
+<!-- Attribution -->
+## Lineage
+
+AnotherCrewLink is a fork of [BetterCrewLink](https://github.com/OhMyGuus/BetterCrewLink)
+by OhMyGuus, which is itself a fork of [CrewLink](https://github.com/ottomated/CrewLink)
+by ottomated. Everything below is inherited credit for that work, which this project
+builds on. The hat collection and the memory offsets are still served from the
+upstream BetterCrewLink repositories.
+
+---
+
 <!-- CONTRIBUTORS -->
 ## Contributors
 

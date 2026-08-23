@@ -1,6 +1,6 @@
-appId: net.ottomated.crewlink.beta
-productName: Better-CrewLink
-copyright: Copyright © 2021 OhMyGuus
+appId: me.greluc.anothercrewlink
+productName: AnotherCrewLink
+copyright: Copyright © 2026 Lucas Greuloch. Based on BetterCrewLink by OhMyGuus.
 directories:
   output: dist
   buildResources: resources

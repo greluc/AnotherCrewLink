@@ -29,8 +29,8 @@
 				"enabled": "Poczekalnia jest publiczna",
 				"mods": "Modyfikacje",
 				"language": "Język",
-				"enable_warning": "Włączenie tego sprawi, że Twoja poczekalnia stanie się publiczna dla innych użytkowników BetterCrewLink!",
-				"ban_warning": "Nieodpowiednia nazwa spowoduje otrzymanie blokady od BetterCrewLink."
+				"enable_warning": "Włączenie tego sprawi, że Twoja poczekalnia stanie się publiczna dla innych użytkowników AnotherCrewLink!",
+				"ban_warning": "Nieodpowiednia nazwa spowoduje otrzymanie blokady od AnotherCrewLink."
 			}
 		},
 		"customplatforms": {
@@ -66,7 +66,7 @@
 		},
 		"overlay": {
 			"title": "Nakładka",
-			"always_on_top": "BetterCrewLink na wierzchu",
+			"always_on_top": "AnotherCrewLink na wierzchu",
 			"enabled": "Włącz nakładkę",
 			"compact": "Schowaj nakładkę",
 			"meeting": "Nakładka na spotkania",
@@ -88,7 +88,7 @@
 			"change_server": "Zmień serwer głosowy",
 			"voice_server": "Serwer głosowy",
 			"invalid_url": "Nieprawidłowy adres URL",
-			"voice_server_warning": "Ta opcja jest tylko dla zaawansowanych użytkowników. Inne serwery mogą ukraść twoje informacje lub spowodować awarię BetterCrewLink.",
+			"voice_server_warning": "Ta opcja jest tylko dla zaawansowanych użytkowników. Inne serwery mogą ukraść twoje informacje lub spowodować awarię AnotherCrewLink.",
 			"reset_default": "Przywróć domyślne ustawienia"
 		},
 		"beta": {
@@ -110,7 +110,7 @@
 			"obs_overlay": "Nakładka przeglądarki do OBS",
 			"obs_url": "OBS Browser Source URL",
 			"voice_server_comp": "Tryb kompatybilnośći z serwerem głosowym",
-			"voice_server_comp_warning": "Zaleca się zamianę serwera głosowego na oficjalny serwer BetterCrewlink, czyli https://bettercrewl.ink"
+			"voice_server_comp_warning": "Zaleca się zamianę serwera głosowego na oficjalny serwer AnotherCrewLink, czyli https://bettercrewl.ink"
 		},
 		"troubleshooting": {
 			"title": "Rozwiązywanie problemów",
@@ -152,9 +152,9 @@
 		"open_error": "Uruchom Among Us ręcznie.",
 		"waiting": "Oczekiwanie na uruchomienie Among Us",
 		"error": "BŁĄD",
-		"error_admin": "Nie można połączyć się z Among Us.\nProszę otworzyć BetterCrewLink jako administrator.",
+		"error_admin": "Nie można połączyć się z Among Us.\nProszę otworzyć AnotherCrewLink jako administrator.",
 		"error_platform": "Nie wykryto platformy",
-		"error_unsupport": "BetterCrewLink nie wspiera twojej wersji Among Us."
+		"error_unsupport": "AnotherCrewLink nie wspiera twojej wersji Among Us."
 	},
 	"platform": {
 		"steam": "Steam",

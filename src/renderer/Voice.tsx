@@ -13,7 +13,7 @@ import {
 	Client,
 	VoiceState,
 } from '../common/AmongUsState';
-import Peer from 'simple-peer';
+import Peer, { SignalData } from './peer';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
 import { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
@@ -47,7 +47,7 @@ export interface ExtendedAudioElement extends HTMLAudioElement {
 }
 
 interface PeerConnections {
-	[peer: string]: Peer.Instance;
+	[peer: string]: Peer;
 }
 
 interface VadNode {
@@ -1029,8 +1029,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					}
 					const connection = new Peer({
 						stream,
-						initiator, // @ts-ignore-line
-						iceRestartEnabled: true,
+						initiator,
 						config: settingsRef.current.natFix ? forceRelay(iceConfig) : iceConfig,
 					});
 
@@ -1157,7 +1156,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 				// The server only sends { data, from }; `client` was always undefined here, so
 				// disconnectClient never cleaned up the stale audio element on this side.
-				socket.on('signal', ({ data, from }: { data: Peer.SignalData; from: string }) => {
+				socket.on('signal', ({ data, from }: { data: SignalData; from: string }) => {
 					if (Object.prototype.hasOwnProperty.call(data, 'mobilePlayerInfo')) {
 					// eslint-disable-line
 						const mobiledata = data as unknown as mobileHostInfo;
@@ -1170,20 +1169,26 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 						}
 						return;
 					}
-					let connection: Peer.Instance;
+					let connection: Peer;
 					const client = socketClientsRef.current[from];
 					if (!client) {
 						console.warn('SIGNAL FROM UNKOWN SOCKET..');
 						return;
 					}
-					if (Object.prototype.hasOwnProperty.call(data, 'type')) {
-						if (peerConnections[from] && data.type !== 'offer') {
-							connection = peerConnections[from];
-						} else {
-							connection = createPeerConnection(from, false, client);
-						}
-						connection.signal(data);
+					// Only signals carrying a `type` used to be forwarded, so trickled ICE
+					// candidates, which have no type, were dropped outright. Connections then
+					// depended on whatever candidates happened to be in the initial SDP.
+					const existing = peerConnections[from];
+					const isOffer = 'type' in data && data.type === 'offer';
+					if (isOffer) {
+						connection = createPeerConnection(from, false, client);
+					} else if (existing) {
+						connection = existing;
+					} else {
+						// An answer or candidate with no connection left to apply it to.
+						return;
 					}
+					void connection.signal(data);
 				});
 			},
 			(error) => {

@@ -15,10 +15,10 @@ jobs:
         include:
          - os: windows-latest
            dist: 'dist'
-           installer: 'dist/Better-CrewLink Setup*.exe'
+           installer: 'dist/AnotherCrewLink Setup*.exe'
          - os: ubuntu-latest
            dist: 'dist:linux'
-           installer: 'dist/Better-CrewLink-*.AppImage'
+           installer: 'dist/AnotherCrewLink-*.AppImage'
 
 
     steps:
@@ -60,7 +60,7 @@ jobs:
       - name: Upload Installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: BetterCrewLink Installer ${{ runner.os }}
+          name: AnotherCrewLink Installer ${{ runner.os }}
           path: ${{ matrix.installer }}
           if-no-files-found: error
           
@@ -68,5 +68,5 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.os == 'windows-latest'}}
         with:
-          name: BetterCrewLink Unpacked 64bit 
+          name: AnotherCrewLink Unpacked 64bit 
           path: 'dist/win-unpacked'

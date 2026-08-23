@@ -6,11 +6,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Before reporting a bug, always look at the [wiki](https://github.com/OhMyGuus/BetterCrewLink/wiki/common-issues) or [FAQ](https://discord.gg/qDqTzvj4SH) in Discord Server that there usually has a solution for your bug**
+        **Before reporting a bug, always look at the [wiki](https://github.com/greluc/AnotherCrewLink/wiki/common-issues) or [FAQ](https://discord.gg/qDqTzvj4SH) in Discord Server that there usually has a solution for your bug**
   - type: markdown
     attributes:
       value: |
-        **If your problem is with BetterCrewLink on your mobile or web version, [click here](https://github.com/OhMyGuus/BetterCrewlink-mobile/issues) and make an issue there, if your problem is with BetterCrewLink on PC, ignore it and continue with your bug report**
+        **If your problem is with AnotherCrewLink on your mobile or web version, [click here](https://github.com/greluc/AnotherCrewLink-mobile/issues) and make an issue there, if your problem is with AnotherCrewLink on PC, ignore it and continue with your bug report**
   - type: checkboxes
     id: checklist
     attributes:
@@ -21,15 +21,15 @@ body:
           required: true
         - label: I have tried to use an [alternative voice server](https://bettercrewl.ink/)
           required: true
-        - label: I have checked everyone in my lobby is on the same BetterCrewLink/CrewLink server
+        - label: I have checked everyone in my lobby is on the same AnotherCrewLink/CrewLink server
           required: true
-        - label: I have refreshed and activated <kbd>NAT Fix</kbd> on the BetterCrewLink app when I can't hear some people (this is a known issue)
+        - label: I have refreshed and activated <kbd>NAT Fix</kbd> on the AnotherCrewLink app when I can't hear some people (this is a known issue)
           required: true
-        - label: I have checked that the BetterCrewLink/CrewLink server I'm using is up to date
+        - label: I have checked that the AnotherCrewLink/CrewLink server I'm using is up to date
           required: true
         - label: I have a screenshot or videos of any errors
           required: false
-        - label: I have checked that someone else has not reported this using the [search bar](https://github.com/OhMyGuus/BetterCrewLink/issues?q=is%3Aissue)
+        - label: I have checked that someone else has not reported this using the [search bar](https://github.com/greluc/AnotherCrewLink/issues?q=is%3Aissue)
           required: true
   - type: textarea
     id: bug-desc

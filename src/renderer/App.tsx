@@ -95,7 +95,7 @@ const RawTitleBar: React.FC<TitleBarProps> = function ({ settingsOpen, setSettin
 		<div className={classes.root}>
 			<div className={classes.resizeStrip} />
 			<span className={classes.title} style={{ marginLeft: 10 }}>
-				BetterCrewLink{appVersion}
+				AnotherCrewLink{appVersion}
 			</span>
 			<IconButton
 				className={classes.button}
@@ -279,7 +279,7 @@ export default function App({ t }: AppProps): React.JSX.Element {
 											<Button
 												color="grey"
 												onClick={() => {
-													shell.openExternal('https://github.com/OhMyGuus/BetterCrewLink/releases/latest');
+													shell.openExternal('https://github.com/greluc/AnotherCrewLink/releases/latest');
 												}}
 											>
 												Download Manually

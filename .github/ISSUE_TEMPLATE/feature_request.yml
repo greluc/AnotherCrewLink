@@ -11,7 +11,7 @@ body:
       options:
         - label: I am not asking a question => use the [Discord](https://discord.gg/qDqTzvj4SH) if you are
           required: true
-        - label: I have checked that someone else has not reported this using the [search bar](https://github.com/OhMyGuus/BetterCrewLink/issues?q=is%3Aissue)
+        - label: I have checked that someone else has not reported this using the [search bar](https://github.com/greluc/AnotherCrewLink/issues?q=is%3Aissue)
           required: true
         - label: "My feature request is not one of the **commonly suggested features**: iOS app (it's already being development)"
           required: true
