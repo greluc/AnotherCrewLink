@@ -12,7 +12,9 @@
 name: "CodeQL"
 
 concurrency:
-  group: ${{ github.ref }}
+  # Includes the workflow name: without it Build and CodeQL share one group
+  # on the same ref and cancel each other on every push.
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 on: [push, pull_request, workflow_dispatch]
