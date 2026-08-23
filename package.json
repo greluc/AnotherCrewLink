@@ -80,7 +80,8 @@
 	"overrides": {
 		"electron-vite": {
 			"vite": "$vite"
-		}
+		},
+		"node-gyp": "^13.0.1"
 	},
 	"allowScripts": {
 		"file:../native/memoryjs": true,
