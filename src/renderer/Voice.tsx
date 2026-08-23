@@ -99,7 +99,7 @@ type IpcListener = (event: Electron.IpcRendererEvent, ...args: any[]) => void;
 // The Avatar `size` prop drives border width and the hat offsets, which are absolute
 // pixels. The rendered size comes from the container, so with a resizable window the
 // two drift apart unless the real width is measured.
-function useElementWidth<T extends HTMLElement>(): [React.RefObject<T>, number] {
+function useElementWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
 	const ref = useRef<T>(null);
 	const [width, setWidth] = useState(0);
 	useEffect(() => {

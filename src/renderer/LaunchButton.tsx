@@ -69,7 +69,7 @@ const LaunchButton: React.FC<LauncherProps> = function ({ t }: LauncherProps) {
 	const [openMessage, setOpenMessage] = useState(<>{t('game.error_platform')}</>);
 	const [dropdownOpen, setDropdownOpen] = useState(false);
 	const [launchPlatforms, setLaunchPlatforms] = useState<GamePlatformMap>();
-	const [launchItemList, setLaunchItemList] = useState([] as JSX.Element[]);
+	const [launchItemList, setLaunchItemList] = useState([] as React.JSX.Element[]);
 	const [customPlatformOpen, setCustomPlatformOpen] = useState(false);
 	const [customPlatformEdit, setCustomPlatformEdit] = useState(undefined as unknown as GamePlatformInstance);
 
@@ -95,7 +95,7 @@ const LaunchButton: React.FC<LauncherProps> = function ({ t }: LauncherProps) {
 		}
 
 		// Generate an array of <MenuItem>'s from available platforms for dropdown
-		const platformArray = Array.from(Object.keys(launchPlatforms)).reduce((filtered: JSX.Element[], key) => {
+		const platformArray = Array.from(Object.keys(launchPlatforms)).reduce((filtered: React.JSX.Element[], key) => {
 			const platform = launchPlatforms[key];
 			const platformName = platform.default ? t(platform.translateKey) : platform.translateKey;
 			filtered.push(

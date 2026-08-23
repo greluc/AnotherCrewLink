@@ -1,5 +1,5 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
 import { makeStyles } from 'tss-react/mui';
 import RefreshSharpIcon from '@mui/icons-material/RefreshSharp';
@@ -84,7 +84,7 @@ interface AppProps {
 	t: (key: string) => string;
 }
 
-export default function App({ t }: AppProps): JSX.Element {
+export default function App({ t }: AppProps): React.JSX.Element {
 	return (
 		<StyledEngineProvider injectFirst>
 			<ThemeProvider theme={theme}>
@@ -97,4 +97,8 @@ export default function App({ t }: AppProps): JSX.Element {
 // @ts-ignore
 const App2 = withTranslation()(App);
 // @ts-ignore
-ReactDOM.render(<App2 />, document.getElementById('app'));
+// ReactDOM.render was removed in React 19.
+const container = document.getElementById('app');
+if (container) {
+	createRoot(container).render(<App2 />);
+}

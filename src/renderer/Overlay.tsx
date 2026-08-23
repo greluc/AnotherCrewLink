@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, CSSProperties } from 'react';
 import { ipcRenderer } from 'electron';
 import { AmongUsState, GameState, VoiceState } from '../common/AmongUsState';
 import { IpcOverlayMessages, IpcMessages } from '../common/ipc-messages';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { makeStyles } from 'tss-react/mui';
 import './css/overlay.css';
 import Avatar from './Avatar';
@@ -137,7 +137,7 @@ const AvatarOverlay: React.FC<AvatarOverlayProps> = ({
 }: AvatarOverlayProps) => {
 	const positionParse = position.replace('1', '');
 
-	const avatars: JSX.Element[] = [];
+	const avatars: React.JSX.Element[] = [];
 	const isOnSide = positionParse == 'right' || positionParse == 'left';
 	const showName = isOnSide && (!compactOverlay || position === 'right1' || position === 'left1');
 	const classnames: string[] = ['overlay-wrapper'];
@@ -333,6 +333,10 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 	);
 };
 
-ReactDOM.render(<Overlay />, document.getElementById('app'));
+// ReactDOM.render was removed in React 19.
+const container = document.getElementById('app');
+if (container) {
+	createRoot(container).render(<Overlay />);
+}
 
 export default Overlay;

@@ -29,7 +29,7 @@ import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
 import prettyBytes from 'pretty-bytes';
 import { IpcOverlayMessages } from '../common/ipc-messages';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import './css/index.css';
 import '@fontsource/source-code-pro/500.css';
 import '@fontsource/varela-round/400.css';
@@ -136,7 +136,7 @@ interface AppProps {
 	t: TFunction;
 }
 
-export default function App({ t }: AppProps): JSX.Element {
+export default function App({ t }: AppProps): React.JSX.Element {
 	const [state, setState] = useState<AppState>(AppState.MENU);
 	const [gameState, setGameState] = useState<AmongUsState>({} as AmongUsState);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -325,4 +325,8 @@ export default function App({ t }: AppProps): JSX.Element {
 // @ts-ignore
 const App2 = withTranslation()(App);
 // @ts-ignore
-ReactDOM.render(<App2 />, document.getElementById('app'));
+// ReactDOM.render was removed in React 19.
+const container = document.getElementById('app');
+if (container) {
+	createRoot(container).render(<App2 />);
+}

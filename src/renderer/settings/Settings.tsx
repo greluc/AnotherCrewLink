@@ -1,4 +1,4 @@
-import React, { ReactChild, useCallback, useContext, useEffect, useReducer, useState } from 'react';
+import React, { ReactNode, useCallback, useContext, useEffect, useReducer, useState } from 'react';
 import { SettingsContext, GameStateContext, HostSettingsContext } from '../contexts';
 import MicrophoneSoundBar from './MicrophoneSoundBar';
 import TestSpeakersButton from './TestSpeakersButton';
@@ -143,7 +143,7 @@ interface MediaDevice {
 interface DisabledTooltipProps {
 	disabled: boolean;
 	title: string;
-	children: ReactChild;
+	children: ReactNode;
 }
 
 interface IConfirmDialog {
