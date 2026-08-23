@@ -38,8 +38,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxcb1-dev libx11-dev
 
+      # node-gyp fetches the Node headers through undici, which has crashed mid-parse
+      # when the connection drops (assert(!this.paused) inside its response parser).
+      # That is a transient network failure in someone else's HTTP client, so one retry
+      # turns a failed release into a slow one.
       - name: Install Dependencies
-        run: npm ci
+        shell: bash
+        run: npm ci || (echo "npm ci failed, retrying once" && npm ci)
 
       - name: Build App
         run: npm run ${{ matrix.dist }}

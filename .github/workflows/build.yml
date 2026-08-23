@@ -51,9 +51,14 @@ jobs:
             node_modules
           key: ${{ runner.os }}-3-${{ hashFiles('package-lock.json')}}
 
+      # node-gyp fetches the Node headers through undici, which has crashed mid-parse
+      # when the connection drops (assert(!this.paused) inside its response parser).
+      # That is a transient network failure in someone else's HTTP client, so one retry
+      # turns a failed release into a slow one.
       - name: Install Dependencies
         if: steps.node-cache.outputs.cache-hit != 'true'
-        run: npm ci
+        shell: bash
+        run: npm ci || (echo "npm ci failed, retrying once" && npm ci)
 
       # Fails the build if a dependency picks up a high or critical advisory, so
       # this does not have to be noticed by hand later.
