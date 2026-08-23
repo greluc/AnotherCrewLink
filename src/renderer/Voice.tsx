@@ -1488,7 +1488,10 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 										}
 										size={50}
 										socketConfig={socketConfig}
-										onConfigChange={() => setSetting(`playerConfigMap.${player.nameHash}`, playerConfigs[player.nameHash])}
+										onConfigChange={() => {
+										playerConfigs[player.nameHash].lastUsed = Date.now();
+										setSetting(`playerConfigMap.${player.nameHash}`, playerConfigs[player.nameHash]);
+									}}
 										mod={gameState.mod}
 									/>
 								</Grid>

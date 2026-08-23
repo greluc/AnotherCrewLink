@@ -271,6 +271,32 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 	const microphones = devices.filter((d) => d.kind === 'audioinput');
 	const speakers = devices.filter((d) => d.kind === 'audiooutput');
 
+	// Chromium device ids are not stable: a driver update, re-plugging a USB headset
+	// or a media-device salt change gives the same physical device a new id. The saved
+	// id then matches nothing, the select falls back to the first entry and
+	// getUserMedia silently uses the system default, which looks like the setting was
+	// never persisted. Recover the id from the label we stored alongside it.
+	useEffect(() => {
+		if (devices.length === 0) return;
+		const reresolve = (
+			candidates: MediaDevice[],
+			idKey: 'microphone' | 'speaker',
+			labelKey: 'microphoneLabel' | 'speakerLabel'
+		) => {
+			const savedId = settings[idKey];
+			const savedLabel = settings[labelKey];
+			if (!savedId || savedId.toLowerCase() === 'default' || !savedLabel) return;
+			if (candidates.some((d) => d.id === savedId)) return;
+			const byLabel = candidates.find((d) => d.label === savedLabel);
+			if (byLabel) {
+				console.log(`Re-resolved ${idKey} by label after its device id changed`);
+				setSettings(idKey, byLabel.id);
+			}
+		};
+		reresolve(microphones, 'microphone', 'microphoneLabel');
+		reresolve(speakers, 'speaker', 'speakerLabel');
+	}, [devices]);
+
 	useEffect(() => {
 		(async () => {
 			console.log(settings.language);
@@ -625,7 +651,10 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					className={classes.shortcutField}
 					SelectProps={{ native: true }}
 					InputLabelProps={{ shrink: true }}
-					onChange={(ev) => setSettings('microphone', ev.target.value)}
+					onChange={(ev) => {
+						setSettings('microphone', ev.target.value);
+						setSettings('microphoneLabel', microphones.find((d) => d.id === ev.target.value)?.label ?? '');
+					}}
 					onClick={updateDevices}
 				>
 					{microphones.map((d) => (
@@ -644,7 +673,10 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					className={classes.shortcutField}
 					SelectProps={{ native: true }}
 					InputLabelProps={{ shrink: true }}
-					onChange={(ev) => setSettings('speaker', ev.target.value)}
+					onChange={(ev) => {
+						setSettings('speaker', ev.target.value);
+						setSettings('speakerLabel', speakers.find((d) => d.id === ev.target.value)?.label ?? '');
+					}}
 					onClick={updateDevices}
 				>
 					{speakers.map((d) => (

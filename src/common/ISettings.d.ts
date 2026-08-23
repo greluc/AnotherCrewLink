@@ -5,6 +5,9 @@ export interface ISettings {
 	language: string;
 	microphone: string;
 	speaker: string;
+	/** Device labels, used to recover the ids after they change. */
+	microphoneLabel: string;
+	speakerLabel: string;
 	pushToTalkMode: number;
 	serverURL: string;
 	pushToTalkShortcut: string;
@@ -62,6 +65,8 @@ export interface ILobbySettings {
 export interface SocketConfig {
 	volume: number;
 	isMuted: boolean;
+	/** Epoch ms of the last change, used to prune the oldest entries instead of all. */
+	lastUsed?: number;
 }
 
 export interface playerConfigMap {

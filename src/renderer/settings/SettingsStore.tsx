@@ -111,6 +111,14 @@ export const SettingsStore = new Store<ISettings>({
 			type: 'string',
 			default: 'Default',
 		},
+		microphoneLabel: {
+			type: 'string',
+			default: '',
+		},
+		speakerLabel: {
+			type: 'string',
+			default: '',
+		},
 		pushToTalkMode: {
 			type: 'number',
 			default: pushToTalkOptions.VOICE,
@@ -238,6 +246,9 @@ export const SettingsStore = new Store<ISettings>({
 					isMuted: {
 						type: 'boolean',
 						default: false,
+					},
+					lastUsed: {
+						type: 'number',
 					},
 				},
 			},

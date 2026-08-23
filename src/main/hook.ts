@@ -2,16 +2,28 @@ import { app, ipcMain } from 'electron';
 import GameReader from './GameReader';
 import { keyboardWatcher } from 'node-keyboard-watcher';
 import Store from 'electron-store';
-import { ISettings } from '../common/ISettings';
+import { ISettings, playerConfigMap } from '../common/ISettings';
 import { IpcHandlerMessages, IpcMessages, IpcRendererMessages, IpcSyncMessages } from '../common/ipc-messages';
 
 const store = new Store<ISettings>();
 
-const currentPlayerConfigMap = store.get('playerConfigMap', {});
-const playerConfigMapLength = Object.keys(currentPlayerConfigMap).length;
-console.log('CONFIG count: ', playerConfigMapLength);
-if (playerConfigMapLength > 50) {
-	store.set('playerConfigMap', {});
+// Cap the per-player volume map, but prune instead of emptying it. The previous
+// code deleted every entry once the map passed 50, so anyone who had met more than
+// 50 players lost all of their per-player volumes on the next start, over and over.
+const PLAYER_CONFIG_LIMIT = 200;
+const currentPlayerConfigMap = store.get('playerConfigMap', {}) as playerConfigMap;
+const playerConfigEntries = Object.entries(currentPlayerConfigMap);
+console.log('CONFIG count: ', playerConfigEntries.length);
+if (playerConfigEntries.length > PLAYER_CONFIG_LIMIT) {
+	const keep = playerConfigEntries
+		.sort(([, a], [, b]) => (b?.lastUsed ?? 0) - (a?.lastUsed ?? 0))
+		.slice(0, PLAYER_CONFIG_LIMIT);
+	const pruned: playerConfigMap = {};
+	for (const [key, value] of keep) {
+		pruned[key as unknown as number] = value;
+	}
+	store.set('playerConfigMap', pruned);
+	console.log('CONFIG pruned to: ', keep.length);
 }
 
 let readingGame = false;
