@@ -128,16 +128,13 @@ const DEFAULT_ICE_CONFIG: RTCConfiguration = {
 	],
 };
 
-const DEFAULT_ICE_CONFIG_TURN: RTCConfiguration = {
-	iceTransportPolicy: 'relay',
-	iceServers: [
-		{
-			urls: 'turn:turn.bettercrewl.ink:3478',
-			username: 'M9DRVaByiujoXeuYAAAG',
-			credential: 'TpHR9HQNZ8taxjb3',
-		},
-	],
-};
+// natFix forces every connection through a relay. It used to swap in a hardcoded
+// turn.bettercrewl.ink with baked-in credentials, which ignored the ICE servers the
+// connected server had just sent and routed audio through unrelated infrastructure.
+// The server already advertises its own relay, so only the policy needs to change.
+function forceRelay(config: RTCConfiguration): RTCConfiguration {
+	return { ...config, iceTransportPolicy: 'relay' };
+}
 
 export interface VoiceProps {
 	t: (key: string) => string;
@@ -656,6 +653,15 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		socketClientsRef.current = socketClients;
 	}, [socketClients]);
 
+	// Writes the ref as well as the state. The ref used to be updated only by the effect
+	// above, so a signal arriving in the same tick as the join was measured against a
+	// stale map, hit the "unknown socket" guard and was dropped for good. That left
+	// exactly one pair of players unable to hear each other while everyone else was fine.
+	const updateSocketClients = (update: (old: SocketClientMap) => SocketClientMap) => {
+		socketClientsRef.current = update(socketClientsRef.current);
+		setSocketClients(socketClientsRef.current);
+	};
+
 	useEffect(() => {
 		if (
 			connectionStuff.current?.microphoneGain?.gain &&
@@ -860,11 +866,11 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		});
 
 		socket.on('setClient', (socketId: string, client: Client) => {
-			setSocketClients((old) => ({ ...old, [socketId]: client }));
+			updateSocketClients((old) => ({ ...old, [socketId]: client }));
 		});
 
 		socket.on('setClients', (clients: SocketClientMap) => {
-			setSocketClients(clients);
+			updateSocketClients(() => clients);
 		});
 
 		// Initialize variables
@@ -1001,7 +1007,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					Object.keys(peerConnections).forEach((k) => {
 						disconnectPeer(k);
 					});
-					setSocketClients({});
+					updateSocketClients(() => ({}));
 					currentLobby = lobbyCode;
 				} else if (currentLobby !== lobbyCode) {
 					console.log('Currentlobby', currentLobby, lobbyCode);
@@ -1017,11 +1023,18 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			function createPeerConnection(peer: string, initiator: boolean, client: Client) {
 				console.log('CreatePeerConnection: ', peer, initiator);
 				disconnectClient(client);
+				// Replacing an entry without destroying the previous instance leaked it and
+				// left it able to fire close for a peer it no longer owns.
+				const previous = peerConnections[peer];
+				if (previous) {
+					delete peerConnections[peer];
+					previous.destroy();
+				}
 				const connection = new Peer({
 					stream,
 					initiator, // @ts-ignore-line
 					iceRestartEnabled: true,
-					config: settingsRef.current.natFix ? DEFAULT_ICE_CONFIG_TURN : iceConfig,
+					config: settingsRef.current.natFix ? forceRelay(iceConfig) : iceConfig,
 				});
 
 				setPeerConnections((connections) => {
@@ -1126,21 +1139,29 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				});
 				connection.on('close', () => {
 					console.log('Disconnected from', peer, 'Initiator:', initiator);
-					disconnectPeer(peer);
+					// Only tear down if this is still the live connection. On offer glare a
+					// replacement is created for the same peer, and the old instance closing
+					// afterwards used to destroy that replacement, permanently muting the pair.
+					if (peerConnections[peer] === connection) {
+						disconnectPeer(peer);
+					}
 				});
-				connection.on('error', () => {
-					console.log('ONERROR');
-					/*empty*/
+				connection.on('error', (error: Error) => {
+					console.warn('Peer connection error for', peer, error);
 				});
 				return connection;
 			}
 
 			socket.on('join', async (peer: string, client: Client) => {
+				// Register before connecting: the answer can come back before the state
+				// update lands, and the signal handler rejects unknown sockets.
+				updateSocketClients((old) => ({ ...old, [peer]: client }));
 				createPeerConnection(peer, true, client);
-				setSocketClients((old) => ({ ...old, [peer]: client }));
 			});
 
-			socket.on('signal', ({ data, from, client }: { data: Peer.SignalData; from: string, client: Client }) => {
+			// The server only sends { data, from }; `client` was always undefined here, so
+			// disconnectClient never cleaned up the stale audio element on this side.
+			socket.on('signal', ({ data, from }: { data: Peer.SignalData; from: string }) => {
 				if (data.hasOwnProperty('mobilePlayerInfo')) {
 					// eslint-disable-line
 					const mobiledata = data as unknown as mobileHostInfo;
@@ -1154,7 +1175,8 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					return;
 				}
 				let connection: Peer.Instance;
-				if (!socketClientsRef.current[from]) {
+				const client = socketClientsRef.current[from];
+				if (!client) {
 					console.warn('SIGNAL FROM UNKOWN SOCKET..');
 					return;
 				}
