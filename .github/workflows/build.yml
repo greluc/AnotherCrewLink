@@ -10,6 +10,10 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      contents: read
+
+
     strategy:
       matrix:
         include:
@@ -34,7 +38,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22.x
+          node-version: 24.x
         
       - name: Cache Node Modules
         id: node-cache

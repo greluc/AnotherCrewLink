@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Before reporting a bug, always look at the [wiki](https://github.com/greluc/AnotherCrewLink/wiki/common-issues) or [FAQ](https://discord.gg/qDqTzvj4SH) in Discord Server that there usually has a solution for your bug**
+        **Before reporting a bug, always look at the [wiki](https://github.com/greluc/AnotherCrewLink/wiki/common-issues) that there usually has a solution for your bug**
   - type: markdown
     attributes:
       value: |
@@ -17,15 +17,15 @@ body:
       label: Pre-Flight Checklist
       description: Please use this checklist to avoid spamming.
       options:
-        - label: I am not asking a question => use the [Discord](https://discord.gg/qDqTzvj4SH) if you are
+        - label: I am not asking a question => use the [discussions](https://github.com/greluc/AnotherCrewLink/discussions) if you are
           required: true
-        - label: I have tried to use an [alternative voice server](https://bettercrewl.ink/)
+        - label: I have tried to use an [alternative voice server](https://aucl.greluc.me/)
           required: true
-        - label: I have checked everyone in my lobby is on the same AnotherCrewLink/CrewLink server
+        - label: I have checked everyone in my lobby is on the same AnotherCrewLink server
           required: true
         - label: I have refreshed and activated <kbd>NAT Fix</kbd> on the AnotherCrewLink app when I can't hear some people (this is a known issue)
           required: true
-        - label: I have checked that the AnotherCrewLink/CrewLink server I'm using is up to date
+        - label: I have checked that the AnotherCrewLink server I'm using is up to date
           required: true
         - label: I have a screenshot or videos of any errors
           required: false
