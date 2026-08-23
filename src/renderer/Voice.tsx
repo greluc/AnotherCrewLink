@@ -15,6 +15,7 @@ import {
 	type VoiceState,
 } from '../common/AmongUsState';
 import Peer, { type SignalData } from './peer';
+import { initiatesReconnect, reconnectDelay, shouldGiveUp } from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
 import type { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
@@ -262,6 +263,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const [playerConfigs] = useState<playerConfigMap>(settingsRef.current.playerConfigMap);
 	const socketClientsRef = useRef(socketClients);
 	const [peerConnections, setPeerConnections] = useState<PeerConnections>({});
+	// Pending rebuild of a peer connection that failed, and how many times it has been
+	// tried, per socket id. See scheduleReconnect.
+	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+	const reconnectAttempts = useRef<Record<string, number>>({});
 	const convolverBuffer = useRef<AudioBuffer | null>(null);
 	const playerSocketIdsRef = useRef<numberStringMap>({});
 	const { classes } = useStyles();
@@ -537,17 +542,37 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		}
 	}
 
+	function cancelReconnect(peer: string) {
+		const timer = reconnectTimers.current[peer];
+		if (timer !== undefined) {
+			clearTimeout(timer);
+			delete reconnectTimers.current[peer];
+		}
+		delete reconnectAttempts.current[peer];
+	}
+
+	function cancelAllReconnects() {
+		for (const peer of Object.keys(reconnectTimers.current)) {
+			clearTimeout(reconnectTimers.current[peer]);
+		}
+		reconnectTimers.current = {};
+		reconnectAttempts.current = {};
+	}
+
 	function disconnectPeer(peer: string) {
 		console.log('Disconnect peer: ', peer);
 		const connection = peerConnections[peer];
 		if (!connection) {
 			return;
 		}
-		connection.destroy();
+		// Drop it from the map before destroying it. destroy() emits close synchronously,
+		// and that handler treats a connection still listed here as one that broke on its
+		// own and schedules a rebuild, which is wrong for a teardown we asked for.
 		setPeerConnections((connections) => {
 			delete connections[peer];
 			return connections;
 		});
+		connection.destroy();
 		disconnectAudioElement(peer);
 	}
 	// Handle pushToTalk, if set
@@ -868,6 +893,19 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			updateSocketClients(() => clients);
 		});
 
+		// Sent when a socket leaves the lobby. Without it a departure is only visible as a
+		// peer connection that failed, which is exactly what a broken connection looks
+		// like, so the two cases could not be told apart.
+		socket.on('left', (peer: string) => {
+			console.log('Peer left the lobby:', peer);
+			cancelReconnect(peer);
+			updateSocketClients((old) => {
+				const { [peer]: _gone, ...rest } = old;
+				return rest;
+			});
+			disconnectPeer(peer);
+		});
+
 		// Initialize variables
 		let audioListener: VadNode;
 		// Held so the effect cleanup can tear these down. Voice unmounts every time the
@@ -999,6 +1037,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					setOtherVAD({});
 					setOtherTalking({});
 					if (lobbyCode === 'MENU') {
+						cancelAllReconnects();
 						Object.keys(peerConnections).forEach((k) => {
 							disconnectPeer(k);
 						});
@@ -1037,6 +1076,9 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					});
 
 					connection.on('connect', () => {
+						// The connection came up, so the next failure starts its backoff from
+						// the beginning rather than from wherever the last one left off.
+						delete reconnectAttempts.current[peer];
 						setTimeout(() => {
 							if (hostRef.current.isHost && connection.writable) {
 								try {
@@ -1137,12 +1179,47 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						// afterwards used to destroy that replacement, permanently muting the pair.
 						if (peerConnections[peer] === connection) {
 							disconnectPeer(peer);
+							scheduleReconnect(peer);
 						}
 					});
 					connection.on('error', (error: Error) => {
 						console.warn('Peer connection error for', peer, error);
 					});
 					return connection;
+				}
+
+				// A connection that fails is gone for the rest of the session: new ones are
+				// only created when a socket joins the lobby or sends an offer, and a peer that
+				// is already in the lobby does neither. That is why a player who drops out of
+				// one conversation stays out of it until the app is restarted, while everyone
+				// else still hears them. Rebuild it instead.
+				function scheduleReconnect(peer: string) {
+					if (reconnectTimers.current[peer] !== undefined) return;
+					if (currentLobby === '' || currentLobby === 'MENU') return;
+					// The server announces departures, so a peer still in the map is one that is
+					// still in the lobby and worth reconnecting to.
+					if (!socketClientsRef.current[peer]) return;
+
+					const attempt = (reconnectAttempts.current[peer] ?? 0) + 1;
+					if (shouldGiveUp(attempt)) {
+						console.warn('Giving up on rebuilding the connection to', peer);
+						return;
+					}
+					reconnectAttempts.current[peer] = attempt;
+
+					const delay = reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
+
+					reconnectTimers.current[peer] = setTimeout(() => {
+						delete reconnectTimers.current[peer];
+						const client = socketClientsRef.current[peer];
+						if (!client || currentLobby === '' || currentLobby === 'MENU') return;
+						// The other end got there first, or the socket is down and rejoining the
+						// lobby will produce a fresh connection anyway.
+						if (peerConnections[peer]) return;
+						if (!socket.connected) return;
+						console.log('Rebuilding the connection to', peer, '- attempt', attempt);
+						createPeerConnection(peer, true, client);
+					}, delay);
 				}
 
 				socket.on('join', async (peer: string, client: Client) => {
@@ -1201,6 +1278,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 		return () => {
 			hostRef.current.mobileRunning = false;
+			cancelAllReconnects();
 			socket.emit('leave');
 			Object.keys(peerConnections).forEach((k) => {
 				disconnectPeer(k);

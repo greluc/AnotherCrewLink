@@ -18,7 +18,21 @@ export interface PeerOptions {
 	initiator?: boolean;
 	stream?: MediaStream;
 	config?: RTCConfiguration;
+	/** Overrides how long the connection may take to come up. */
+	connectTimeout?: number;
 }
+
+/**
+ * A connection that never completes is not reported as failed by anything: an offer
+ * that no one answers leaves the connection in `new`, where it stays for as long as
+ * the app runs, because ICE never starts and so can never fail. That is one of the
+ * ways a player ends up unable to hear exactly one other, with a restart as the only
+ * way out. Give up on our own and let the caller rebuild instead.
+ *
+ * Setting up a peer connection normally takes under a second; this only has to
+ * outlast a slow relay allocation.
+ */
+export const PEER_CONNECT_TIMEOUT = 20000;
 
 type Handler = (...args: never[]) => void;
 
@@ -34,8 +48,17 @@ export default class Peer {
 	private remoteDescriptionSet = false;
 	private connectEmitted = false;
 
+	private connectTimer?: ReturnType<typeof setTimeout>;
+
 	constructor(private options: PeerOptions = {}) {
 		this.pc = new RTCPeerConnection(options.config);
+
+		this.connectTimer = setTimeout(() => {
+			this.connectTimer = undefined;
+			if (this.destroyed || this.connectEmitted) return;
+			this.emit('error', new Error('peer connection did not come up in time'));
+			this.destroy();
+		}, options.connectTimeout ?? PEER_CONNECT_TIMEOUT);
 
 		if (options.stream) {
 			for (const track of options.stream.getTracks()) {
@@ -56,6 +79,12 @@ export default class Peer {
 
 		this.pc.onconnectionstatechange = () => {
 			const state = this.pc.connectionState;
+			if (state === 'connected') {
+				// Audio is flowing. The data channel opening is what emits connect, and it
+				// normally follows immediately, but a connection carrying voice must never be
+				// torn down for being slow to finish that.
+				this.clearConnectTimer();
+			}
 			if (state === 'failed') {
 				this.emit('error', new Error(`peer connection ${state}`));
 				this.destroy();
@@ -139,9 +168,17 @@ export default class Peer {
 		}
 	}
 
+	private clearConnectTimer(): void {
+		if (this.connectTimer !== undefined) {
+			clearTimeout(this.connectTimer);
+			this.connectTimer = undefined;
+		}
+	}
+
 	destroy(): void {
 		if (this.destroyed) return;
 		this.destroyed = true;
+		this.clearConnectTimer();
 		try {
 			this.channel?.close();
 		} catch {
@@ -166,6 +203,7 @@ export default class Peer {
 		channel.onopen = () => {
 			if (!this.connectEmitted) {
 				this.connectEmitted = true;
+				this.clearConnectTimer();
 				this.emit('connect');
 			}
 		};
