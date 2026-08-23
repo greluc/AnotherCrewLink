@@ -1,12 +1,10 @@
-'use strict';
-
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
 import { windowStateKeeper } from './windowState';
-import { platform } from 'os';
-import { join as joinPath, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { format as formatUrl } from 'url';
+import { platform } from 'node:os';
+import { join as joinPath, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { format as formatUrl } from 'node:url';
 import './hook';
 import overlayWindowModule from 'electron-overlay-window';
 const { overlayWindow } = overlayWindowModule;
@@ -14,10 +12,10 @@ import { initializeIpcHandlers, initializeIpcListeners } from './ipc-handlers';
 import { GenerateHat } from './avatarGenerator';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
-import { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
+import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
 import Store from 'electron-store';
-import { ISettings } from '../common/ISettings';
+import type { ISettings } from '../common/ISettings';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
 import minimist from 'minimist';
 const args = minimist(process.argv);
@@ -286,7 +284,7 @@ if (!gotTheLock) {
 			global.mainWindow = createMainWindow();
 		}
 
-		session.fromPartition('default').setPermissionRequestHandler((webContents, permission, callback) => {
+		session.fromPartition('default').setPermissionRequestHandler((_webContents, permission, callback) => {
 			const allowedPermissions = ['audioCapture']; // Full list here: https://developer.chrome.com/extensions/declare_permissions#manifest
 			console.log('permission requested ', permission);
 			if (allowedPermissions.includes(permission)) {
@@ -304,7 +302,7 @@ if (!gotTheLock) {
 	// create main BrowserWindow when electron is ready
 	app.whenReady().then(() => {
 		protocol.registerFileProtocol('static', (request, callback) => {
-			const pathname = app.getPath('userData') + '/static/' + request.url.replace('static:///', '');
+			const pathname = `${app.getPath('userData')}/static/${request.url.replace('static:///', '')}`;
 			callback(pathname);
 		});
 

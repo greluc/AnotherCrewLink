@@ -1,15 +1,15 @@
-import React, { Dispatch, SetStateAction, useEffect, useState, useRef } from 'react';
+import React, { type Dispatch, type SetStateAction, useEffect, useState, useRef } from 'react';
 import Voice from './Voice';
 import Menu from './Menu';
 import { ipcRenderer, shell } from 'electron';
-import { AmongUsState } from '../common/AmongUsState';
+import type { AmongUsState } from '../common/AmongUsState';
 import Settings from './settings/Settings';
 import SettingsStore, { setSetting, setLobbySetting } from './settings/SettingsStore';
 import { GameStateContext, SettingsContext, PlayerColorContext, HostSettingsContext } from './contexts';
 import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
 import { makeStyles } from 'tss-react/mui';
 import {
-	AutoUpdaterState,
+	type AutoUpdaterState,
 	IpcHandlerMessages,
 	IpcMessages,
 	IpcRendererMessages,
@@ -37,12 +37,12 @@ import { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 import './language/i18n';
 import { withTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { ISettings } from '../common/ISettings';
+import type { ISettings } from '../common/ISettings';
 
 let appVersion = '';
 if (typeof window !== 'undefined' && window.location) {
 	const query = new URLSearchParams(window.location.search.substring(1));
-	appVersion = ' v' + query.get('version') || '';
+	appVersion = ` v${query.get('version')}` || '';
 }
 
 const useStyles = makeStyles()(() => ({
@@ -89,7 +89,7 @@ interface TitleBarProps {
 	setSettingsOpen: Dispatch<SetStateAction<boolean>>;
 }
 
-const RawTitleBar: React.FC<TitleBarProps> = function ({ settingsOpen, setSettingsOpen }: TitleBarProps) {
+const RawTitleBar: React.FC<TitleBarProps> = ({ settingsOpen, setSettingsOpen }: TitleBarProps) => {
 	const { classes } = useStyles();
 	return (
 		<div className={classes.root}>
@@ -230,7 +230,7 @@ export default function App({ t }: AppProps): React.JSX.Element {
 		ipcRenderer.send(IpcMessages.SEND_TO_OVERLAY, IpcOverlayMessages.NOTIFY_SETTINGS_CHANGED, SettingsStore.store);
 	}, [settings]);
 
-	let page;
+	let page: React.ReactNode;
 	switch (state) {
 		case AppState.MENU:
 			page = <Menu t={t} error={error} />;
@@ -322,9 +322,7 @@ export default function App({ t }: AppProps): React.JSX.Element {
 		</PlayerColorContext.Provider>
 	);
 }
-// @ts-ignore
 const App2 = withTranslation()(App);
-// @ts-ignore
 // ReactDOM.render was removed in React 19.
 const container = document.getElementById('app');
 if (container) {

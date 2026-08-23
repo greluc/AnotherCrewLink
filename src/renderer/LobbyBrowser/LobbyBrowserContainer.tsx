@@ -1,4 +1,4 @@
-import React from 'react';
+import type React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
 import { makeStyles } from 'tss-react/mui';
@@ -47,7 +47,7 @@ const useStyles = makeStyles()(() => ({
 	},
 }));
 
-const TitleBar = function () {
+const TitleBar = () => {
 	const { classes } = useStyles();
 	return (
 		<div className={classes.root}>
@@ -94,9 +94,7 @@ export default function App({ t }: AppProps): React.JSX.Element {
 		</StyledEngineProvider>
 	);
 }
-// @ts-ignore
 const App2 = withTranslation()(App);
-// @ts-ignore
 // ReactDOM.render was removed in React 19.
 const container = document.getElementById('app');
 if (container) {

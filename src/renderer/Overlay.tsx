@@ -1,12 +1,13 @@
-import React, { useEffect, useMemo, useState, CSSProperties } from 'react';
+import type React from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { ipcRenderer } from 'electron';
-import { AmongUsState, GameState, VoiceState } from '../common/AmongUsState';
+import { type AmongUsState, GameState, type VoiceState } from '../common/AmongUsState';
 import { IpcOverlayMessages, IpcMessages } from '../common/ipc-messages';
 import { createRoot } from 'react-dom/client';
 import { makeStyles } from 'tss-react/mui';
 import './css/overlay.css';
 import Avatar from './Avatar';
-import { ISettings } from '../common/ISettings';
+import type { ISettings } from '../common/ISettings';
 import { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 
 interface UseStylesProps {
@@ -67,7 +68,7 @@ function useWindowSize() {
 
 const iPadRatio = 854 / 579;
 
-const Overlay: React.FC = function () {
+const Overlay: React.FC = () => {
 	const [gameState, setGameState] = useState<AmongUsState>(undefined as unknown as AmongUsState);
 	const [voiceState, setVoiceState] = useState<VoiceState>(undefined as unknown as VoiceState);
 	const [settings, setSettings] = useState<ISettings>(undefined as unknown as ISettings);
@@ -145,12 +146,12 @@ const AvatarOverlay: React.FC<AvatarOverlayProps> = ({
 		classnames.push('gamestate_menu');
 	} else {
 		classnames.push('gamestate_game');
-		classnames.push('overlay_postion_' + positionParse);
+		classnames.push(`overlay_postion_${positionParse}`);
 		if (compactOverlay || position === 'right1' || position === 'left1') {
 			classnames.push('compactoverlay');
 		}
 		if (position === 'left1' || position === 'right1') {
-			classnames.push('overlay_postion_' + position);
+			classnames.push(`overlay_postion_${position}`);
 		}
 	}
 
@@ -233,7 +234,7 @@ const AvatarOverlay: React.FC<AvatarOverlayProps> = ({
 		);
 	});
 	if (avatars.length === 0) return null;
-	const playerContainerStyle = { '--size': 7.5 * (10 / avatars.length) + 'vh' } as playerContainerCss;
+	const playerContainerStyle = { '--size': `${7.5 * (10 / avatars.length)}vh` } as playerContainerCss;
 	return (
 		<div>
 			<div className={classnames.join(' ')} style={playerContainerStyle}>
@@ -271,7 +272,7 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 			return [hudWidth, hudHeight];
 		}
 
-		let resultW;
+		let resultW: number;
 		const ratio_diff = Math.abs(windowWidth / windowheight - 1.7);
 
 		if (ratio_diff < 0.25) {

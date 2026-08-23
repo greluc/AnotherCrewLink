@@ -112,7 +112,7 @@
 // 		console.log('[createPeerConnection], ', { peerId: socketId });
 // 		const peer: Peer = new Peer({
 // 			stream,
-// 			initiator, // @ts-ignore-line
+// 			initiator, // @ts-expect-error-line
 // 			iceRestartEnabled: false,
 // 			config: DEFAULT_ICE_CONFIG,
 // 		});

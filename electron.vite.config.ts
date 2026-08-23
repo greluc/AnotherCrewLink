@@ -1,5 +1,5 @@
 import { builtinModules, createRequire } from 'node:module';
-import { resolve } from 'path';
+import { resolve } from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';

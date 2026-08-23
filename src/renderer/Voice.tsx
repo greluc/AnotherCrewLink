@@ -1,22 +1,23 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import type React from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { io, type Socket } from 'socket.io-client';
 import Avatar from './Avatar';
 import { GameStateContext, HostSettingsContext, PlayerColorContext, SettingsContext } from './contexts';
 import {
-	AmongUsState,
+	type AmongUsState,
 	GameState,
-	Player,
-	SocketClientMap,
-	AudioConnected,
-	ClientBoolMap,
-	numberStringMap,
-	Client,
-	VoiceState,
+	type Player,
+	type SocketClientMap,
+	type AudioConnected,
+	type ClientBoolMap,
+	type numberStringMap,
+	type Client,
+	type VoiceState,
 } from '../common/AmongUsState';
-import Peer, { SignalData } from './peer';
+import Peer, { type SignalData } from './peer';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
-import { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
+import type { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
 import { IpcRendererMessages, IpcMessages, IpcOverlayMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import Typography from '@mui/material/Typography';
 import Grid from '@mui/material/Grid';
@@ -28,7 +29,7 @@ import reverbOgxUrl from '../../static/sounds/reverb.ogx?url';
 import radioOnSound from '../../static/sounds/radio_on.wav?url';
 
 import { CameraLocation, AmongUsMaps, MapType } from '../common/AmongusMap';
-import { ObsVoiceState } from '../common/ObsOverlay';
+import type { ObsVoiceState } from '../common/ObsOverlay';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import VolumeOff from '@mui/icons-material/VolumeOff';
@@ -36,7 +37,7 @@ import VolumeUp from '@mui/icons-material/VolumeUp';
 import Mic from '@mui/icons-material/Mic';
 import MicOff from '@mui/icons-material/MicOff';
 import adapter from 'webrtc-adapter';
-import { VADOptions } from './vad';
+import type { VADOptions } from './vad';
 import { pushToTalkOptions } from './settings/SettingsStore';
 import { poseCollide } from '../common/ColliderMap';
 
@@ -93,7 +94,7 @@ interface SocketError {
 	message?: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: mirrors Electron's own listener signature
 type IpcListener = (event: Electron.IpcRendererEvent, ...args: any[]) => void;
 
 // The Avatar `size` prop drives border width and the hat offsets, which are absolute
@@ -233,7 +234,7 @@ radioOnAudio.volume = 0.02;
 // radiobeepAudio2.src = radioBeep2;
 // radiobeepAudio2.volume = 0.2;
 
-const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceProps) {
+const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => {
 	const [error, setError] = useState('');
 	const [settings, setSetting] = useContext(SettingsContext);
 
@@ -394,7 +395,6 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				}
 				break;
 
-			case GameState.UNKNOWN:
 			default:
 				endGain = 0;
 				break;
@@ -429,7 +429,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					let distance = 999;
 					let camerapos = { x: 999, y: 999 };
 					for (const camera of Object.values(AmongUsMaps[state.map].cameras)) {
-						const cameraDist = Math.sqrt(Math.pow(other.x - camera.x, 2) + Math.pow(other.y - camera.y, 2));
+						const cameraDist = Math.sqrt((other.x - camera.x) ** 2 + (other.y - camera.y) ** 2);
 						if (distance > cameraDist) {
 							distance = cameraDist;
 							camerapos = camera;
@@ -492,7 +492,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			hostRef.current.gamestate !== GameState.UNKNOWN
 		) {
 			connectionStuff.current.socket?.emit('signal', {
-				to: hostRef.current.code + '_mobile',
+				to: `${hostRef.current.code}_mobile`,
 				data: { mobileHostInfo: { isHostingMobile: true, isGameHost: hostRef.current.isHost } },
 			});
 		}
@@ -504,7 +504,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		element.pause();
 		if (element.srcObject) {
 			const mediaStream = element.srcObject as MediaStream;
-			mediaStream.getTracks().forEach((track) => track.stop());
+			mediaStream.getTracks().forEach((track) => {
+				track.stop();
+			});
 		}
 		element.removeAttribute('srcObject');
 		element.removeAttribute('src');
@@ -526,7 +528,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 	}
 
 	function disconnectClient(client: Client) {
-		if (!client || !client.clientId) return;
+		if (!client?.clientId) return;
 		const oldSocketId = playerSocketIdsRef.current[client.clientId];
 		console.log('Checking for  old connection ....', client.clientId, oldSocketId);
 		if (oldSocketId && audioElements.current[oldSocketId]) {
@@ -581,8 +583,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 	useEffect(() => {
 		if (
-			!gameState ||
-			!gameState.players ||
+			!gameState?.players ||
 			!connectionStuff.current.socket ||
 			(!hostRef.current.mobileRunning && !settings.obsOverlay)
 		) {
@@ -590,7 +591,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		}
 		if (hostRef.current.mobileRunning) {
 			connectionStuff.current.socket?.emit('signal', {
-				to: gameState.lobbyCode + '_mobile',
+				to: `${gameState.lobbyCode}_mobile`,
 				data: { gameState, lobbySettings },
 			});
 		}
@@ -789,7 +790,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		for (const player of otherPlayers.filter((o) => o.isImpostor && !o.bugged && !o.isDead)) {
 			const peer = playerSocketIdsRef.current[player.clientId];
 			const connection = peerConnections[peer];
-			if (connection !== undefined && connection.writable)
+			if (connection?.writable)
 				connection?.send(JSON.stringify({ impostorRadio: connectionStuff.current.impostorRadio }));
 		}
 	}, [connectionStuff.current.impostorRadio]);
@@ -834,7 +835,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				let errorsFormatted = '';
 				if (validateClientPeerConfig.errors) {
 					errorsFormatted = validateClientPeerConfig.errors
-						.map((error) => error.dataPath + ' ' + error.message)
+						.map((error) => `${error.instancePath} ${error.message}`)
 						.join('\n');
 				}
 				alert(
@@ -1119,16 +1120,16 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 					connection.on('data', (data) => {
 						const parsedData = JSON.parse(data);
-						if (Object.prototype.hasOwnProperty.call(parsedData, 'impostorRadio')) {
+						if (Object.hasOwn(parsedData, 'impostorRadio')) {
 							const clientId = socketClientsRef.current[peer]?.clientId;
-							if (impostorRadioClientId.current === -1 && parsedData['impostorRadio']) {
+							if (impostorRadioClientId.current === -1 && parsedData.impostorRadio) {
 								impostorRadioClientId.current = clientId;
-							} else if (impostorRadioClientId.current === clientId && !parsedData['impostorRadio']) {
+							} else if (impostorRadioClientId.current === clientId && !parsedData.impostorRadio) {
 								impostorRadioClientId.current = -1;
 							}
 							console.log('Recieved impostor radio request', parsedData);
 						}
-						if (Object.prototype.hasOwnProperty.call(parsedData, 'maxDistance')) {
+						if (Object.hasOwn(parsedData, 'maxDistance')) {
 							if (!hostRef.current || hostRef.current.parsedHostId !== socketClientsRef.current[peer]?.clientId) return;
 							const newSettings = { ...defaultlocalLobbySettings, ...parsedData };
 							setHostLobbySettings(newSettings);
@@ -1159,8 +1160,8 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				// The server only sends { data, from }; `client` was always undefined here, so
 				// disconnectClient never cleaned up the stale audio element on this side.
 				socket.on('signal', ({ data, from }: { data: SignalData; from: string }) => {
-					if (Object.prototype.hasOwnProperty.call(data, 'mobilePlayerInfo')) {
-					// eslint-disable-line
+					if (Object.hasOwn(data, 'mobilePlayerInfo')) {
+						// eslint-disable-line
 						const mobiledata = data as unknown as mobileHostInfo;
 						if (
 							mobiledata.mobilePlayerInfo.code === hostRef.current.code &&
@@ -1195,7 +1196,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 			},
 			(error) => {
 				console.error(error);
-				setError("Couldn't connect to your microphone:\n" + error);
+				setError(`Couldn't connect to your microphone:\n${error}`);
 				// ipcRenderer.send(IpcMessages.SHOW_ERROR_DIALOG, {
 				// 	title: 'Error',
 				// 	content: 'Couldn\'t connect to your microphone:\n' + error
@@ -1220,7 +1221,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 			// Release the microphone, otherwise the OS keeps showing the app as recording
 			// and every re-mount opens another capture on top of the old one.
-			localStream?.getTracks().forEach((track) => track.stop());
+			localStream?.getTracks().forEach((track) => {
+				track.stop();
+			});
 			localStream = undefined;
 			audioContext?.close().catch(() => {
 				/* already closed */
@@ -1239,7 +1242,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 	//data: { mobilePlayerInfo: { code: this.gamecode, askingForHost: true }
 	const myPlayer = useMemo(() => {
-		if (!gameState || !gameState.players) {
+		if (!gameState?.players) {
 			return undefined;
 		} else {
 			return gameState.players.find((p) => p.isLocal);
@@ -1248,7 +1251,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 
 	const otherPlayers = useMemo(() => {
 		let otherPlayers: Player[];
-		if (!gameState || !gameState.players || !myPlayer) return [];
+		if (!gameState?.players || !myPlayer) return [];
 		else otherPlayers = gameState.players.filter((p) => !p.isLocal);
 		maxDistanceRef.current = lobbySettings.visionHearing
 			? myPlayer.isImpostor
@@ -1324,7 +1327,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		}
 		for (const peerId in Object.keys(audioElements.current).filter((e) => !handledPeerIds.includes(e))) {
 			const audio = audioElements.current[peerId];
-			if (audio && audio.gain) {
+			if (audio?.gain) {
 				audio.gain.gain.value = 0;
 			}
 			// maybe disconnect later
@@ -1439,22 +1442,20 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				<>
 					<div className={classes.top}>
 						{myPlayer && gameState.lobbyCode !== 'MENU' && (
-							<>
-								<div className={classes.avatarWrapper} ref={ownAvatarRef}>
-									<Avatar
-										deafened={deafenedState}
-										muted={mutedState}
-										player={myPlayer}
-										borderColor={myPlayer?.shiftedColor == -1 ? '#2ecc71' : 'gray'}
-										connectionState={connected ? 'connected' : 'disconnected'}
-										isUsingRadio={myPlayer?.isImpostor && impostorRadioClientId.current === myPlayer.clientId}
-										talking={talking}
-										isAlive={!myPlayer.isDead}
-										size={Math.max(24, Math.round(ownAvatarWidth)) || 100}
-										mod={gameState.mod}
-									/>
-								</div>
-							</>
+							<div className={classes.avatarWrapper} ref={ownAvatarRef}>
+								<Avatar
+									deafened={deafenedState}
+									muted={mutedState}
+									player={myPlayer}
+									borderColor={myPlayer?.shiftedColor == -1 ? '#2ecc71' : 'gray'}
+									connectionState={connected ? 'connected' : 'disconnected'}
+									isUsingRadio={myPlayer?.isImpostor && impostorRadioClientId.current === myPlayer.clientId}
+									talking={talking}
+									isAlive={!myPlayer.isDead}
+									size={Math.max(24, Math.round(ownAvatarWidth)) || 100}
+									mod={gameState.mod}
+								/>
+							</div>
 						)}
 						<div className={classes.right}>
 							<div>

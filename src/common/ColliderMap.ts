@@ -1,4 +1,4 @@
-import { MapType, Vector2 } from './AmongusMap';
+import { MapType, type Vector2 } from './AmongusMap';
 import intersect from 'path-intersection';
 
 export const colliderMaps: { [key in MapType]: string[] | undefined } = {

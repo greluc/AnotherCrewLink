@@ -39,10 +39,10 @@ const defaultMap: AmongUsMap = {
 export const AmongUsMaps: { [key in MapType]: AmongUsMap } = {
 	[MapType.THE_SKELD]: {
 		cameras: {
-			[0]: { x: 13.2417, y: -4.348 },
-			[1]: { x: 0.6216, y: -6.5642 },
-			[2]: { x: -7.1503, y: 1.6709 },
-			[3]: { x: -17.8098, y: -4.8983 },
+			0: { x: 13.2417, y: -4.348 },
+			1: { x: 0.6216, y: -6.5642 },
+			2: { x: -7.1503, y: 1.6709 },
+			3: { x: -17.8098, y: -4.8983 },
 		},
 	},
 

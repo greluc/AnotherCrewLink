@@ -3,7 +3,7 @@ import GameReader from './GameReader';
 import keyboardWatcherModule from 'node-keyboard-watcher';
 const { keyboardWatcher } = keyboardWatcherModule;
 import Store from 'electron-store';
-import { ISettings, playerConfigMap } from '../common/ISettings';
+import type { ISettings, playerConfigMap } from '../common/ISettings';
 import { IpcHandlerMessages, IpcMessages, IpcRendererMessages, IpcSyncMessages } from '../common/ipc-messages';
 
 const store = new Store<ISettings>();

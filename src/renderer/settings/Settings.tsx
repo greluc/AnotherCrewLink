@@ -1,8 +1,8 @@
-import React, { ReactNode, useCallback, useContext, useEffect, useReducer, useState } from 'react';
+import React, { type ReactNode, useCallback, useContext, useEffect, useReducer, useState } from 'react';
 import { SettingsContext, GameStateContext, HostSettingsContext } from '../contexts';
 import MicrophoneSoundBar from './MicrophoneSoundBar';
 import TestSpeakersButton from './TestSpeakersButton';
-import { ISettings, ILobbySettings } from '../../common/ISettings';
+import type { ISettings, ILobbySettings } from '../../common/ISettings';
 import { makeStyles } from 'tss-react/mui';
 import { styled } from '@mui/material/styles';
 import {
@@ -23,7 +23,7 @@ import Alert from '@mui/material/Alert';
 import { GameState } from '../../common/AmongUsState';
 import { ipcRenderer } from 'electron';
 import { IpcHandlerMessages } from '../../common/ipc-messages';
-import i18next, { TFunction } from 'i18next';
+import i18next, { type TFunction } from 'i18next';
 import languages from '../language/languages';
 import ServerURLInput from './ServerURLInput';
 import MuiDivider from '@mui/material/Divider';
@@ -153,7 +153,7 @@ interface IConfirmDialog {
 	open: boolean;
 }
 
-const DisabledTooltip: React.FC<DisabledTooltipProps> = function ({ disabled, children, title }: DisabledTooltipProps) {
+const DisabledTooltip: React.FC<DisabledTooltipProps> = ({ disabled, children, title }: DisabledTooltipProps) => {
 	if (disabled)
 		return (
 			<Tooltip placement="top" arrow title={title}>
@@ -163,7 +163,7 @@ const DisabledTooltip: React.FC<DisabledTooltipProps> = function ({ disabled, ch
 	else return <>{children}</>;
 };
 
-const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: SettingsProps) {
+const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) => {
 	const { classes } = useStyles({ open });
 	const [settings, setSettings, setLobbySettings] = useContext(SettingsContext);
 	const gameState = useContext(GameStateContext);
@@ -214,7 +214,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 						label = t('buttons.default');
 					} else {
 						const match = /.+?\([^(]+\)/.exec(d.label);
-						if (match && match[0]) label = match[0];
+						if (match?.[0]) label = match[0];
 					}
 					return {
 						id: d.deviceId,
@@ -232,9 +232,8 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 		else if (k.startsWith('Arrow')) k = k.substring(5);
 		if (k === ' ') k = 'Space';
 
-		/* @ts-ignore */
 		const c = ev.code as string;
-		if (c && c.startsWith('Numpad')) {
+		if (c?.startsWith('Numpad')) {
 			k = c;
 		}
 
@@ -364,7 +363,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 	);
 
 	if (!open) {
-		return <></>;
+		return null;
 	}
 
 	return (
@@ -1138,21 +1137,19 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 						control={<Checkbox />}
 					/>
 					{settings.obsOverlay && (
-						<>
-							<TextField
-								fullWidth
-								spellCheck={false}
-								label={t('settings.streaming.obs_url')}
-								value={`${settings.serverURL.includes('https') ? 'https' : 'http'}://obs.aucl.greluc.me/?compact=${
-									settings.compactOverlay ? '1' : '0'
-								}&position=${settings.overlayPosition}&meeting=${settings.meetingOverlay ? '1' : '0'}&secret=${
-									settings.obsSecret
-								}&server=${settings.serverURL}`}
-								variant="outlined"
-								color="primary"
-								slotProps={{ input: { readOnly: true } }}
-							/>
-						</>
+						<TextField
+							fullWidth
+							spellCheck={false}
+							label={t('settings.streaming.obs_url')}
+							value={`${settings.serverURL.includes('https') ? 'https' : 'http'}://obs.aucl.greluc.me/?compact=${
+								settings.compactOverlay ? '1' : '0'
+							}&position=${settings.overlayPosition}&meeting=${settings.meetingOverlay ? '1' : '0'}&secret=${
+								settings.obsSecret
+							}&server=${settings.serverURL}`}
+							variant="outlined"
+							color="primary"
+							slotProps={{ input: { readOnly: true } }}
+						/>
 					)}
 				</div>
 				<Divider />

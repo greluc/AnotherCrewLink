@@ -1,6 +1,6 @@
 import Store from 'electron-store';
 import { GamePlatform } from '../../common/GamePlatform';
-import { ILobbySettings, ISettings, SocketConfig } from '../../common/ISettings';
+import type { ILobbySettings, ISettings, SocketConfig } from '../../common/ISettings';
 
 export enum pushToTalkOptions {
 	VOICE,

@@ -1,4 +1,4 @@
-import { GameState } from './AmongUsState';
+import type { GameState } from './AmongUsState';
 
 export interface PublicLobby {
 	id: number;

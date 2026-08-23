@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Player } from '../common/AmongUsState';
+import type React from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { Player } from '../common/AmongUsState';
 import {
 	getCosmetic,
 	redAlive,
 	cosmeticType,
 	getHatDementions,
-	initializedHats as initializedHats,
+	initializedHats,
 	initializeHats,
 	subscribeHats,
 	getHatsRevision,
-	HatDementions,
+	type HatDementions,
 } from './cosmetics';
 import { makeStyles } from 'tss-react/mui';
 import MicOff from '@mui/icons-material/MicOff';
@@ -19,12 +20,12 @@ import LinkOff from '@mui/icons-material/LinkOff';
 import ErrorOutline from '@mui/icons-material/ErrorOutlined';
 import RadioSVG from '../../static/radio.svg?url';
 import Tooltip from '@mui/material/Tooltip';
-import { SocketConfig } from '../common/ISettings';
+import type { SocketConfig } from '../common/ISettings';
 import Slider from '@mui/material/Slider';
 import VolumeUp from '@mui/icons-material/VolumeUp';
 import IconButton from '@mui/material/IconButton';
 import Grid from '@mui/material/Grid';
-import { ModsType } from '../common/Mods';
+import type { ModsType } from '../common/Mods';
 
 const useStyles = makeStyles()(() => ({
 	canvas: {
@@ -97,7 +98,7 @@ export interface AvatarProps {
 	mod: ModsType;
 }
 
-const Avatar: React.FC<AvatarProps> = function ({
+const Avatar: React.FC<AvatarProps> = ({
 	talking,
 	deafened,
 	muted,
@@ -114,9 +115,9 @@ const Avatar: React.FC<AvatarProps> = function ({
 	overflow = false,
 	onConfigChange,
 	mod,
-}: AvatarProps) {
+}: AvatarProps) => {
 	const { classes } = useStyles();
-	let icon;
+	let icon: React.ReactNode;
 	deafened = deafened === true || socketConfig?.isMuted === true || socketConfig?.volume === 0;
 	switch (connectionState) {
 		case 'connected':
@@ -154,7 +155,7 @@ const Avatar: React.FC<AvatarProps> = function ({
 	);
 
 	if (socketConfig) {
-		let muteButtonIcon;
+		let muteButtonIcon: React.ReactNode;
 		if (socketConfig.isMuted) {
 			muteButtonIcon = <VolumeOff color="primary" className={classes.iconNoBackground}></VolumeOff>;
 		} else {
@@ -192,7 +193,7 @@ const Avatar: React.FC<AvatarProps> = function ({
 										socketConfig.volume = newValue as number;
 									}}
 									valueLabelDisplay={'auto'}
-									valueLabelFormat={(value) => Math.floor(value * 100) + '%'}
+									valueLabelFormat={(value) => `${Math.floor(value * 100)}%`}
 									onMouseLeave={() => {
 										if (onConfigChange) {
 											onConfigChange();
@@ -234,55 +235,54 @@ interface UseCanvasStylesParams {
 	paddingLeft: number;
 }
 // tss-react takes the props once as a parameter instead of a function per rule.
-const useCanvasStyles = makeStyles<UseCanvasStylesParams>()((
-	_theme,
-	{ isAlive, dementions, lookLeft, size, borderColor, paddingLeft }
-) => {
-	const border = Math.max(2, size / 40);
-	const offset = `${border / 2 + paddingLeft}px`;
-	const cosmetic = (d: HatDementions) => ({
-		pointerEvents: 'none' as const,
-		width: d.width,
-		position: 'absolute' as const,
-		top: `calc(22% + ${d.top})`,
-		left: `calc(${d.left} + ${offset})`,
-		display: isAlive ? ('block' as const) : ('none' as const),
-	});
-	return {
-		base: {
-			width: '105%',
+const useCanvasStyles = makeStyles<UseCanvasStylesParams>()(
+	(_theme, { isAlive, dementions, lookLeft, size, borderColor, paddingLeft }) => {
+		const border = Math.max(2, size / 40);
+		const offset = `${border / 2 + paddingLeft}px`;
+		const cosmetic = (d: HatDementions) => ({
+			pointerEvents: 'none' as const,
+			width: d.width,
 			position: 'absolute' as const,
-			top: '22%',
-			left: paddingLeft,
-			zIndex: 2,
-		},
-		hat: { ...cosmetic(dementions.hat), zIndex: 4 },
-		skin: { ...cosmetic(dementions.skin), zIndex: 3 },
-		visor: { ...cosmetic(dementions.visor), zIndex: 3 },
-		avatar: {
-			borderRadius: '50%',
-			position: 'relative' as const,
-			borderStyle: 'solid',
-			transition: 'border-color .2s ease-out',
-			borderColor,
-			borderWidth: border,
-			transform: lookLeft ? 'scaleX(-1)' : 'scaleX(1)',
-			width: '100%',
-			paddingBottom: '100%',
-			cursor: 'pointer',
-		},
-		radio: {
-			position: 'absolute' as const,
-			left: '70%',
-			top: '80%',
-			width: '30px',
-			transform: 'translate(-50%, -50%)',
-			fill: 'white',
-			padding: 2,
-			zIndex: 12,
-		},
-	};
-});
+			top: `calc(22% + ${d.top})`,
+			left: `calc(${d.left} + ${offset})`,
+			display: isAlive ? ('block' as const) : ('none' as const),
+		});
+		return {
+			base: {
+				width: '105%',
+				position: 'absolute' as const,
+				top: '22%',
+				left: paddingLeft,
+				zIndex: 2,
+			},
+			hat: { ...cosmetic(dementions.hat), zIndex: 4 },
+			skin: { ...cosmetic(dementions.skin), zIndex: 3 },
+			visor: { ...cosmetic(dementions.visor), zIndex: 3 },
+			avatar: {
+				borderRadius: '50%',
+				position: 'relative' as const,
+				borderStyle: 'solid',
+				transition: 'border-color .2s ease-out',
+				borderColor,
+				borderWidth: border,
+				transform: lookLeft ? 'scaleX(-1)' : 'scaleX(1)',
+				width: '100%',
+				paddingBottom: '100%',
+				cursor: 'pointer',
+			},
+			radio: {
+				position: 'absolute' as const,
+				left: '70%',
+				top: '80%',
+				width: '30px',
+				transform: 'translate(-50%, -50%)',
+				fill: 'white',
+				padding: 2,
+				zIndex: 12,
+			},
+		};
+	}
+);
 
 // Re-renders the avatar once the hat collection finishes downloading.
 function useHatsRevision(): number {
@@ -343,42 +343,48 @@ function Canvas({
 
 	const hatElement = (
 		<>
-			<img src={hatImg.hat_front} className={classes.hat} onError={onerror} onLoad={onload} />
-			<img src={hatImg.visor} className={classes.visor} onError={onerror} onLoad={onload} />
+			<img src={hatImg.hat_front} alt="" className={classes.hat} onError={onerror} onLoad={onload} />
+			<img src={hatImg.visor} alt="" className={classes.visor} onError={onerror} onLoad={onload} />
 
-			<img src={hatImg.hat_back} className={classes.hat} style={{ zIndex: 1 }} onError={onerror} onLoad={onload} />
+			<img
+				src={hatImg.hat_back}
+				alt=""
+				className={classes.hat}
+				style={{ zIndex: 1 }}
+				onError={onerror}
+				onLoad={onload}
+			/>
 		</>
 	);
 
 	return (
-		<>
-			<div className={classes.avatar} onClick={onClick}>
-				<div
-					className={classes.avatar}
-					style={{
-						overflow: 'hidden',
-						position: 'absolute',
-						top: Math.max(2, size / 40) * -1,
-						left: Math.max(2, size / 40) * -1,
-						transform: 'unset',
+		<div className={classes.avatar} onClick={onClick}>
+			<div
+				className={classes.avatar}
+				style={{
+					overflow: 'hidden',
+					position: 'absolute',
+					top: Math.max(2, size / 40) * -1,
+					left: Math.max(2, size / 40) * -1,
+					transform: 'unset',
+				}}
+			>
+				<img
+					alt=""
+					src={hatImg.base}
+					className={classes.base}
+					onError={(event) => {
+						event.currentTarget.onerror = null;
+						event.currentTarget.src = redAlive;
 					}}
-				>
-					<img
-						src={hatImg.base}
-						className={classes.base}
-						onError={(event) => {
-							event.currentTarget.onerror = null;
-							event.currentTarget.src = redAlive;
-						}}
-					/>
+				/>
 
-					<img src={hatImg.skin} className={classes.skin} onError={onerror} onLoad={onload} />
-					{overflow && hatElement}
-				</div>
-				{!overflow && hatElement}
-				{usingRadio && <img src={RadioSVG} className={classes.radio} />}
+				<img src={hatImg.skin} alt="" className={classes.skin} onError={onerror} onLoad={onload} />
+				{overflow && hatElement}
 			</div>
-		</>
+			{!overflow && hatElement}
+			{usingRadio && <img src={RadioSVG} alt="" className={classes.radio} />}
+		</div>
 	);
 }
 

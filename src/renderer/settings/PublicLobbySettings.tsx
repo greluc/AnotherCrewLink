@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { makeStyles } from 'tss-react/mui';
 import { DialogContent, DialogTitle, DialogActions, Dialog, Button, TextField, IconButton } from '@mui/material';
 import languages from '../language/languages';
-import { ILobbySettings } from '../../common/ISettings';
+import type { ILobbySettings } from '../../common/ISettings';
 import Alert from '@mui/material/Alert';
 import ChevronLeft from '@mui/icons-material/ArrowBack';
 
@@ -30,13 +30,13 @@ const useStyles = makeStyles()((theme) => ({
 		WebkitAppRegion: 'no-drag',
 	},
 }));
-const RawPublicLobbySettings: React.FC<publicLobbySettingProps> = function ({
+const RawPublicLobbySettings: React.FC<publicLobbySettingProps> = ({
 	t,
 	lobbySettings,
 	updateSetting,
 	canChange,
 	className,
-}: publicLobbySettingProps) {
+}: publicLobbySettingProps) => {
 	const [open, setOpen] = useState(false);
 	const { classes } = useStyles();
 	useEffect(() => {

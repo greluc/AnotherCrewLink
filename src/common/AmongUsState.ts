@@ -1,5 +1,5 @@
-import { CameraLocation, MapType } from './AmongusMap';
-import { ModsType } from './Mods';
+import type { CameraLocation, MapType } from './AmongusMap';
+import type { ModsType } from './Mods';
 
 export interface AmongUsState {
 	gameState: GameState;

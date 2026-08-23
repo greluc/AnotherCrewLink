@@ -1,6 +1,6 @@
 // Node cannot statically detect named exports from a native CommonJS module, so the
 // default import is destructured at runtime instead.
-import memoryjs, { DataType, ModuleObject, ProcessObject } from 'memoryjs';
+import memoryjs, { type DataType, type ModuleObject, type ProcessObject } from 'memoryjs';
 const {
 	findModule,
 	getProcesses,
@@ -15,16 +15,16 @@ const {
 } = memoryjs;
 import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
-import { GameState, AmongUsState, Player } from '../common/AmongUsState';
-import { fetchOffsetLookup, fetchOffsets, IOffsets, IOffsetsLookup } from './offsetStore';
+import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
+import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
 import Errors from '../common/Errors';
 import { CameraLocation, MapType } from '../common/AmongusMap';
 import { GenerateAvatars, numberToColorHex } from './avatarGenerator';
 import { RainbowColorId } from '../common/playerColors';
-import { platform } from 'os';
-import fs from 'fs';
-import path from 'path';
-import { AmongusMod, modList } from '../common/Mods';
+import { platform } from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { type AmongusMod, modList } from '../common/Mods';
 import { app } from 'electron';
 
 let appVersion = '';
@@ -228,7 +228,7 @@ export default class GameReader {
 			let map = MapType.UNKNOWN;
 			let maxPlayers = 10;
 			const closedDoors: number[] = [];
-			let localPlayer = undefined;
+			let localPlayer: Player | undefined;
 			if (
 				this.currentServer === '' ||
 				(this.oldGameState != state &&
@@ -332,7 +332,7 @@ export default class GameReader {
 								this.offsets!.surveillanceMinigame_FilteredRoomsCount
 							);
 							if (roomCount === 4) {
-								const dist = Math.sqrt(Math.pow(localPlayer.x - -12.9364, 2) + Math.pow(localPlayer.y - -2.7928, 2));
+								const dist = Math.sqrt((localPlayer.x - -12.9364) ** 2 + (localPlayer.y - -2.7928) ** 2);
 								if (dist < 0.6) {
 									currentCamera = CameraLocation.Skeld;
 								}
@@ -452,8 +452,8 @@ export default class GameReader {
 		} else {
 			this.offsets = await fetchOffsets(
 				this.is_64bit,
-				offsetLookups.versions['default'].file,
-				offsetLookups.versions['default'].offsetsVersion
+				offsetLookups.versions.default.file,
+				offsetLookups.versions.default.offsetsVersion
 			); // can't find file for this client, return default
 		}
 
@@ -566,8 +566,8 @@ export default class GameReader {
 		console.log(
 			JSON.stringify(
 				this.offsets,
-				function (k, v) {
-					if (v instanceof Array && k != 'struct') return JSON.stringify(v);
+				(k, v) => {
+					if (Array.isArray(v) && k != 'struct') return JSON.stringify(v);
 					return v;
 				},
 				2
@@ -1094,7 +1094,7 @@ export default class GameReader {
 		const isDummy = this.readMemory<boolean>('boolean', data.objectPtr, this.offsets.player.isDummy);
 		let name = 'error';
 		let shiftedColor = -1;
-		if (Object.prototype.hasOwnProperty.call(data, 'name')) {
+		if (Object.hasOwn(data, 'name')) {
 			name = this.readString(data.name, 1000).split(/<.*?>/).join('');
 		} else {
 			this.readDictionary(data.outfitsPtr, 6, (k, v, i) => {

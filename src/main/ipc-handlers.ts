@@ -1,24 +1,24 @@
 import { app, dialog, ipcMain, shell } from 'electron';
-import { platform, homedir } from 'os';
+import { platform, homedir } from 'node:os';
 import registry from 'registry-js';
 const { enumerateValues, enumerateKeys, HKEY } = registry;
 import {
 	DefaultGamePlatforms,
 	GamePlatform,
-	GamePlatformInstance,
-	GamePlatformMap,
+	type GamePlatformInstance,
+	type GamePlatformMap,
 	PlatformRunType,
 } from '../common/GamePlatform';
-import { parseVdf, VdfObject } from './vdf';
+import { parseVdf, type VdfObject } from './vdf';
 import spawn from 'cross-spawn';
-import path from 'path';
-import fs from 'fs';
+import path from 'node:path';
+import fs from 'node:fs';
 
-import { IpcMessages, IpcOverlayMessages } from '../common/ipc-messages';
+import { IpcMessages, type IpcOverlayMessages } from '../common/ipc-messages';
 
 // Listeners are fire and forget, they do not have "responses" or return values
 export const initializeIpcListeners = (): void => {
-	ipcMain.on(IpcMessages.SHOW_ERROR_DIALOG, (e, opts: { title: string; content: string }) => {
+	ipcMain.on(IpcMessages.SHOW_ERROR_DIALOG, (_e, opts: { title: string; content: string }) => {
 		if (typeof opts === 'object' && opts && typeof opts.title === 'string' && typeof opts.content === 'string') {
 			dialog.showErrorBox(opts.title, opts.content);
 		}
@@ -137,7 +137,7 @@ export const initializeIpcHandlers = (): void => {
 		} else if (desktop_platform === 'linux') {
 			// Add platform to availableGamePlatforms and setup data if platform is available, do nothing otherwise
 			try {
-				const vdfString = fs.readFileSync(homedir() + '/.steam/registry.vdf').toString();
+				const vdfString = fs.readFileSync(`${homedir()}/.steam/registry.vdf`).toString();
 				const vdfObject = parseVdf(vdfString);
 				// Values are always strings in KeyValues, so '1' rather than 1.
 				const apps = (((vdfObject.Registry as VdfObject)?.HKCU as VdfObject)?.Software as VdfObject)
@@ -162,9 +162,7 @@ export const initializeIpcHandlers = (): void => {
 				try {
 					fs.accessSync(path.join(game_platform.runPath, game_platform.execute[0]), fs.constants.X_OK);
 					availableGamePlatforms[key] = game_platform;
-				} catch {
-					continue;
-				}
+				} catch {}
 			}
 		}
 

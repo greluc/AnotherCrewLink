@@ -15,7 +15,7 @@
 	},
 	"scripts": {
 		"postinstall": "electron-builder install-app-deps",
-		"lint": "eslint src",
+		"lint": "biome check src electron.vite.config.ts",
 		"dev": "electron-vite dev",
 		"compile": "electron-vite build",
 		"dist": "npm run compile && electron-builder --win --x64 --ia32",
@@ -26,7 +26,9 @@
 		"publish:linux": "npm run compile && electron-builder --x64 --linux --publish always",
 		"audit": "npm audit --audit-level=high",
 		"preview": "electron-vite preview",
-		"lint:fix": "eslint src --fix"
+		"lint:fix": "biome check --write src electron.vite.config.ts",
+		"format": "biome format --write src electron.vite.config.ts",
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@emotion/react": "^11.14.0",
@@ -35,6 +37,8 @@
 		"@fontsource/varela-round": "^5.3.0",
 		"@mui/icons-material": "^9.3.1",
 		"@mui/material": "^9.3.1",
+		"ajv": "^8.17.1",
+		"ajv-formats": "^3.0.1",
 		"color": "^5.0.3",
 		"cross-spawn": "^7.0.6",
 		"electron-overlay-window": "file:native/electron-overlay-window",
@@ -57,7 +61,7 @@
 		"webrtc-adapter": "^9.0.6"
 	},
 	"devDependencies": {
-		"@eslint/js": "^10.0.1",
+		"@biomejs/biome": "^2.5.10",
 		"@types/cross-spawn": "^6.0.6",
 		"@types/minimist": "^1.2.5",
 		"@types/node": "^24.10.1",
@@ -68,14 +72,7 @@
 		"electron-builder": "^26.15.3",
 		"electron-devtools-installer": "^4.0.0",
 		"electron-vite": "^5.0.0",
-		"eslint": "^10.9.0",
-		"eslint-config-prettier": "^10.1.8",
-		"eslint-plugin-prettier": "^5.5.6",
-		"eslint-plugin-react-hooks": "^7.0.0",
-		"globals": "^17.11.0",
-		"prettier": "^3.9.6",
-		"typescript": "^6.0.3",
-		"typescript-eslint": "^8.67.0",
+		"typescript": "^7.0.2",
 		"vite": "^8.2.2"
 	},
 	"main": "out/main/index.mjs"

@@ -2,7 +2,7 @@ import redAliveimg from '../../static/images/avatar/placeholder.png?url';
 import rainbowAliveimg from '../../static/images/avatar/rainbow-alive.png?url';
 import rainbowDeadeimg from '../../static/images/avatar/rainbow-dead.png?url';
 
-import { ModsType } from '../common/Mods';
+import type { ModsType } from '../common/Mods';
 import { RainbowColorId } from '../common/playerColors';
 
 export { RainbowColorId } from '../common/playerColors';

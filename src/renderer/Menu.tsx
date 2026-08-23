@@ -1,4 +1,4 @@
-import React from 'react';
+import type React from 'react';
 import { makeStyles } from 'tss-react/mui';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
@@ -39,7 +39,7 @@ export interface MenuProps {
 	error: string;
 }
 
-const Menu: React.FC<MenuProps> = function ({ t, error }: MenuProps) {
+const Menu: React.FC<MenuProps> = ({ t, error }: MenuProps) => {
 	const { classes } = useStyles();
 
 	return (

@@ -12,11 +12,12 @@ import {
 	TextField,
 } from '@mui/material';
 import { makeStyles } from 'tss-react/mui';
-import React, { useMemo, useState, useEffect, useContext } from 'react';
+import type React from 'react';
+import { useMemo, useState, useEffect, useContext } from 'react';
 import ChevronLeft from '@mui/icons-material/ArrowBack';
-import { GamePlatformInstance, PlatformRunType } from '../../common/GamePlatform';
-import path from 'path';
-import { platform } from 'process';
+import { type GamePlatformInstance, PlatformRunType } from '../../common/GamePlatform';
+import path from 'node:path';
+import { platform } from 'node:process';
 import { SettingsContext } from '../contexts';
 import { webUtils } from 'electron';
 
@@ -52,12 +53,12 @@ export interface CustomPlatformSettingProps {
 	editPlatform?: GamePlatformInstance;
 }
 
-export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = function ({
+export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = ({
 	t,
 	open,
 	setOpenState,
 	editPlatform,
-}: CustomPlatformSettingProps) {
+}: CustomPlatformSettingProps) => {
 	const desktopPlatform = platform;
 
 	const { classes } = useStyles();
@@ -197,76 +198,72 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = func
 			);
 		} else {
 			return (
-				<>
-					<TextField
-						fullWidth
-						label={t('settings.customplatforms.uri')}
-						value={customPlatform.runPath}
-						onChange={(ev) => setPlatformRun(ev.target.value)}
-						variant="outlined"
-						color="primary"
-						disabled={false}
-					/>
-				</>
+				<TextField
+					fullWidth
+					label={t('settings.customplatforms.uri')}
+					value={customPlatform.runPath}
+					onChange={(ev) => setPlatformRun(ev.target.value)}
+					variant="outlined"
+					color="primary"
+					disabled={false}
+				/>
 			);
 		}
 	}, [customPlatform, advanced]);
 
 	return (
-		<>
-			<Dialog fullScreen open={open}>
-				<div className={classes.header}>
-					<DialogTitle>{t('settings.customplatforms.title')}</DialogTitle>
-					<IconButton className={classes.back} size="small" onClick={() => setOpenState(false)}>
-						<ChevronLeft htmlColor="#777" />
-					</IconButton>
-				</div>
-				<DialogContent className={classes.dialog}>
-					<TextField
-						fullWidth
-						spellCheck={false}
-						label={t('settings.customplatforms.platform_title')}
-						value={customPlatform.key}
-						onChange={(ev) => setPlatformName(ev.target.value)}
-						variant="outlined"
-						color="primary"
-						disabled={false}
-					/>
-					<RadioGroup
-						className={classes.radioGroup}
-						value={customPlatform.launchType}
-						onChange={(ev) => {
-							setPlatformRunType(ev.target.value as PlatformRunType);
-						}}
-					>
-						<FormControlLabel label={PlatformRunType.EXE} value={PlatformRunType.EXE} control={<Radio />} />
-						<FormControlLabel label={PlatformRunType.URI} value={PlatformRunType.URI} control={<Radio />} />
-					</RadioGroup>
-					{runInputs}
-				</DialogContent>
-				<DialogActions>
-					<Button
-						color="primary"
-						onClick={() => {
-							deleteCustomPlatform();
-							setCustomPlatform(emptyCustomPlatform);
-							setOpenState(false);
-						}}
-					>
-						{t('buttons.delete')}
-					</Button>
-					<Button
-						color="primary"
-						onClick={() => {
-							saveCustomPlatform();
-							setCustomPlatform(emptyCustomPlatform);
-							setOpenState(false);
-						}}
-					>
-						{t('buttons.confirm')}
-					</Button>
-				</DialogActions>
-			</Dialog>
-		</>
+		<Dialog fullScreen open={open}>
+			<div className={classes.header}>
+				<DialogTitle>{t('settings.customplatforms.title')}</DialogTitle>
+				<IconButton className={classes.back} size="small" onClick={() => setOpenState(false)}>
+					<ChevronLeft htmlColor="#777" />
+				</IconButton>
+			</div>
+			<DialogContent className={classes.dialog}>
+				<TextField
+					fullWidth
+					spellCheck={false}
+					label={t('settings.customplatforms.platform_title')}
+					value={customPlatform.key}
+					onChange={(ev) => setPlatformName(ev.target.value)}
+					variant="outlined"
+					color="primary"
+					disabled={false}
+				/>
+				<RadioGroup
+					className={classes.radioGroup}
+					value={customPlatform.launchType}
+					onChange={(ev) => {
+						setPlatformRunType(ev.target.value as PlatformRunType);
+					}}
+				>
+					<FormControlLabel label={PlatformRunType.EXE} value={PlatformRunType.EXE} control={<Radio />} />
+					<FormControlLabel label={PlatformRunType.URI} value={PlatformRunType.URI} control={<Radio />} />
+				</RadioGroup>
+				{runInputs}
+			</DialogContent>
+			<DialogActions>
+				<Button
+					color="primary"
+					onClick={() => {
+						deleteCustomPlatform();
+						setCustomPlatform(emptyCustomPlatform);
+						setOpenState(false);
+					}}
+				>
+					{t('buttons.delete')}
+				</Button>
+				<Button
+					color="primary"
+					onClick={() => {
+						saveCustomPlatform();
+						setCustomPlatform(emptyCustomPlatform);
+						setOpenState(false);
+					}}
+				>
+					{t('buttons.confirm')}
+				</Button>
+			</DialogActions>
+		</Dialog>
 	);
 };

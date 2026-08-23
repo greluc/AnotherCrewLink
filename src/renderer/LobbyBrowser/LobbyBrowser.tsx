@@ -11,12 +11,12 @@ import Paper from '@mui/material/Paper';
 import Button from '@mui/material/Button';
 import { ipcRenderer } from 'electron';
 import { IpcHandlerMessages, IpcMessages } from '../../common/ipc-messages';
-import { io, Socket } from 'socket.io-client';
+import { io, type Socket } from 'socket.io-client';
 import i18next from 'i18next';
 import { Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Tooltip } from '@mui/material';
 import languages from '../language/languages';
-import { PublicLobbyMap, PublicLobby } from '../../common/PublicLobby';
-import { modList, ModsType } from '../../common/Mods';
+import type { PublicLobbyMap, PublicLobby } from '../../common/PublicLobby';
+import { modList, type ModsType } from '../../common/Mods';
 import { GameState } from '../../common/AmongUsState';
 import SettingsStore from '../settings/SettingsStore';
 
@@ -164,9 +164,10 @@ export default function LobbyBrowser({ t }: LobbyBrowserProps) {
 					<DialogTitle id="alert-dialog-slide-title">Lobby information</DialogTitle>
 					<DialogContent>
 						<DialogContentText id="alert-dialog-slide-description">
-							{code.split('\n').map((i, key) => {
-								return <div key={key}>{i}</div>;
-							})}
+							{code.split('\n').map((line, index) => (
+								// Static dialog text, so pairing the index with the line is a stable key.
+								<div key={`${index}-${line}`}>{line}</div>
+							))}
 						</DialogContentText>
 					</DialogContent>
 					<DialogActions>

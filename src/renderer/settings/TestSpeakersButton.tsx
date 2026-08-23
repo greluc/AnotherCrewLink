@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-// @ts-ignore
+import type React from 'react';
+import { useState, useEffect } from 'react';
 import chime from '../../../static/sounds/chime.mp3';
-import { ExtendedAudioElement } from '../Voice';
+import type { ExtendedAudioElement } from '../Voice';
 import Button from '@mui/material/Button';
 import { makeStyles } from 'tss-react/mui';
 

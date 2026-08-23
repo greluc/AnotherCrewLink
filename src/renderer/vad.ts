@@ -63,13 +63,13 @@ export default function (
 		minNoiseLevel: 0.15, // from 0 to 1
 		maxNoiseLevel: 0.7, // from 0 to 1
 		avgNoiseMultiplier: 1.2,
-		onVoiceStart: function () {
+		onVoiceStart: () => {
 			/* DO NOTHING */
 		},
-		onVoiceStop: function () {
+		onVoiceStop: () => {
 			/* DO NOTHING */
 		},
-		onUpdate: function () {
+		onUpdate: () => {
 			/* DO NOTHING */
 		},
 		stereo: true,
@@ -86,7 +86,7 @@ export default function (
 
 	let envFreqRange: number[] = [];
 	let isNoiseCapturing = true;
-	let prevVadState: boolean | undefined = undefined;
+	let prevVadState: boolean | undefined;
 	let vadState = false;
 	let captureTimeout: number | null = null;
 
@@ -107,15 +107,9 @@ export default function (
 	function init() {
 		isNoiseCapturing = false;
 
-		envFreqRange = envFreqRange
-			.filter(function (val) {
-				return val;
-			})
-			.sort();
+		envFreqRange = envFreqRange.filter((val) => val).sort();
 		const averageEnvFreq = envFreqRange.length
-			? envFreqRange.reduce(function (p, c) {
-					return Math.min(p, c);
-				}, 1)
+			? envFreqRange.reduce((p, c) => Math.min(p, c), 1)
 			: options.minNoiseLevel || 0.1;
 
 		baseLevel = averageEnvFreq * options.avgNoiseMultiplier;

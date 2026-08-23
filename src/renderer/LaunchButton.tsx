@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron';
-import React, { useContext, useEffect, useRef, useState } from 'react';
-import { GamePlatformInstance, GamePlatformMap } from '../common/GamePlatform';
+import type React from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
+import type { GamePlatformInstance, GamePlatformMap } from '../common/GamePlatform';
 import { SettingsContext } from './contexts';
 import { makeStyles } from 'tss-react/mui';
 import { IpcMessages } from '../common/ipc-messages';
@@ -61,12 +62,12 @@ export interface LauncherProps {
 	t: (key: string) => string;
 }
 
-const LaunchButton: React.FC<LauncherProps> = function ({ t }: LauncherProps) {
+const LaunchButton: React.FC<LauncherProps> = ({ t }: LauncherProps) => {
 	const { classes } = useStyles();
 
 	const [settings, setSettings] = useContext(SettingsContext);
 
-	const [openMessage, setOpenMessage] = useState(<>{t('game.error_platform')}</>);
+	const [openMessage, setOpenMessage] = useState(t('game.error_platform'));
 	const [dropdownOpen, setDropdownOpen] = useState(false);
 	const [launchPlatforms, setLaunchPlatforms] = useState<GamePlatformMap>();
 	const [launchItemList, setLaunchItemList] = useState([] as React.JSX.Element[]);
@@ -139,9 +140,9 @@ const LaunchButton: React.FC<LauncherProps> = function ({ t }: LauncherProps) {
 	useEffect(() => {
 		if (!launchPlatforms) return;
 		if (launchItemList.length > 1) {
-			setOpenMessage(<>{t(launchPlatforms[settings.launchPlatform].translateKey)}</>);
+			setOpenMessage(t(launchPlatforms[settings.launchPlatform].translateKey));
 		} else {
-			setOpenMessage(<>{t('game.error_platform')}</>);
+			setOpenMessage(t('game.error_platform'));
 		}
 	}, [launchItemList, settings.launchPlatform]);
 

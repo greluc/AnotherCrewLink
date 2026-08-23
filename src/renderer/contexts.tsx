@@ -1,7 +1,7 @@
 import { createContext } from 'react';
-import { AmongUsState } from '../common/AmongUsState';
-import { ILobbySettings, ISettings } from '../common/ISettings';
-import { setSetting, setLobbySetting } from './settings/SettingsStore';
+import type { AmongUsState } from '../common/AmongUsState';
+import type { ILobbySettings, ISettings } from '../common/ISettings';
+import type { setSetting, setLobbySetting } from './settings/SettingsStore';
 
 type SettingsContextValue = [ISettings, typeof setSetting, typeof setLobbySetting];
 

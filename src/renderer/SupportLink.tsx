@@ -1,6 +1,6 @@
 import Link from '@mui/material/Link';
 import Typography from '@mui/material/Typography';
-import React from 'react';
+import type React from 'react';
 import { shell, ipcRenderer } from 'electron';
 import { makeStyles } from 'tss-react/mui';
 
@@ -26,7 +26,7 @@ const onRefreshClick = () => {
 	ipcRenderer.send('reload');
 };
 
-const SupportLink: React.FC = function () {
+const SupportLink: React.FC = () => {
 	const { classes } = useStyles();
 
 	return (
@@ -35,7 +35,7 @@ const SupportLink: React.FC = function () {
 			<Link href="#" color="secondary" onClick={() => shell.openExternal('https://discord.gg/4cpvp3KyhF')}>
 				Get support
 			</Link>
-			<button className={classes.button} onClick={onRefreshClick}>
+			<button type="button" className={classes.button} onClick={onRefreshClick}>
 				Reload
 			</button>
 		</Typography>

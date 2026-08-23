@@ -1,7 +1,7 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, type BrowserWindow, screen } from 'electron';
 import Store from 'electron-store';
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Replaces electron-window-state, which was last published in 2022 and pulled in
 // jsonfile and mkdirp 0.5. The store this app already uses does the persistence.
