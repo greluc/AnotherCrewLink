@@ -1,23 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Player } from '../common/AmongUsState';
-import {
-	getCosmetic,
-	redAlive,
-	cosmeticType,
-	getHatDementions,
-	initializedHats as initializedHats,
-	initializeHats,
-	subscribeHats,
-	getHatsRevision,
-	HatDementions,
-} from './cosmetics';
+import { getCosmetic, redAlive } from './cosmetics';
 import makeStyles from '@mui/styles/makeStyles';
 import MicOff from '@mui/icons-material/MicOff';
 import VolumeOff from '@mui/icons-material/VolumeOff';
 import WifiOff from '@mui/icons-material/WifiOff';
 import LinkOff from '@mui/icons-material/LinkOff';
-import ErrorOutline from '@mui/icons-material/ErrorOutline'; //@ts-ignore
-import RadioSVG from '../../static/radio.svg';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import RadioSVG from '../../static/radio.svg?url';
 import Tooltip from 'react-tooltip-lite';
 import { SocketConfig } from '../common/ISettings';
 import Slider from '@mui/material/Slider';
@@ -217,12 +207,6 @@ const Avatar: React.FC<AvatarProps> = function ({
 };
 
 interface UseCanvasStylesParams {
-	isAlive: boolean;
-	dementions: {
-		hat: HatDementions;
-		visor: HatDementions;
-		skin: HatDementions;
-	};
 	lookLeft: boolean;
 	size: number;
 	borderColor: string;
@@ -235,36 +219,6 @@ const useCanvasStyles = makeStyles(() => ({
 		top: '22%',
 		left: ({ paddingLeft }: UseCanvasStylesParams) => paddingLeft,
 		zIndex: 2,
-	},
-	hat: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.hat.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.hat.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.hat.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 4,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
-	},
-	skin: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.skin.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.skin.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.skin.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 3,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
-	},
-	visor: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.visor.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.visor.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.visor.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 3,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
 	},
 	avatar: {
 		// overflow: 'hidden',
@@ -291,13 +245,6 @@ const useCanvasStyles = makeStyles(() => ({
 	},
 }));
 
-// Re-renders the avatar once the hat collection finishes downloading.
-function useHatsRevision(): number {
-	const [revision, setRevision] = useState(getHatsRevision);
-	useEffect(() => subscribeHats(() => setRevision(getHatsRevision())), []);
-	return revision;
-}
-
 function Canvas({
 	hat,
 	skin,
@@ -312,51 +259,15 @@ function Canvas({
 	onClick,
 	mod,
 }: CanvasProps) {
-	const hatsRevision = useHatsRevision();
-	const hatImg = useMemo(() => {
-		if (!initializedHats) {
-			initializeHats();
-		}
-		return {
-			base: getCosmetic(color, isAlive, cosmeticType.base),
-			hat_front: !initializedHats ? '' : getCosmetic(color, isAlive, cosmeticType.hat, hat, mod),
-			hat_back: !initializedHats ? '' : getCosmetic(color, isAlive, cosmeticType.hat_back, hat, mod),
-			skin: !initializedHats ? '' : getCosmetic(color, isAlive, cosmeticType.hat, skin, mod),
-			visor: !initializedHats ? '' : getCosmetic(color, isAlive, cosmeticType.hat, visor, mod),
-			dementions: {
-				hat: getHatDementions(hat, mod),
-				visor: getHatDementions(visor, mod),
-				skin: getHatDementions(skin, mod),
-			},
-		};
-	}, [color, hat, skin, visor, isAlive, mod, hatsRevision]);
+	const baseImage = useMemo(() => getCosmetic(color, isAlive), [color, isAlive]);
 
 	const classes = useCanvasStyles({
-		isAlive,
-		dementions: hatImg.dementions,
 		lookLeft,
 		size,
 		borderColor,
-		paddingLeft: -7,
+		// Scales with the avatar instead of a fixed -7px, which only lined up at size 100.
+		paddingLeft: -size * 0.07,
 	});
-	//@ts-ignore
-	const onerror = (e: any) => {
-		e.target.style.display = 'none';
-	};
-
-	//@ts-ignore
-	const onload = (e: any) => {
-		e.target.style.display = '';
-	};
-
-	const hatElement = (
-		<>
-			<img src={hatImg.hat_front} className={classes.hat} onError={onerror} onLoad={onload} />
-			<img src={hatImg.visor} className={classes.visor} onError={onerror} onLoad={onload} />
-
-			<img src={hatImg.hat_back} className={classes.hat} style={{ zIndex: 1 }} onError={onerror} onLoad={onload} />
-		</>
-	);
 
 	return (
 		<>
@@ -372,19 +283,14 @@ function Canvas({
 					}}
 				>
 					<img
-						src={hatImg.base}
+						src={baseImage}
 						className={classes.base}
-						//@ts-ignore
-						onError={(e: any) => {
-							e.target.onError = null;
-							e.target.src = redAlive;
+						onError={(event) => {
+							event.currentTarget.onerror = null;
+							event.currentTarget.src = redAlive;
 						}}
 					/>
-
-					<img src={hatImg.skin} className={classes.skin} onError={onerror} onLoad={onload} />
-					{overflow && hatElement}
 				</div>
-				{!overflow && hatElement}
 				{usingRadio && <img src={RadioSVG} className={classes.radio} />}
 			</div>
 		</>

@@ -1,5 +1,4 @@
 import React from 'react';
-import Footer from './Footer';
 import makeStyles from '@mui/styles/makeStyles';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
@@ -64,7 +63,6 @@ const Menu: React.FC<MenuProps> = function ({ t, error }: MenuProps) {
 						<LaunchButton t={t} />
 					</>
 				)}
-				<Footer />
 			</div>
 		</div>
 	);
