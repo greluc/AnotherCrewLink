@@ -7,3 +7,7 @@ yarn-error.log
 .vscode/
 package-lock.json
 debug.log
+# Vendored native module build artefacts
+native/*/build/
+native/*/dist/
+native/*/prebuilds/
