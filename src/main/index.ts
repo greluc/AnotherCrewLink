@@ -47,20 +47,27 @@ if(platform() === 'linux'){
 	app.commandLine.appendSwitch('disable-gpu-sandbox');
 }
 
+// The layout was designed at this size, so it stays the floor and the default.
+const MAIN_WINDOW_MIN_WIDTH = 250;
+const MAIN_WINDOW_MIN_HEIGHT = 350;
+
 function createMainWindow() {
-	const mainWindowState = windowStateKeeper({});
+	// Without defaults the keeper reports 800x600, and its width/height were never
+	// passed to the window anyway, so the saved size was dead weight.
+	const mainWindowState = windowStateKeeper({
+		defaultWidth: MAIN_WINDOW_MIN_WIDTH,
+		defaultHeight: MAIN_WINDOW_MIN_HEIGHT,
+	});
 
 	const window = new BrowserWindow({
 		title: 'BetterCrewLink',
-		width: 250,
-		height: 350,
-		maxWidth: 250,
-		minWidth: 250,
-		maxHeight: 350,
-		minHeight: 350,
+		width: mainWindowState.width,
+		height: mainWindowState.height,
+		minWidth: MAIN_WINDOW_MIN_WIDTH,
+		minHeight: MAIN_WINDOW_MIN_HEIGHT,
 		x: mainWindowState.x,
 		y: mainWindowState.y,
-		resizable: false,
+		resizable: true,
 		frame: false,
 		fullscreenable: false,
 		maximizable: false,

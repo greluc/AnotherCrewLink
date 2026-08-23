@@ -6,8 +6,10 @@ import { Tooltip } from '@mui/material';
 
 const useStyles = makeStyles(() => ({
 	footer: {
-		position: 'absolute',
-		bottom: 0,
+		// marginTop:auto instead of absolute positioning, so the footer sits at the
+		// bottom of the flex column at any window height instead of overlapping content.
+		marginTop: 'auto',
+		flex: '0 0 auto',
 		width: '100%',
 		display: 'flex',
 		flexDirection: 'column',

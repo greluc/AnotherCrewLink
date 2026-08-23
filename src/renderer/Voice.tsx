@@ -98,6 +98,24 @@ interface SocketError {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type IpcListener = (event: Electron.IpcRendererEvent, ...args: any[]) => void;
 
+// The Avatar `size` prop drives border width and the hat offsets, which are absolute
+// pixels. The rendered size comes from the container, so with a resizable window the
+// two drift apart unless the real width is measured.
+function useElementWidth<T extends HTMLElement>(): [React.RefObject<T>, number] {
+	const ref = useRef<T>(null);
+	const [width, setWidth] = useState(0);
+	useEffect(() => {
+		const element = ref.current;
+		if (!element) return;
+		const observer = new ResizeObserver((entries) => {
+			setWidth(entries[0].contentRect.width);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	return [ref, width];
+}
+
 interface ClientPeerConfig {
 	forceRelayOnly: boolean;
 	iceServers: RTCIceServer[];
@@ -136,6 +154,12 @@ const useStyles = makeStyles((theme) => ({
 	},
 	root: {
 		paddingTop: theme.spacing(3),
+		// Flex column so the avatar grid takes the slack and the footer stays pinned to
+		// the bottom at any window size, instead of everything being sized in fixed px.
+		height: '100vh',
+		boxSizing: 'border-box',
+		display: 'flex',
+		flexDirection: 'column',
 	},
 	top: {
 		display: 'flex',
@@ -153,7 +177,9 @@ const useStyles = makeStyles((theme) => ({
 		textAlign: 'center',
 		fontSize: 20,
 		whiteSpace: 'nowrap',
-		maxWidth: '115px',
+		maxWidth: '100%',
+		overflow: 'hidden',
+		textOverflow: 'ellipsis',
 	},
 	code: {
 		fontFamily: "'Source Code Pro', monospace",
@@ -165,24 +191,18 @@ const useStyles = makeStyles((theme) => ({
 		fontSize: 28,
 	},
 	otherplayers: {
-		width: 225,
-		height: 225,
+		width: '100%',
+		flex: '1 1 auto',
+		minHeight: 0,
+		overflowY: 'auto',
+		overflowX: 'hidden',
 		margin: '4px auto',
-		'& .MuiGrid-grid-xs-1': {
-			maxHeight: '8.3333333%',
-		},
-		'& .MuiGrid-grid-xs-2': {
-			maxHeight: '16.666667%',
-		},
-		'& .MuiGrid-grid-xs-3': {
-			maxHeight: '25%',
-		},
-		'& .MuiGrid-grid-xs-4': {
-			maxHeight: '33.333333%',
-		},
+		alignContent: 'flex-start',
 	},
 	avatarWrapper: {
-		width: 80,
+		width: '32%',
+		minWidth: 60,
+		maxWidth: 120,
 		padding: theme.spacing(1),
 	},
 	muteButtons: {
@@ -249,6 +269,8 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 	const convolverBuffer = useRef<AudioBuffer | null>(null);
 	const playerSocketIdsRef = useRef<numberStringMap>({});
 	const classes = useStyles();
+	const [ownAvatarRef, ownAvatarWidth] = useElementWidth<HTMLDivElement>();
+	const [otherAvatarsRef, otherAvatarsWidth] = useElementWidth<HTMLDivElement>();
 
 	const [connect, setConnect] = useState<{
 		connect: (lobbyCode: string, playerId: number, clientId: number, isHost: boolean) => void;
@@ -1366,6 +1388,13 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 		impostorRadioClientId.current,
 	]);
 
+	// Derive the avatar pixel size from the measured column width so borders and hat
+	// offsets keep matching the rendered avatar when the window is resized.
+	const otherPlayersSpan = getPlayersPerRow(otherPlayers.length);
+	const GRID_GUTTER = 8; // matches spacing={1}
+	const otherAvatarSize =
+		Math.max(24, Math.round((otherAvatarsWidth * otherPlayersSpan) / 12) - GRID_GUTTER) || 50;
+
 	return (
 		<div className={classes.root}>
 			{(error || initialError) && (
@@ -1385,7 +1414,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 				<div className={classes.top}>
 					{myPlayer && gameState.lobbyCode !== 'MENU' && (
 						<>
-							<div className={classes.avatarWrapper}>
+							<div className={classes.avatarWrapper} ref={ownAvatarRef}>
 								<Avatar
 									deafened={deafenedState}
 									muted={mutedState}
@@ -1395,7 +1424,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 									isUsingRadio={myPlayer?.isImpostor && impostorRadioClientId.current === myPlayer.clientId}
 									talking={talking}
 									isAlive={!myPlayer.isDead}
-									size={100}
+									size={Math.max(24, Math.round(ownAvatarWidth)) || 100}
 									mod={gameState.mod}
 								/>
 							</div>
@@ -1458,6 +1487,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					<Grid
 						container
 						spacing={1}
+						ref={otherAvatarsRef}
 						className={classes.otherplayers}
 						alignItems="flex-start"
 						alignContent="flex-start"
@@ -1474,7 +1504,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 							const socketConfig = playerConfigs[player.nameHash];
 
 							return (
-								<Grid item key={player.id} xs={getPlayersPerRow(otherPlayers.length)}>
+								<Grid item key={player.id} xs={otherPlayersSpan}>
 									<Avatar
 										connectionState={!connected ? 'disconnected' : audio ? 'connected' : 'novoice'}
 										player={player}
@@ -1486,7 +1516,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 											!(player.disconnected || player.bugged) &&
 											impostorRadioClientId.current === player.clientId
 										}
-										size={50}
+										size={otherAvatarSize}
 										socketConfig={socketConfig}
 										onConfigChange={() => {
 										playerConfigs[player.nameHash].lastUsed = Date.now();
@@ -1500,7 +1530,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					</Grid>
 				)}
 			</>)}
-			{otherPlayers.length <= 6 && <Footer />}
+			<Footer />
 		</div>
 	);
 };

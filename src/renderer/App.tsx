@@ -76,6 +76,18 @@ const useStyles = makeStyles(() => ({
 		position: 'absolute',
 		top: 0,
 	},
+	// The draggable title bar spans the whole top edge and would swallow the frameless
+	// window's resize border. This strip sits above it and is explicitly not draggable,
+	// so the top edge and both top corners stay grabbable.
+	resizeStrip: {
+		position: 'fixed',
+		top: 0,
+		left: 0,
+		right: 0,
+		height: 4,
+		WebkitAppRegion: 'no-drag',
+		zIndex: 200,
+	},
 }));
 
 interface TitleBarProps {
@@ -87,6 +99,7 @@ const RawTitleBar: React.FC<TitleBarProps> = function ({ settingsOpen, setSettin
 	const classes = useStyles();
 	return (
 		<div className={classes.root}>
+			<div className={classes.resizeStrip} />
 			<span className={classes.title} style={{ marginLeft: 10 }}>
 				BetterCrewLink{appVersion}
 			</span>

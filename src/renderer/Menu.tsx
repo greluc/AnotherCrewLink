@@ -10,6 +10,7 @@ const useStyles = makeStyles((theme) => ({
 	root: {
 		width: '100vw',
 		height: '100vh',
+		boxSizing: 'border-box',
 		paddingTop: theme.spacing(3),
 	},
 	error: {
@@ -20,6 +21,7 @@ const useStyles = makeStyles((theme) => ({
 		flexDirection: 'column',
 		alignItems: 'center',
 		justifyContent: 'start',
+		height: '100%',
 	},
 	waiting: {
 		fontSize: 20,

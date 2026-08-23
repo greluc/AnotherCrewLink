@@ -50,7 +50,9 @@ const useStyles = makeStyles({
 		minWidth: 700,
 	},
 	container: {
-		maxHeight: '400px',
+		// Was a fixed 400px in a window that is resizable, so growing the window only
+		// added empty space below the table.
+		maxHeight: 'calc(100vh - 130px)',
 	},
 });
 
@@ -148,7 +150,7 @@ export default function lobbyBrowser({ t }) {
 
 	return (
 		<div style={{ height: '100%', width: '100%', paddingTop: '15px' }}>
-			<div style={{ height: '500px', padding: '20px' }}>
+			<div style={{ height: '100%', boxSizing: 'border-box', padding: '20px' }}>
 				<b>{t('lobbybrowser.header')}</b>
 				<Dialog
 					open={code !== ''}
