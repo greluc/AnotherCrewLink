@@ -10,6 +10,7 @@ import overlayWindowModule from 'electron-overlay-window';
 const { overlayWindow } = overlayWindowModule;
 import { initializeIpcHandlers, initializeIpcListeners } from './ipc-handlers';
 import { GenerateHat } from './avatarGenerator';
+import { captureMainConsole, logDirectory, writeLog } from './logFile';
 import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
@@ -74,6 +75,7 @@ function createMainWindow() {
 	});
 	mainWindowState.manage(window);
 	hardenWindow(window);
+	captureConsole(window, 'renderer');
 
 	if (devTools) {
 		//Force devtools into detached mode otherwise they are unusable
@@ -145,6 +147,7 @@ function createLobbyBrowser() {
 	});
 
 	hardenWindow(window);
+	captureConsole(window, 'lobbybrowser');
 
 	window.on('closed', () => {
 		global.lobbyBrowser = null;
@@ -217,6 +220,7 @@ function createOverlay() {
 		);
 	}
 	hardenWindow(overlay);
+	captureConsole(overlay, 'overlay');
 	overlay.setIgnoreMouseEvents(true);
 	overlayWindow.attachTo(overlay, 'Among Us');
 	overlay.setBackgroundColor('#00000000');
@@ -228,6 +232,16 @@ function createOverlay() {
  * remote document full Node access, so navigation and window creation are refused
  * outright. Links are opened in the user's browser instead.
  */
+function captureConsole(window: BrowserWindow, source: string): void {
+	window.webContents.on('console-message', (details) => {
+		writeLog(source, details.level, `${details.message} (${details.sourceId}:${details.lineNumber})`);
+	});
+	window.webContents.on('render-process-gone', (_event, details) => {
+		writeLog(source, 'error', `render process gone: ${details.reason} (exit ${details.exitCode})`);
+	});
+	window.webContents.on('unresponsive', () => writeLog(source, 'error', 'window became unresponsive'));
+}
+
 function hardenWindow(window: BrowserWindow): void {
 	const isOwnPage = (target: string) =>
 		target.startsWith('file://') ||
@@ -255,8 +269,19 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
 	app.quit();
 } else {
+	captureMainConsole();
+	console.log(
+		`AnotherCrewLink ${appVersion} starting on ${process.platform} ${process.arch}, electron ${process.versions.electron}`
+	);
+	console.log('Logging to', logDirectory());
+
 	autoUpdater.autoDownload = false;
-	autoUpdater.checkForUpdates();
+	// The returned promise rejects alongside the error event, and nothing was waiting on
+	// it, so every failed check also produced an unhandled rejection warning. The error
+	// handler below is what reports it to the user.
+	autoUpdater.checkForUpdates().catch(() => {
+		/* reported through the error event */
+	});
 	autoUpdater.on('update-available', (info: UpdateInfo) => {
 		try {
 			global.mainWindow?.webContents.send(IpcRendererMessages.AUTO_UPDATER_STATE, {

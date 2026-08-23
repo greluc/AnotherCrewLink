@@ -1416,12 +1416,15 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		) {
 			impostorRadioClientId.current = -1;
 		}
-		for (const peerId in Object.keys(audioElements.current).filter((e) => !handledPeerIds.includes(e))) {
+		// for...in over an array walks its indices, so this read audioElements.current['0']
+		// and never touched a peer. Peers with no player in the current game state are
+		// meant to be silenced, which is what someone still connected to the voice server
+		// after leaving the game should be.
+		for (const peerId of Object.keys(audioElements.current).filter((id) => !handledPeerIds.includes(id))) {
 			const audio = audioElements.current[peerId];
 			if (audio?.gain) {
 				audio.gain.gain.value = 0;
 			}
-			// maybe disconnect later
 		}
 
 		return otherPlayers;
