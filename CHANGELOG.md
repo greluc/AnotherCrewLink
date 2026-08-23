@@ -1,5 +1,42 @@
 # AnotherCrewLink Changelog
 
+## v1.0.1
+
+### Fixed
+
+- **Walls block audio did nothing.** The setting itself arrived correctly; the map did
+  not. The pointer the game options are read through resolves to zero on Among Us
+  17.4.0, so the map went out as undefined, and a collider lookup for an undefined map
+  reports that no wall is ever in the way, for every pair of players, silently. The map
+  now falls back to ShipStatus, which carries the same value behind a different
+  signature. Measured against a live session on Polus. **This turns the setting on for
+  real:** lobbies whose host has it enabled will notice that walls now block.
+- **A speaking ring that stayed lit on a player who had gone offline.** Talking state
+  was only written for players still connected, so whoever dropped out mid-sentence
+  kept theirs for the rest of the session. A player whose connection died also kept
+  counting as connected, instead of falling back to the no-voice marker.
+- **Settings were only applied when the panel was closed with the back arrow.** The
+  title bar's settings button closes it too, and that path dropped every lobby setting
+  changed in the session and skipped the reload a newly picked microphone or speaker
+  needs. Both buttons now do the same thing.
+- **Error messages on the first start after installing.** The memory offsets are
+  fetched on first run, and the fetch made one attempt per host before telling the
+  user to check their internet connection. raw.githubusercontent.com rate limits per
+  IP, so a household starting the app at the same time could be turned away. Both
+  hosts are now retried with a growing pause, and a hanging request is cut off.
+- Every failed update check also produced an unhandled promise rejection.
+- The loop meant to silence peers who left the game iterated with `for...in` over an
+  array and never touched a peer.
+
+### Added
+
+- **A log file**, under `%APPDATA%\AnotherCrewLink\logs`. Both renderer windows, the
+  overlay and the main process, with crash and unresponsive events, rotating at four
+  megabytes. Reports of "we could not hear him" can now be answered from the state
+  that caused it rather than from a description.
+- The log records why a specific player cannot be heard, and says so when the game
+  lists one player twice.
+
 ## v1.0.0
 
 First release under this name. AnotherCrewLink forks
