@@ -68,7 +68,10 @@ export default class GameReader {
 	is_64bit = false;
 	is_linux = false;
 	oldGameState = GameState.UNKNOWN;
-	lastState: AmongUsState = {} as AmongUsState;
+	// Not an empty object: consumers read map straight out of this before the first
+	// successful pass, and an undefined map made the collider lookup silently answer
+	// that nothing was ever in the way.
+	lastState: AmongUsState = { map: MapType.UNKNOWN, closedDoors: [] } as unknown as AmongUsState;
 	amongUs: ProcessObject | null = null;
 	gameAssembly: ModuleObject | null = null;
 	colorsInitialized = false;
@@ -265,8 +268,24 @@ export default class GameReader {
 					this.gameAssembly.modBaseAddr,
 					this.offsets.gameoptionsData
 				);
-				maxPlayers = this.readMemory<number>('byte', gameOptionsPtr, this.offsets.gameOptions_MaxPLayers);
-				map = this.readMemory<number>('byte', gameOptionsPtr, this.offsets.gameOptions_MapId);
+				maxPlayers = this.readMemory<number>('byte', gameOptionsPtr, this.offsets.gameOptions_MaxPLayers) ?? 0;
+
+				// The game options pointer does not resolve on every build: on Among Us
+				// 17.4.0 x86 it comes back as zero, and every read through it is undefined.
+				// That went out in the game state as map: undefined, where the collider
+				// lookup found nothing and reported that no wall was ever in the way, so
+				// walls block audio silently did nothing. ShipStatus carries the same value
+				// and its pointer is derived from a different signature, so fall back to it.
+				const mapFromOptions = this.readMemory<number>('byte', gameOptionsPtr, this.offsets.gameOptions_MapId);
+				if (typeof mapFromOptions === 'number') {
+					map = mapFromOptions;
+				} else {
+					const shipStatusPtr = this.readMemory<number>('ptr', this.gameAssembly.modBaseAddr, this.offsets.shipStatus);
+					const mapFromShip = this.readMemory<number>('byte', shipStatusPtr, this.offsets.shipStatus_map);
+					if (typeof mapFromShip === 'number') {
+						map = mapFromShip;
+					}
+				}
 				if (state === GameState.TASKS) {
 					const shipPtr = this.readMemory<number>('ptr', this.gameAssembly.modBaseAddr, this.offsets.shipStatus);
 
