@@ -7,7 +7,7 @@ import makeStyles from '@mui/styles/makeStyles';
 import './css/overlay.css';
 import Avatar from './Avatar';
 import { ISettings } from '../common/ISettings';
-import { DEFAULT_PLAYERCOLORS } from '../main/avatarGenerator';
+import { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 
 interface UseStylesProps {
 	height: number;

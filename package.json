@@ -19,14 +19,16 @@
 	"scripts": {
 		"postinstall": "electron-builder install-app-deps",
 		"lint": "eslint src",
-		"dev": "electron-webpack dev",
-		"compile": "electron-webpack",
-		"dist": "yarn compile && electron-builder --win --x64 --ia32",
-		"dist:32": "yarn compile && electron-builder --win --ia32",
-		"dist:64": "yarn compile && electron-builder --win --x64",
-		"dist:linux": "yarn compile && electron-builder --linux --x64",
-		"publish": "yarn compile && electron-builder --win --x64 --ia32 --publish always ",
-		"publish:linux": "yarn compile && electron-builder --x64 --linux --publish always"
+		"dev": "electron-vite dev",
+		"compile": "electron-vite build",
+		"dist": "npm run compile && electron-builder --win --x64 --ia32",
+		"dist:32": "npm run compile && electron-builder --win --ia32",
+		"dist:64": "npm run compile && electron-builder --win --x64",
+		"dist:linux": "npm run compile && electron-builder --linux --x64",
+		"publish": "npm run compile && electron-builder --win --x64 --ia32 --publish always ",
+		"publish:linux": "npm run compile && electron-builder --x64 --linux --publish always",
+		"audit": "npm audit --audit-level=high",
+		"preview": "electron-vite preview"
 	},
 	"dependencies": {
 		"@emotion/react": "^11.14.0",
@@ -48,7 +50,7 @@
 		"minimist": "^1.2.8",
 		"node-fetch": "^2.7.0",
 		"node-keyboard-watcher": "file:native/node-keyboard-watcher",
-		"path-intersection": "^2.2.0",
+		"path-intersection": "^4.1.0",
 		"pretty-bytes": "^5.5.0",
 		"react": "^17.0.2",
 		"react-dom": "^17.0.2",
@@ -63,7 +65,7 @@
 		"typeface-varela": "^1.1.13",
 		"valid-url": "^1.0.9",
 		"vdf-parser": "^1.2.1",
-		"webrtc-adapter": "^7.7.0"
+		"webrtc-adapter": "^9.0.6"
 	},
 	"devDependencies": {
 		"@types/color": "^3.0.7",
@@ -71,7 +73,7 @@
 		"@types/deep-equal": "^1.0.4",
 		"@types/i18next": "^13.0.0",
 		"@types/js-yaml": "^3.12.10",
-		"@types/node": "12",
+		"@types/node": "^22.20.0",
 		"@types/node-fetch": "^2.6.13",
 		"@types/pretty-bytes": "^5.2.0",
 		"@types/react": "^17.0.93",
@@ -79,28 +81,20 @@
 		"@types/simple-peer": "^9.11.9",
 		"@types/socket.io-client": "^1.4.36",
 		"@types/valid-url": "^1.0.7",
-		"@types/webpack-env": "^1.18.8",
-		"@typescript-eslint/eslint-plugin": "^4.9.1",
-		"@typescript-eslint/parser": "^4.9.1",
-		"arraybuffer-loader": "^1.0.8",
+		"@typescript-eslint/eslint-plugin": "^8.46.0",
+		"@typescript-eslint/parser": "^8.46.0",
+		"@vitejs/plugin-react": "^5.1.0",
 		"electron": "^43.4.1",
 		"electron-builder": "^26.15.3",
-		"electron-webpack": "^2.8.2",
-		"electron-webpack-ts": "^4.0.1",
-		"eslint": "^7.15.0",
+		"electron-vite": "^5.0.0",
+		"eslint": "^8.57.1",
 		"eslint-config-prettier": "^7.1.0",
 		"eslint-plugin-prettier": "^3.3.0",
 		"eslint-plugin-react": "^7.37.5",
 		"prettier": "^2.8.8",
 		"prettier-eslint": "^12.0.0",
 		"typescript": "^5.9.3",
-		"webpack": "~4.42.1",
-		"webpack-dev-server": "^3.11.0"
+		"vite": "^7.3.1"
 	},
-	"electronWebpack": {
-		"renderer": {
-			"webpackConfig": "webpack.renderer.config.js",
-			"webpackDllConfig": "webpack.renderer.config.js"
-		}
-	}
+	"main": "out/main/index.js"
 }

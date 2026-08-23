@@ -24,13 +24,11 @@ import makeStyles from '@mui/styles/makeStyles';
 import SupportLink from './SupportLink';
 import Divider from '@mui/material/Divider';
 import { validateClientPeerConfig } from './validateClientPeerConfig';
-// @ts-ignore
-import reverbOgx from 'arraybuffer-loader!../../static/sounds/reverb.ogx'; // @ts-ignore
-import radioOnSound from '../../static/sounds/radio_on.wav'; // @ts-ignore
+import reverbOgxUrl from '../../static/sounds/reverb.ogx?url';
+import radioOnSound from '../../static/sounds/radio_on.wav?url';
 
 import { CameraLocation, AmongUsMaps, MapType } from '../common/AmongusMap';
 import { ObsVoiceState } from '../common/ObsOverlay';
-import Footer from './Footer';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import VolumeOff from '@mui/icons-material/VolumeOff';
@@ -761,7 +759,9 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 	useEffect(() => {
 		(async () => {
 			const context = new AudioContext();
-			convolverBuffer.current = await context.decodeAudioData(reverbOgx);
+			// Vite has no arraybuffer-loader equivalent, so fetch the emitted asset.
+			const reverbData = await (await fetch(reverbOgxUrl)).arrayBuffer();
+			convolverBuffer.current = await context.decodeAudioData(reverbData);
 			await context.close();
 		})();
 	}, []);
@@ -1532,7 +1532,6 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 					</Grid>
 				)}
 			</>)}
-			<Footer />
 		</div>
 	);
 };

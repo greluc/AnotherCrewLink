@@ -34,7 +34,7 @@ jobs:
       - name: Install Node.js, NPM and Yarn
         uses: actions/setup-node@v4
         with:
-          node-version: 16.14.2
+          node-version: 22.x
         
       - name: Cache Node Modules
         id: node-cache
@@ -42,16 +42,15 @@ jobs:
         with:
           path: |
             node_modules
-            .yarn
-          key: ${{ runner.os }}-3-${{ hashFiles('yarn.lock')}}
+          key: ${{ runner.os }}-3-${{ hashFiles('package-lock.json')}}
     
     
       - name: Install Dependencies
         if: steps.node-cache.outputs.cache-hit != 'true'
-        run: yarn install  --cache-folder .yarn --network-timeout 100000
+        run: npm ci
         
       - name: Build App
-        run: yarn run ${{ matrix.dist }} --publish never
+        run: npm run ${{ matrix.dist }} --publish never
      
       - name: Upload Installer
         uses: actions/upload-artifact@v4

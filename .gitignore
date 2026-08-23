@@ -1,12 +1,13 @@
 .DS_Store
 dist/
+out/
 node_modules/
 thumbs.db
 .idea/
 yarn-error.log
 .vscode/
-package-lock.json
 debug.log
 # Vendored native module build artefacts
 native/*/build/
 native/*/prebuilds/
+native/*/package-lock.json

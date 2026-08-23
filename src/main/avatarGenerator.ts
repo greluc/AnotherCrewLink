@@ -3,34 +3,11 @@ import jimp from 'jimp';
 import fs from 'fs';
 
 // @ts-ignore
-import playerBase from '../../static/images/generate/player.png'; // @ts-ignore
-import ghostBase from '../../static/images/generate/ghost.png'; // @ts-ignore
+import playerBase from '../../static/images/generate/player.png?inline';
+import ghostBase from '../../static/images/generate/ghost.png?inline';
 import { app } from 'electron';
 
-export const DEFAULT_PLAYERCOLORS = [
-	['#C51111', '#7A0838'],
-	['#132ED1', '#09158E'],
-	['#117F2D', '#0A4D2E'],
-	['#ED54BA', '#AB2BAD'],
-	['#EF7D0D', '#B33E15'],
-	['#F5F557', '#C38823'],
-	['#3F474E', '#1E1F26'],
-	['#FFFFFF', '#8394BF'],
-	['#6B2FBB', '#3B177C'],
-	['#71491E', '#5E2615'],
-	['#38FEDC', '#24A8BE'],
-	['#50EF39', '#15A742'],
-];
-
-function pathToHash(input: string): number {
-	let hash = 0;
-	for (let i = 0; i < input.length; i++) {
-		const char = input.charCodeAt(i);
-		hash = (hash << 5) - hash + char;
-		hash = hash & hash; // Convert to 32bit integer
-	}
-	return hash;
-}
+export { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 
 export function numberToColorHex(colour: number): string {
 	return (
@@ -112,26 +89,3 @@ export async function GenerateAvatars(colors: string[][]): Promise<void> {
 	}
 }
 
-export async function GenerateHat(imagePath: URL, colors: string[][], colorId: number, path: string) {
-	try {
-		const img = await jimp.read(imagePath.href);
-		const originalData = new Uint8Array(img.bitmap.data);
-		const color = colors[colorId][0];
-		const shadow = colors[colorId][1];
-
-		const temp = `${app.getPath('userData')}/static/generated/hats/${pathToHash(
-			imagePath + '/' + color + '/' + shadow
-		)}.png`;
-		// The filename is already a content hash of image + both colours, so a cached
-		// file can never be stale. The previous mtime check re-rendered every hat through
-		// jimp every 5 minutes.
-		if (!fs.existsSync(temp)) {
-			await colorImage(img, originalData, color, shadow, temp);
-		}
-		return temp;
-
-	} catch (exception) {
-		console.log('error while generating the avatars..', exception);
-		return '';
-	}
-}

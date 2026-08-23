@@ -530,7 +530,11 @@ Napi::Value readBuffer(const Napi::CallbackInfo &args)
   uintptr_t address = args[1].As<Napi::Number>().Int64Value();
   size_t size = args[2].As<Napi::Number>().Int64Value();
   char *data = Memory.readBuffer(handle, address, size);
-  Napi::Buffer<char> buffer = Napi::Buffer<char>::New(env, data, size);
+  // Copy rather than wrap the raw pointer: V8's sandbox in current Electron rejects
+  // external buffers outright, and the allocation from readBuffer was never freed,
+  // so every read leaked `size` bytes in a 5 Hz loop.
+  Napi::Buffer<char> buffer = Napi::Buffer<char>::Copy(env, data, size);
+  delete[] data;
   // free(data);
   //  delete [] data; // deleting the char array...
   if (args.Length() == 4)

@@ -1,12 +1,29 @@
 {
-	"extends": "./node_modules/electron-webpack/tsconfig-base.json",
 	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
 		"jsx": "react",
-		"skipLibCheck": true,
-		"resolveJsonModule": true,
-	},
-	"exclude": [
-		"./node_modules/react-i18next/*"
-	]
 
-  }
+		"strict": true,
+		"noUnusedLocals": true,
+		"noFallthroughCasesInSwitch": true,
+		"noImplicitReturns": true,
+
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
+		"experimentalDecorators": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"skipLibCheck": true,
+
+		"sourceMap": true,
+		"inlineSources": true,
+		"newLine": "lf",
+		"noEmit": true,
+
+		"types": ["node", "vite/client"]
+	},
+	"include": ["src", "electron.vite.config.ts"]
+}

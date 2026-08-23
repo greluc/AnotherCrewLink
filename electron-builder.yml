@@ -8,7 +8,7 @@ files:
   - from: .
     filter:
       - package.json
-      - app
+      - out
 
 win:
   publish:

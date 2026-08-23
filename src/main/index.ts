@@ -15,23 +15,13 @@ import { protocol } from 'electron';
 import Store from 'electron-store';
 import { ISettings } from '../common/ISettings';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
-import { gameReader } from './hook';
-import { GenerateHat } from './avatarGenerator';
 const args = require('minimist')(process.argv); // eslint-disable-line
-const isDevelopment = process.env.NODE_ENV !== 'production';
+// electron-vite only defines ELECTRON_RENDERER_URL while the dev server runs, which
+// is a more reliable signal here than NODE_ENV.
+const isDevelopment = !!process.env.ELECTRON_RENDERER_URL;
 const devTools = (isDevelopment || args.dev === 1) && true;
 const appVersion: string = isDevelopment? "DEV" : autoUpdater.currentVersion.version;
 
-declare global {
-	namespace NodeJS {
-		// eslint-disable-line
-		interface Global {
-			mainWindow: BrowserWindow | null;
-			overlay: BrowserWindow | null;
-			lobbyBrowser: BrowserWindow | null;
-		}
-	}
-}
 // global reference to mainWindow (necessary to prevent window from being garbage collected)
 global.mainWindow = null;
 global.overlay = null;
@@ -88,11 +78,11 @@ function createMainWindow() {
 	}
 
 	if (isDevelopment) {
-		window.loadURL(`http://localhost:${process.env.ELECTRON_WEBPACK_WDS_PORT}?version=DEV&view=app`);
+		window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?version=DEV&view=app`);
 	} else {
 		window.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, 'index.html'),
+				pathname: joinPath(__dirname, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,
@@ -157,11 +147,11 @@ function createLobbyBrowser() {
 	// 	});
 	// }
 	if (isDevelopment) {
-		window.loadURL(`http://localhost:${process.env.ELECTRON_WEBPACK_WDS_PORT}?version=DEV&view=lobbies`);
+		window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?version=DEV&view=lobbies`);
 	} else {
 		window.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, 'index.html'),
+				pathname: joinPath(__dirname, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,
@@ -203,13 +193,11 @@ function createOverlay() {
 	}
 
 	if (isDevelopment) {
-		overlay.loadURL(
-			`http://localhost:${process.env.ELECTRON_WEBPACK_WDS_PORT}?version=${appVersion}&view=overlay`
-		);
+		overlay.loadURL(`${process.env.ELECTRON_RENDERER_URL}?version=${appVersion}&view=overlay`);
 	} else {
 		overlay.loadURL(
 			formatUrl({
-				pathname: joinPath(__dirname, 'index.html'),
+				pathname: joinPath(__dirname, '../renderer/index.html'),
 				protocol: 'file',
 				query: {
 					version: appVersion,
@@ -311,12 +299,6 @@ if (!gotTheLock) {
 		protocol.registerFileProtocol('static', (request, callback) => {
 			const pathname = app.getPath('userData') + '/static/' + request.url.replace('static:///', '');
 			callback(pathname);
-		});
-
-		protocol.registerFileProtocol('generate', async (request, callback) => {
-			const url = new URL(request.url.replace('generate:///', ''));
-			const path = await GenerateHat(url, gameReader.playercolors, Number(url.searchParams.get('color')), '');
-			callback(path);
 		});
 
 		initializeIpcListeners();

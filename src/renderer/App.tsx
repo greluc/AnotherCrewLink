@@ -33,7 +33,7 @@ import ReactDOM from 'react-dom';
 import './css/index.css';
 import 'source-code-pro/source-code-pro.css';
 import 'typeface-varela/index.css';
-import { DEFAULT_PLAYERCOLORS } from '../main/avatarGenerator';
+import { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 import './language/i18n';
 import { withNamespaces } from 'react-i18next';
 import { ISettings } from '../common/ISettings';
