@@ -8,7 +8,7 @@ import {
 	GamePlatformMap,
 	PlatformRunType,
 } from '../common/GamePlatform';
-import { parse } from 'vdf-parser';
+import { parseVdf, VdfObject } from './vdf';
 import spawn from 'cross-spawn';
 import path from 'path';
 import fs from 'fs';
@@ -137,11 +137,12 @@ export const initializeIpcHandlers = (): void => {
 			// Add platform to availableGamePlatforms and setup data if platform is available, do nothing otherwise
 			try {
 				const vdfString = fs.readFileSync(homedir() + '/.steam/registry.vdf').toString();
-				const vdfObject = parse(vdfString) as {
-					Registry: { HKCU: { Software: { Valve: { Steam: { Apps: { 945360: { installed: number } } } } } } };
-				};
-				//checks if Among Us's listed as installed in the .vdf-file
-				if (vdfObject['Registry']['HKCU']['Software']['Valve']['Steam']['Apps']['945360']['installed'] == 1) {
+				const vdfObject = parseVdf(vdfString);
+				// Values are always strings in KeyValues, so '1' rather than 1.
+				const apps = (((vdfObject.Registry as VdfObject)?.HKCU as VdfObject)?.Software as VdfObject)
+					?.Valve as VdfObject;
+				const amongUs = ((apps?.Steam as VdfObject)?.Apps as VdfObject)?.['945360'] as VdfObject | undefined;
+				if (amongUs?.installed === '1') {
 					availableGamePlatforms[GamePlatform.STEAM] = DefaultGamePlatforms[GamePlatform.STEAM];
 				}
 			} catch {

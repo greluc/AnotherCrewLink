@@ -55,7 +55,6 @@
 		"socket.io-client": "^4.8.3",
 		"structron": "file:vendor/structron",
 		"tss-react": "^4.9.21",
-		"vdf-parser": "^1.2.1",
 		"webrtc-adapter": "^9.0.6"
 	},
 	"devDependencies": {
