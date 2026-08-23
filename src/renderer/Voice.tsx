@@ -1508,9 +1508,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 							spacing={1}
 							ref={otherAvatarsRef}
 							className={classes.otherplayers}
-							alignItems="flex-start"
-							alignContent="flex-start"
-							justifyContent="flex-start"
+							sx={{ alignItems: 'flex-start', alignContent: 'flex-start', justifyContent: 'flex-start' }}
 						>
 							{otherPlayers.map((player) => {
 								const peer = playerSocketIdsRef.current[player.clientId];
@@ -1523,7 +1521,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 								const socketConfig = playerConfigs[player.nameHash];
 
 								return (
-									<Grid item key={player.id} xs={otherPlayersSpan}>
+									<Grid key={player.id} size={otherPlayersSpan}>
 										<Avatar
 											connectionState={!connected ? 'disconnected' : audio ? 'connected' : 'novoice'}
 											player={player}

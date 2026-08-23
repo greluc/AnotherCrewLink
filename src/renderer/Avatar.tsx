@@ -16,7 +16,7 @@ import MicOff from '@mui/icons-material/MicOff';
 import VolumeOff from '@mui/icons-material/VolumeOff';
 import WifiOff from '@mui/icons-material/WifiOff';
 import LinkOff from '@mui/icons-material/LinkOff';
-import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import ErrorOutline from '@mui/icons-material/ErrorOutlined';
 import RadioSVG from '../../static/radio.svg?url';
 import Tooltip from '@mui/material/Tooltip';
 import { SocketConfig } from '../common/ISettings';
@@ -170,7 +170,7 @@ const Avatar: React.FC<AvatarProps> = function ({
 					<div className={classes.innerTooltip}>
 						<b>{player.name}</b>
 						<Grid container spacing={0} className={classes.slidecontainer}>
-							<Grid item>
+							<Grid>
 								<IconButton
 									onClick={() => {
 										socketConfig.isMuted = !socketConfig.isMuted;
@@ -181,7 +181,7 @@ const Avatar: React.FC<AvatarProps> = function ({
 									{muteButtonIcon}
 								</IconButton>
 							</Grid>
-							<Grid item xs>
+							<Grid size="grow">
 								<Slider
 									size="small"
 									value={socketConfig.volume}

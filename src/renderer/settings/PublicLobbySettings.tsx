@@ -87,8 +87,7 @@ const RawPublicLobbySettings: React.FC<publicLobbySettingProps> = function ({
 						label={t('settings.lobbysettings.public_lobby.language')}
 						variant="outlined"
 						color="secondary"
-						SelectProps={{ native: true }}
-						InputLabelProps={{ shrink: true }}
+						slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
 						value={lobbySettingState.publicLobby_language}
 						onChange={(ev) => setLobbySettingState({ ...lobbySettingState, publicLobby_language: ev.target.value })}
 						onBlur={(ev) => updateSetting('publicLobby_language', ev.target.value)}

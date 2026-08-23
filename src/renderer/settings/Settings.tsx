@@ -694,8 +694,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					color="secondary"
 					value={settings.microphone}
 					className={classes.shortcutField}
-					SelectProps={{ native: true }}
-					InputLabelProps={{ shrink: true }}
+					slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
 					onChange={(ev) => {
 						setSettings('microphone', ev.target.value);
 						setSettings('microphoneLabel', microphones.find((d) => d.id === ev.target.value)?.label ?? '');
@@ -716,8 +715,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					color="secondary"
 					value={settings.speaker}
 					className={classes.shortcutField}
-					SelectProps={{ native: true }}
-					InputLabelProps={{ shrink: true }}
+					slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
 					onChange={(ev) => {
 						setSettings('speaker', ev.target.value);
 						setSettings('speakerLabel', speakers.find((d) => d.id === ev.target.value)?.label ?? '');
@@ -760,15 +758,14 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 						{t('settings.audio.microphone_volume')}
 					</Typography>
 					<Grid container spacing={2}>
-						<Grid item xs={3}>
+						<Grid size={3}>
 							<Checkbox
 								checked={settings.microphoneGainEnabled}
 								onChange={(_, checked: boolean) => setSettings('microphoneGainEnabled', checked)}
 							/>
 						</Grid>
 						<Grid
-							item
-							xs={8}
+							size={8}
 							style={{
 								display: 'flex',
 								justifyContent: 'center',
@@ -792,15 +789,14 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 						{t('settings.audio.microphone_sens')}
 					</Typography>
 					<Grid container spacing={2}>
-						<Grid item xs={3}>
+						<Grid size={3}>
 							<Checkbox
 								checked={settings.micSensitivityEnabled}
 								onChange={(_, checked: boolean) => setSettings('micSensitivityEnabled', checked)}
 							/>
 						</Grid>
 						<Grid
-							item
-							xs={8}
+							size={8}
 							style={{
 								display: 'flex',
 								justifyContent: 'center',
@@ -833,8 +829,8 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					<Typography id="input-slider" gutterBottom>
 						{t('settings.audio.mastervolume')}
 					</Typography>
-					<Grid container direction="row" justifyContent="center" alignItems="center">
-						<Grid item xs={11}>
+					<Grid container direction="row" sx={{ justifyContent: 'center', alignItems: 'center' }}>
+						<Grid size={11}>
 							<Slider
 								size="small"
 								value={settings.masterVolume}
@@ -848,8 +844,8 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					<Typography id="input-slider" gutterBottom>
 						{t('settings.audio.crewvolume')}
 					</Typography>
-					<Grid container direction="row" justifyContent="center" alignItems="center">
-						<Grid item xs={11}>
+					<Grid container direction="row" sx={{ justifyContent: 'center', alignItems: 'center' }}>
+						<Grid size={11}>
 							<Slider
 								size="small"
 								value={settings.crewVolumeAsGhost}
@@ -862,8 +858,8 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					<Typography id="input-slider" gutterBottom>
 						{t('settings.audio.ghostvolumeasimpostor')}
 					</Typography>
-					<Grid container direction="row" justifyContent="center" alignItems="center">
-						<Grid item xs={11}>
+					<Grid container direction="row" sx={{ justifyContent: 'center', alignItems: 'center' }}>
+						<Grid size={11}>
 							<Slider
 								size="small"
 								value={settings.ghostVolumeAsImpostor}
@@ -877,7 +873,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 				<Divider />
 				<Typography variant="h6">{t('settings.keyboard.title')}</Typography>
 				<Grid container spacing={1}>
-					<Grid item xs={6}>
+					<Grid size={6}>
 						<TextField
 							fullWidth
 							spellCheck={false}
@@ -894,7 +890,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 							}}
 						/>
 					</Grid>
-					<Grid item xs={6}>
+					<Grid size={6}>
 						<TextField
 							spellCheck={false}
 							color="secondary"
@@ -910,7 +906,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 							}}
 						/>
 					</Grid>
-					<Grid item xs={6}>
+					<Grid size={6}>
 						<TextField
 							spellCheck={false}
 							color="secondary"
@@ -926,7 +922,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 							}}
 						/>
 					</Grid>
-					<Grid item xs={6}>
+					<Grid size={6}>
 						<TextField
 							spellCheck={false}
 							color="secondary"
@@ -985,8 +981,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 								color="secondary"
 								value={settings.overlayPosition}
 								className={classes.shortcutField}
-								SelectProps={{ native: true }}
-								InputLabelProps={{ shrink: true }}
+								slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
 								onChange={(ev) => setSettings('overlayPosition', ev.target.value)}
 								onClick={updateDevices}
 							>
@@ -1111,8 +1106,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 					color="secondary"
 					value={settings.language}
 					className={classes.shortcutField}
-					SelectProps={{ native: true }}
-					InputLabelProps={{ shrink: true }}
+					slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
 					onChange={(ev) => setSettings('language', ev.target.value)}
 				>
 					{Object.entries(languages).map(([key, value]) => (
@@ -1156,9 +1150,7 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 								}&server=${settings.serverURL}`}
 								variant="outlined"
 								color="primary"
-								InputProps={{
-									readOnly: true,
-								}}
+								slotProps={{ input: { readOnly: true } }}
 							/>
 						</>
 					)}
