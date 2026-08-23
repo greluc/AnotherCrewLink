@@ -234,54 +234,55 @@ interface UseCanvasStylesParams {
 	paddingLeft: number;
 }
 // tss-react takes the props once as a parameter instead of a function per rule.
-const useCanvasStyles = makeStyles<UseCanvasStylesParams>()(
-	(_theme, { isAlive, dementions, lookLeft, size, borderColor, paddingLeft }) => {
-		const border = Math.max(2, size / 40);
-		const offset = `${border / 2 + paddingLeft}px`;
-		const cosmetic = (d: HatDementions) => ({
-			pointerEvents: 'none' as const,
-			width: d.width,
+const useCanvasStyles = makeStyles<UseCanvasStylesParams>()((
+	_theme,
+	{ isAlive, dementions, lookLeft, size, borderColor, paddingLeft }
+) => {
+	const border = Math.max(2, size / 40);
+	const offset = `${border / 2 + paddingLeft}px`;
+	const cosmetic = (d: HatDementions) => ({
+		pointerEvents: 'none' as const,
+		width: d.width,
+		position: 'absolute' as const,
+		top: `calc(22% + ${d.top})`,
+		left: `calc(${d.left} + ${offset})`,
+		display: isAlive ? ('block' as const) : ('none' as const),
+	});
+	return {
+		base: {
+			width: '105%',
 			position: 'absolute' as const,
-			top: `calc(22% + ${d.top})`,
-			left: `calc(${d.left} + ${offset})`,
-			display: isAlive ? ('block' as const) : ('none' as const),
-		});
-		return {
-			base: {
-				width: '105%',
-				position: 'absolute' as const,
-				top: '22%',
-				left: paddingLeft,
-				zIndex: 2,
-			},
-			hat: { ...cosmetic(dementions.hat), zIndex: 4 },
-			skin: { ...cosmetic(dementions.skin), zIndex: 3 },
-			visor: { ...cosmetic(dementions.visor), zIndex: 3 },
-			avatar: {
-				borderRadius: '50%',
-				position: 'relative' as const,
-				borderStyle: 'solid',
-				transition: 'border-color .2s ease-out',
-				borderColor,
-				borderWidth: border,
-				transform: lookLeft ? 'scaleX(-1)' : 'scaleX(1)',
-				width: '100%',
-				paddingBottom: '100%',
-				cursor: 'pointer',
-			},
-			radio: {
-				position: 'absolute' as const,
-				left: '70%',
-				top: '80%',
-				width: '30px',
-				transform: 'translate(-50%, -50%)',
-				fill: 'white',
-				padding: 2,
-				zIndex: 12,
-			},
-		};
-	}
-);
+			top: '22%',
+			left: paddingLeft,
+			zIndex: 2,
+		},
+		hat: { ...cosmetic(dementions.hat), zIndex: 4 },
+		skin: { ...cosmetic(dementions.skin), zIndex: 3 },
+		visor: { ...cosmetic(dementions.visor), zIndex: 3 },
+		avatar: {
+			borderRadius: '50%',
+			position: 'relative' as const,
+			borderStyle: 'solid',
+			transition: 'border-color .2s ease-out',
+			borderColor,
+			borderWidth: border,
+			transform: lookLeft ? 'scaleX(-1)' : 'scaleX(1)',
+			width: '100%',
+			paddingBottom: '100%',
+			cursor: 'pointer',
+		},
+		radio: {
+			position: 'absolute' as const,
+			left: '70%',
+			top: '80%',
+			width: '30px',
+			transform: 'translate(-50%, -50%)',
+			fill: 'white',
+			padding: 2,
+			zIndex: 12,
+		},
+	};
+});
 
 // Re-renders the avatar once the hat collection finishes downloading.
 function useHatsRevision(): number {
