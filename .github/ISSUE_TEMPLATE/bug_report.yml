@@ -7,10 +7,6 @@ body:
     attributes:
       value: |
         **Before reporting a bug, always look at the [wiki](https://github.com/greluc/AnotherCrewLink/wiki/common-issues) that there usually has a solution for your bug**
-  - type: markdown
-    attributes:
-      value: |
-        **If your problem is with AnotherCrewLink on your mobile or web version, [click here](https://github.com/greluc/AnotherCrewLink-mobile/issues) and make an issue there, if your problem is with AnotherCrewLink on PC, ignore it and continue with your bug report**
   - type: checkboxes
     id: checklist
     attributes:

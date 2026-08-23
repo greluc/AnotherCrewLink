@@ -67,8 +67,9 @@ npm run dist:linux   # Linux AppImage
 | `vendor/` | Vendored JavaScript dependencies |
 | `static/locales` | Translations |
 
-The build is [electron-vite](https://electron-vite.org/). `npm run lint` runs ESLint
-with Prettier; `npx tsc --noEmit` typechecks without emitting.
+The build is [electron-vite](https://electron-vite.org/). `npm run lint` runs
+[Biome](https://biomejs.dev/) for both linting and formatting, `npm run typecheck`
+runs TypeScript without emitting, and `npm test` runs the Vitest suite.
 
 ## Contributing
 

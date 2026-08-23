@@ -1,0 +1,25 @@
+version: 2
+
+updates:
+  # Grouped so a week's worth of patch releases arrives as one reviewable pull
+  # request instead of twenty. Major bumps stay separate, because those are the
+  # ones that need the app to be started and tried out.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  # Actions are pinned to commit SHAs, which means nothing here moves unless
+  # Dependabot moves it. Without this the pins silently rot.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

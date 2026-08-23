@@ -9,7 +9,7 @@ Needed [Git](https://git-scm.com/downloads) for Contributing.
 2. Create your Feature Branch. (`git checkout -b feature/AmazingFeature`)
 3. Commit your Changes. (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch. (`git push origin feature/AmazingFeature`)
-6. Open a Pull Request.
+5. Open a Pull Request.
 
 ### Development
 
@@ -19,13 +19,13 @@ Server code is located at [greluc/AnotherCrewLink-server](https://github.com/gre
 
 ### Prerequisites
 
-This is an example of how to list things you need to use the software and how to install them.
-* [Python](https://www.python.org/downloads/)
-* [node.js](https://nodejs.org/en/download/)
-* yarn
-```sh
-npm install npm run -g
-```
+Three native modules are compiled from the sources vendored under `native/`, so a
+C++ toolchain is needed alongside Node.js:
+
+* [Node.js](https://nodejs.org/en/download/) 22 or later
+* [Python](https://www.python.org/downloads/) 3, for node-gyp
+* **Windows**: Visual Studio with the "Desktop development with C++" workload
+* **Linux**: `build-essential`, `libxcb1-dev`, `libx11-dev`
 
 ### Setup
 
@@ -39,32 +39,21 @@ cd AnotherCrewLink
 npm ci
 ```
 3. Run the project
-```JS
+```sh
 npm run dev
+```
+
+Before opening a pull request, run the same checks CI does:
+```sh
+npm run lint && npm run typecheck && npm test
 ```
 
 <!-- TRANSLATING -->
 ## Translating
 
-[![Crowdin][crowdin-shield]][crowdin-url]
-
-AnotherCrewLink now officially supports other languages, that is, you can use AnotherCrewLink without any problem of not understanding a part in English, but with that we need help with translations because nobody is born knowing everything languages.
+AnotherCrewLink supports other languages, that is, you can use AnotherCrewLink without any problem of not understanding a part in English, but with that we need help with translations because nobody is born knowing everything languages.
 
 Any translations you make are greatly appreciated.
-
-There are two methods.
-
-<details>
-<summary> In Crowdin </summary>
-
-1. [Go to Crowdin Page](https://crwd.in/bettercrewlink).
-2. Search for the name of your language you want to translate.
-3. Click on it and start translating.
-
-</details>
-
-<details>
-<summary> In GitHub </summary>
 
 1. [Fork the Project](https://github.com/greluc/AnotherCrewLink/fork).
 2. Create your Translation Branch.
@@ -75,20 +64,5 @@ There are two methods.
 7. Throw everything to your fork.
 8. Open a Pull Request.
 
-</details>
-
-<!-- DONATE -->
-## Donate
-
-If you like using AnotherCrewLink and want to help it stay alive and with new features, bug fixes, support for other platforms, pay for servers, donate money for the project, of course if you want and can, this is an optional choice, we currently support PayPal and Ko-fi, choose the best donation option for you and click on the image below:
-
-[![Support AnotherCrewLink (PayPal)][paypal-shield]][paypal-url] [![Support AnotherCrewLink (Ko-fi)][kofi-shield]][kofi-url]
-
 [contributors-shield]: https://img.shields.io/github/contributors/greluc/AnotherCrewLink?label=Contributors&logo=GitHub
 [contributors-url]: https://github.com/greluc/AnotherCrewLink/graphs/contributors
-[crowdin-shield]: https://badges.crowdin.net/bettercrewlink/localized.svg
-[crowdin-url]: https://crowdin.com/project/bettercrewlink
-[paypal-shield]: https://img.shields.io/badge/Support-AnotherCrewLink-purple?logo=PayPal
-[paypal-url]: https://www.paypal.com/donate?hosted_button_id=KS43BDTGN76JQ
-[kofi-shield]: https://img.shields.io/badge/Support-AnotherCrewLink-purple?logo=Ko-fi&logoColor=white
-[kofi-url]: https://ko-fi.com/ohmyguus

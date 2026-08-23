@@ -15,8 +15,10 @@ jobs:
     permissions:
       contents: read
 
-
     strategy:
+      # Without this a failure on one platform cancels the other job before it
+      # finishes, so a single broken build hides the state of the second one.
+      fail-fast: false
       matrix:
         include:
          - os: windows-latest
@@ -25,7 +27,6 @@ jobs:
          - os: ubuntu-latest
            dist: 'dist:linux'
            installer: 'dist/AnotherCrewLink-*.AppImage'
-
 
     steps:
       - name: Install Linux dependencies
@@ -41,7 +42,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.x
-        
+
       - name: Cache Node Modules
         id: node-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -49,8 +50,7 @@ jobs:
           path: |
             node_modules
           key: ${{ runner.os }}-3-${{ hashFiles('package-lock.json')}}
-    
-    
+
       - name: Install Dependencies
         if: steps.node-cache.outputs.cache-hit != 'true'
         run: npm ci
@@ -69,19 +69,22 @@ jobs:
       - name: Test
         run: npm test
 
+      # The arguments need the -- separator: npm passes anything after the script
+      # name straight through to the script, so "npm run dist --publish never"
+      # appended a bare "never" to the electron-builder command line.
       - name: Build App
-        run: npm run ${{ matrix.dist }} --publish never
-     
+        run: npm run ${{ matrix.dist }} -- --publish never
+
       - name: Upload Installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: AnotherCrewLink Installer ${{ runner.os }}
           path: ${{ matrix.installer }}
           if-no-files-found: error
-          
+
       - name: Upload Unpacked
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.os == 'windows-latest'}}
         with:
-          name: AnotherCrewLink Unpacked 64bit 
+          name: AnotherCrewLink Unpacked 64bit
           path: 'dist/win-unpacked'
