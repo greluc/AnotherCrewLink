@@ -101,7 +101,7 @@ export default function (
 	scriptProcessorNode.onaudioprocess = monitor;
 
 	if (isNoiseCapturing) {
-		captureTimeout = (setTimeout(init, options.noiseCaptureDuration) as unknown) as number;
+		captureTimeout = setTimeout(init, options.noiseCaptureDuration) as unknown as number;
 	}
 
 	function init() {
@@ -123,7 +123,6 @@ export default function (
 		if (options.maxNoiseLevel && baseLevel > options.maxNoiseLevel) baseLevel = options.maxNoiseLevel;
 
 		voiceScale = 1 - baseLevel;
-
 	}
 
 	function connect() {

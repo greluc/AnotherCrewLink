@@ -22,7 +22,7 @@ const args = require('minimist')(process.argv); // eslint-disable-line
 // is a more reliable signal here than NODE_ENV.
 const isDevelopment = !!process.env.ELECTRON_RENDERER_URL;
 const devTools = (isDevelopment || args.dev === 1) && true;
-const appVersion: string = isDevelopment? "DEV" : autoUpdater.currentVersion.version;
+const appVersion: string = isDevelopment ? 'DEV' : autoUpdater.currentVersion.version;
 
 // global reference to mainWindow (necessary to prevent window from being garbage collected)
 global.mainWindow = null;
@@ -32,10 +32,9 @@ app.commandLine.appendSwitch('disable-pinch');
 
 if (platform() === 'linux' || !store.get('hardware_acceleration', true)) {
 	app.disableHardwareAcceleration();
-
 }
 
-if(platform() === 'linux'){
+if (platform() === 'linux') {
 	app.commandLine.appendSwitch('disable-gpu-sandbox');
 }
 
@@ -65,7 +64,7 @@ function createMainWindow() {
 		maximizable: false,
 		webPreferences: {
 			nodeIntegration: true,
-			contextIsolation: false
+			contextIsolation: false,
 		},
 	});
 	mainWindowState.manage(window);
@@ -76,7 +75,7 @@ function createMainWindow() {
 			window.webContents.openDevTools({
 				mode: 'detach',
 			});
-		})
+		});
 	}
 
 	if (isDevelopment) {
@@ -275,7 +274,7 @@ if (!gotTheLock) {
 	});
 
 	app.on('activate', () => {
-		console.log("ACTIVATE???")
+		console.log('ACTIVATE???');
 		// on macOS it is common to re-create a window even after all windows have been closed
 		if (global.mainWindow === null) {
 			global.mainWindow = createMainWindow();
@@ -341,39 +340,33 @@ if (!gotTheLock) {
 	});
 
 	ipcMain.on('enableOverlay', async (_event, enable) => {
-		setTimeout(
-			() => {
-
-				try {
-					if (enable) {
-						if (!global.overlay) {
-							global.overlay = createOverlay();
-						}
-						overlayWindow.show();
-					} else {
-						overlayWindow.hide();
-						if (global.overlay?.closable) {
-							overlayWindow.stop();
-							global.overlay?.close();
-							global.overlay = null;
-						}
+		setTimeout(() => {
+			try {
+				if (enable) {
+					if (!global.overlay) {
+						global.overlay = createOverlay();
 					}
-				} catch (exception) {
-					global.overlay?.hide();
-					global.overlay?.close();
+					overlayWindow.show();
+				} else {
+					overlayWindow.hide();
+					if (global.overlay?.closable) {
+						overlayWindow.stop();
+						global.overlay?.close();
+						global.overlay = null;
+					}
 				}
-			},
-			1000
-		)
+			} catch (exception) {
+				global.overlay?.hide();
+				global.overlay?.close();
+			}
+		}, 1000);
 	});
 
 	ipcMain.on('setAlwaysOnTop', async (_event, enable) => {
-		console.log("SETALWAYSONTOP?")
+		console.log('SETALWAYSONTOP?');
 		if (global.mainWindow) {
-			console.log("SETALWAYSONTOP?1")
+			console.log('SETALWAYSONTOP?1');
 			global.mainWindow.setAlwaysOnTop(enable, 'screen-saver');
 		}
 	});
-
-
 }

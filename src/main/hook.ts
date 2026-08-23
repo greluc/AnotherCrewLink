@@ -159,12 +159,12 @@ ipcMain.on('minimize', async (_, lobbybrowser) => {
 	global.lobbyBrowser?.minimize();
 });
 
-ipcMain.handle("getlocale", () => {
+ipcMain.handle('getlocale', () => {
 	return app.getLocale();
 });
 
 ipcMain.on('relaunch', async () => {
-	app.relaunch();  
+	app.relaunch();
 	app.exit();
 });
 
