@@ -28,7 +28,9 @@
 		"preview": "electron-vite preview",
 		"lint:fix": "biome check --write src electron.vite.config.ts",
 		"format": "biome format --write src electron.vite.config.ts",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@emotion/react": "^11.14.0",
@@ -71,7 +73,8 @@
 		"electron-devtools-installer": "^4.0.0",
 		"electron-vite": "^5.0.0",
 		"typescript": "^7.0.2",
-		"vite": "^8.2.2"
+		"vite": "^8.2.2",
+		"vitest": "^4.1.11"
 	},
 	"main": "out/main/index.mjs"
 }
