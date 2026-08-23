@@ -120,7 +120,7 @@ export default class GameReader {
 			this.amongUs = null;
 			try {
 				this.sendIPC(IpcRendererMessages.NOTIFY_GAME_OPENED, false);
-			} catch (e) {
+			} catch {
 				/*empty*/
 			}
 		}
@@ -402,7 +402,7 @@ export default class GameReader {
 			if (state !== GameState.MENU || this.oldGameState !== GameState.MENU) {
 				try {
 					this.sendIPC(IpcRendererMessages.NOTIFY_GAME_STATE_CHANGED, newState);
-				} catch (e) {
+				} catch {
 					process.exit(0);
 				}
 			}
@@ -572,10 +572,10 @@ export default class GameReader {
 				2
 			)
 				.replace(/\\/g, '')
-				.replace(/\"\[/g, '[')
-				.replace(/\]\"/g, ']')
-				.replace(/\"\{/g, '{')
-				.replace(/\}\"/g, '}')
+				.replace(/"\[/g, '[')
+				.replace(/\]"/g, ']')
+				.replace(/"\{/g, '{')
+				.replace(/\}"/g, '}')
 		);
 		this.initializeWrites();
 	}
@@ -801,7 +801,7 @@ export default class GameReader {
 		}
 	}
 
-	joinGame(code: string, server: string): boolean {
+	joinGame(_code: string, _server: string): boolean {
 		return false;
 		// if (
 		// 	!this.amongUs ||
@@ -890,7 +890,7 @@ export default class GameReader {
 			GenerateAvatars(playercolors)
 				.then(() => console.log('done generate'))
 				.catch((e) => console.error(e));
-		} catch (e) {
+		} catch {
 			/* Empty block */
 		}
 	}
@@ -961,7 +961,7 @@ export default class GameReader {
 			} else {
 				return '';
 			}
-		} catch (e) {
+		} catch {
 			return '';
 		}
 	}
@@ -1093,7 +1093,7 @@ export default class GameReader {
 		const isDummy = this.readMemory<boolean>('boolean', data.objectPtr, this.offsets.player.isDummy);
 		let name = 'error';
 		let shiftedColor = -1;
-		if (data.hasOwnProperty('name')) {
+		if (Object.prototype.hasOwnProperty.call(data, 'name')) {
 			name = this.readString(data.name, 1000).split(/<.*?>/).join('');
 		} else {
 			this.readDictionary(data.outfitsPtr, 6, (k, v, i) => {

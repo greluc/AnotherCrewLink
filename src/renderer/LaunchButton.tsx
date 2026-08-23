@@ -9,7 +9,7 @@ import { ToggleButton } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { CustomPlatformSettings } from './settings/CustomPlatformSettings';
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles(() => ({
 	button_group: {
 		display: 'inline-flex',
 		margin: '0px 10px',

@@ -122,7 +122,7 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = func
 	// Delete and re-add platform if we're editing
 	const saveCustomPlatform = () => {
 		if (editPlatform && settings.customPlatforms[editPlatform.key]) {
-			const { [editPlatform.key]: remove, ...rest } = settings.customPlatforms;
+			const { [editPlatform.key]: _remove, ...rest } = settings.customPlatforms;
 			setSettings('customPlatforms', {
 				...rest,
 				[customPlatform.key]: customPlatform,
@@ -136,7 +136,7 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = func
 	};
 
 	const deleteCustomPlatform = () => {
-		const { [customPlatform.key]: remove, ...rest } = settings.customPlatforms;
+		const { [customPlatform.key]: _remove, ...rest } = settings.customPlatforms;
 		setSettings('customPlatforms', rest);
 	};
 

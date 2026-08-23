@@ -53,8 +53,9 @@ const TestMicrophoneButton: React.FC<TestMicProps> = function ({ microphone }: T
 			setRms(rms);
 		};
 
-		// @ts-ignore-line
-		const audio_options: any = {
+		// Intersection with an index signature: the goog* keys below are non-standard
+		// Chrome constraints that lib.dom does not declare.
+		const audio_options: MediaTrackConstraintSet & Record<string, unknown> = {
 			deviceId: microphone ?? 'default',
 			autoGainControl: false,
 			echoCancellation: false,

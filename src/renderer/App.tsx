@@ -36,10 +36,11 @@ import '@fontsource/varela-round/400.css';
 import { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
 import './language/i18n';
 import { withTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { ISettings } from '../common/ISettings';
 
 declare module '@mui/styles/defaultTheme' {
-	// eslint-disable-next-line @typescript-eslint/no-empty-interface
+	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 	interface DefaultTheme extends Theme {}
 }
 
@@ -135,8 +136,12 @@ enum AppState {
 	MENU,
 	VOICE,
 }
-// @ts-ignore
-export default function App({ t }): JSX.Element {
+interface AppProps {
+	/** Injected by withTranslation(); Settings expects i18next's TFunction. */
+	t: TFunction;
+}
+
+export default function App({ t }: AppProps): JSX.Element {
 	const [state, setState] = useState<AppState>(AppState.MENU);
 	const [gameState, setGameState] = useState<AmongUsState>({} as AmongUsState);
 	const [settingsOpen, setSettingsOpen] = useState(false);

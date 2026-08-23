@@ -226,7 +226,7 @@ if (!gotTheLock) {
 				state: 'available',
 				info: info,
 			});
-		} catch (e) {
+		} catch {
 			/* Empty block */
 		}
 	});
@@ -238,7 +238,7 @@ if (!gotTheLock) {
 				state: 'error',
 				error: err?.message ?? String(err),
 			});
-		} catch (e) {
+		} catch {
 			/*empty*/
 		}
 	});
@@ -248,7 +248,7 @@ if (!gotTheLock) {
 				state: 'downloading',
 				progress,
 			});
-		} catch (e) {
+		} catch {
 			/*empty*/
 		}
 	});
@@ -355,7 +355,7 @@ if (!gotTheLock) {
 						global.overlay = null;
 					}
 				}
-			} catch (exception) {
+			} catch {
 				global.overlay?.hide();
 				global.overlay?.close();
 			}

@@ -345,14 +345,12 @@ function Canvas({
 		// Scales with the avatar instead of a fixed -7px, which only lined up at size 100.
 		paddingLeft: -size * 0.07,
 	});
-	//@ts-ignore
-	const onerror = (e: any) => {
-		e.target.style.display = 'none';
+	const onerror = (event: React.SyntheticEvent<HTMLImageElement>) => {
+		event.currentTarget.style.display = 'none';
 	};
 
-	//@ts-ignore
-	const onload = (e: any) => {
-		e.target.style.display = '';
+	const onload = (event: React.SyntheticEvent<HTMLImageElement>) => {
+		event.currentTarget.style.display = '';
 	};
 
 	const hatElement = (
@@ -380,10 +378,9 @@ function Canvas({
 					<img
 						src={hatImg.base}
 						className={classes.base}
-						//@ts-ignore
-						onError={(e: any) => {
-							e.target.onError = null;
-							e.target.src = redAlive;
+						onError={(event) => {
+							event.currentTarget.onerror = null;
+							event.currentTarget.src = redAlive;
 						}}
 					/>
 

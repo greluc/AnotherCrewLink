@@ -202,7 +202,7 @@ export default function lobbyBrowser({ t }) {
 											</StyledTableCell>
 											<StyledTableCell align="left">{getModName(row.mods)}</StyledTableCell>
 											<StyledTableCell align="left">
-												{(languages as any)[row.language]?.name ?? 'English'}
+												{(languages as Record<string, { name?: string }>)[row.language]?.name ?? 'English'}
 											</StyledTableCell>
 											<StyledTableCell align="left">
 												{row.gameState === GameState.LOBBY ? 'Lobby' : 'In game'}{' '}
@@ -235,7 +235,7 @@ export default function lobbyBrowser({ t }) {
 																socket?.emit(
 																	'join_lobby',
 																	row.id,
-																	(state: number, codeOrError: string, server: string, publicLobby: PublicLobby) => {
+																	(state: number, codeOrError: string, server: string, _publicLobby: PublicLobby) => {
 																		if (state === 0) {
 																			setCode(`${t('lobbybrowser.code')}: ${codeOrError} \n Region: ${server}`);
 																			// ipcRenderer.send(IpcHandlerMessages.JOIN_LOBBY, codeOrError, server);

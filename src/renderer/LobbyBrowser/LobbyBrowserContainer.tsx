@@ -16,7 +16,7 @@ import { withTranslation } from 'react-i18next';
 import { ipcRenderer } from 'electron';
 
 declare module '@mui/styles/defaultTheme' {
-	// eslint-disable-next-line @typescript-eslint/no-empty-interface
+	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 	interface DefaultTheme extends Theme {}
 }
 
@@ -85,8 +85,11 @@ const TitleBar = function () {
 	);
 };
 
-// @ts-ignore
-export default function App({ t }): JSX.Element {
+interface AppProps {
+	t: (key: string) => string;
+}
+
+export default function App({ t }: AppProps): JSX.Element {
 	return (
 		<StyledEngineProvider injectFirst>
 			<ThemeProvider theme={theme}>

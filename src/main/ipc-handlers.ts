@@ -38,7 +38,7 @@ export const initializeIpcListeners = (): void => {
 				});
 				process.on('error', error);
 				process.unref();
-			} catch (e) {
+			} catch {
 				error();
 			}
 		}
@@ -52,7 +52,7 @@ export const initializeIpcListeners = (): void => {
 	ipcMain.on(IpcMessages.SEND_TO_OVERLAY, (_, event: IpcOverlayMessages, ...args: unknown[]) => {
 		try {
 			if (global.overlay) global.overlay.webContents.send(event, ...args);
-		} catch (e) {
+		} catch {
 			/*empty*/
 		}
 	});
@@ -61,7 +61,7 @@ export const initializeIpcListeners = (): void => {
 		console.log('SEND TO MAINWINDOW CALLLED');
 		try {
 			if (global.mainWindow) global.mainWindow.webContents.send(event, ...args);
-		} catch (e) {
+		} catch {
 			/*empty*/
 		}
 	});
@@ -144,7 +144,7 @@ export const initializeIpcHandlers = (): void => {
 				if (vdfObject['Registry']['HKCU']['Software']['Valve']['Steam']['Apps']['945360']['installed'] == 1) {
 					availableGamePlatforms[GamePlatform.STEAM] = DefaultGamePlatforms[GamePlatform.STEAM];
 				}
-			} catch (e) {
+			} catch {
 				/* empty */
 			}
 		}
