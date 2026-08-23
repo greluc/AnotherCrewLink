@@ -24,8 +24,7 @@
     "build32": "node-gyp clean configure build --arch=ia32",
     "build64": "node-gyp clean configure build --arch=x64",
     "prebuild": "prebuildify --napi",
-    "build-ts": "tsc",
-    "demo:electron": "node-gyp build && yarn build-ts && electron dist/demo/electron-demo.js"
+    "build-ts": "tsc"
   },
   "files": [
     "dist/index.d.ts",
@@ -36,9 +35,7 @@
     "prebuilds"
   ],
   "devDependencies": {
-    "@types/node": "12.x.x",
     "@types/throttle-debounce": "2.x.x",
-    "electron": "10.x.x",
     "prebuildify": "4.x.x",
     "ts-node": "9.x.x",
     "typescript": "^5.9.3"

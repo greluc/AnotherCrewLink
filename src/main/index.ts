@@ -234,11 +234,13 @@ if (!gotTheLock) {
 			/* Empty block */
 		}
 	});
-	autoUpdater.on('error', (err: string) => {
+	// electron-updater 6 hands the handler an Error, not a string. Send the message
+	// across IPC because Error instances do not survive structured cloning intact.
+	autoUpdater.on('error', (err: Error) => {
 		try {
 			global.mainWindow?.webContents.send(IpcRendererMessages.AUTO_UPDATER_STATE, {
 				state: 'error',
-				error: err,
+				error: err?.message ?? String(err),
 			});
 		} catch (e) {
 			/*empty*/
