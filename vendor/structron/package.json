@@ -1,0 +1,8 @@
+{
+  "name": "structron",
+  "version": "0.4.3",
+  "description": "Vendored copy of structron (ISC). Upstream was last published in 2022; the binary struct parser in GameReader depends on it and it has no dependencies of its own.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "ISC"
+}

@@ -11,3 +11,5 @@ debug.log
 native/*/build/
 native/*/prebuilds/
 native/*/package-lock.json
+vendor/*/node_modules/
+vendor/*/package-lock.json
