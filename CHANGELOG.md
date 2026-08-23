@@ -1,5 +1,34 @@
 # AnotherCrewLink Changelog
 
+## v1.0.2
+
+### Fixed
+
+- **Impostors hear ghosts made ghosts inaudible instead of audible.** The setting
+  routes the voice through a convolver carrying a reverb impulse response, which is
+  fetched and decoded in the background. A convolver whose buffer is still null does
+  not pass audio through, it outputs silence: measured in Chromium, a dirac impulse
+  renders at peak 0.04 and a null buffer at exactly 0. Connections that came up before
+  the file finished decoding held such a convolver for the rest of the session,
+  because the buffer was assigned once at creation and never again. The effect is now
+  skipped while the impulse response is missing, connections created too early get it
+  once it arrives, and a failed decode is reported.
+- Applying an effect disconnected the direct path before connecting the effect, so a
+  failure in the second step left the player with no output at all, and it reported
+  success either way.
+- **Hearing through cameras** indexed the camera table of the current map without
+  checking that the map or the camera id is in it. It was unreachable while the map
+  was undefined; with the map fixed in 1.0.1 it would have thrown out of the audio
+  pass and silenced every player at once.
+
+### Note
+
+Two more lobby settings were dead for the same reason as walls block audio, and were
+already fixed by 1.0.1: **communications sabotage prevents conversations** and
+**hearing through cameras** both branch on the map, and with the map arriving as
+undefined neither found a matching branch, so sabotage never registered and the
+current camera was always none.
+
 ## v1.0.1
 
 ### Fixed
