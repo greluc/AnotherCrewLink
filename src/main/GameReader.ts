@@ -259,6 +259,7 @@ export default class GameReader {
 
 					players.push(player);
 				}
+				this.warnAboutDuplicatePlayers(players);
 				if (localPlayer) {
 					this.fixPingMessage();
 					lightRadius = this.readMemory<number>('float', localPlayer.objectPtr, this.offsets.lightRadius, -1);
@@ -1085,6 +1086,38 @@ export default class GameReader {
 		let h = 0;
 		for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
 		return h;
+	}
+
+	/**
+	 * The game's player table can hold more than one record for the same client, and a
+	 * leftover record carries its own dead flag. Two records for one player mean the
+	 * listeners decide whether they can hear that player from whichever record they
+	 * process last, which is how someone alive can go silent for everyone but
+	 * themselves, in a match and in a meeting, while staying audible in the lobby where
+	 * the dead flag is not consulted. Dummies are excluded: they all share one client id
+	 * by design.
+	 */
+	private lastDuplicateWarning = '';
+	private warnAboutDuplicatePlayers(players: Player[]): void {
+		const byClient = new Map<number, Player[]>();
+		for (const player of players) {
+			if (player.isDummy) continue;
+			const existing = byClient.get(player.clientId);
+			if (existing) existing.push(player);
+			else byClient.set(player.clientId, [player]);
+		}
+		const duplicates = [...byClient.entries()].filter(([, entries]) => entries.length > 1);
+		const summary = duplicates
+			.map(
+				([clientId, entries]) =>
+					`${clientId}: ${entries.map((e) => `${e.name}(dead=${e.isDead},disc=${e.disconnected},id=${e.id})`).join(' | ')}`
+			)
+			.join('; ');
+		if (summary === this.lastDuplicateWarning) return;
+		this.lastDuplicateWarning = summary;
+		if (summary) {
+			console.warn('Duplicate player records for the same client:', summary);
+		}
 	}
 
 	parsePlayer(ptr: number, buffer: Buffer, LocalclientId = -1): Player | undefined {
