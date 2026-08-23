@@ -2,7 +2,7 @@
 
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
-import windowStateKeeper from 'electron-window-state';
+import { windowStateKeeper } from './windowState';
 import { platform } from 'os';
 import { join as joinPath } from 'path';
 import { format as formatUrl } from 'url';
@@ -46,6 +46,7 @@ function createMainWindow() {
 	// Without defaults the keeper reports 800x600, and its width/height were never
 	// passed to the window anyway, so the saved size was dead weight.
 	const mainWindowState = windowStateKeeper({
+		name: 'main',
 		defaultWidth: MAIN_WINDOW_MIN_WIDTH,
 		defaultHeight: MAIN_WINDOW_MIN_HEIGHT,
 	});
