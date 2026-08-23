@@ -90,7 +90,11 @@ export function initializeHats(): void {
 		});
 }
 
-const HAT_COLLECTION_URL = 'https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewLink-Hats@master/'; //'https://raw.githubusercontent.com/OhMyGuus/BetterCrewlink-Hats/master';
+// Pinned to a commit rather than @master. jsDelivr serves whatever that branch
+// currently holds, from a third-party account, with no integrity check, so the
+// hats every user downloads could change without any release on our side.
+const HAT_COLLECTION_COMMIT = '3d2cc7de7b193618d6247a6604748a0eb56e6f3a';
+const HAT_COLLECTION_URL = `https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewLink-Hats@${HAT_COLLECTION_COMMIT}/`; //'https://raw.githubusercontent.com/OhMyGuus/BetterCrewlink-Hats/master';
 function getModHat(color: number, id = '', mod: ModsType, back = false) {
 	if (!initializedHats) {
 		return '';

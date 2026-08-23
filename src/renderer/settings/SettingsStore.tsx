@@ -87,10 +87,16 @@ export const SettingsStore = new Store<ISettings>({
 			}
 		},
 		'3.0.6': (store) => {
-			if (store.has('ghostVolume')) {
-				store.set('crewVolumeAsGhost', store.get('ghostVolume', 100));
-				// @ts-ignore
-				store.delete('ghostVolume');
+			// ghostVolume was removed from ISettings, so it is addressed through a widened
+			// view of the store rather than a @ts-ignore per call.
+			const legacy = store as unknown as {
+				has(key: string): boolean;
+				get(key: string, fallback: number): number;
+				delete(key: string): void;
+			};
+			if (legacy.has('ghostVolume')) {
+				store.set('crewVolumeAsGhost', legacy.get('ghostVolume', 100));
+				legacy.delete('ghostVolume');
 			}
 		},
 	},
