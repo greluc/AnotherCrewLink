@@ -3,8 +3,8 @@ import { SettingsContext, GameStateContext, HostSettingsContext } from '../conte
 import MicrophoneSoundBar from './MicrophoneSoundBar';
 import TestSpeakersButton from './TestSpeakersButton';
 import { ISettings, ILobbySettings } from '../../common/ISettings';
-import makeStyles from '@mui/styles/makeStyles';
-import withStyles from '@mui/styles/withStyles';
+import { makeStyles } from 'tss-react/mui';
+import { styled } from '@mui/material/styles';
 import {
 	Grid,
 	RadioGroup,
@@ -34,15 +34,13 @@ interface StyleInput {
 	open: boolean;
 }
 
-const Divider = withStyles((theme) => ({
-	root: {
-		width: '100%',
-		marginTop: theme.spacing(2),
-		marginBottom: theme.spacing(2),
-	},
-}))(MuiDivider);
+const Divider = styled(MuiDivider)(({ theme }) => ({
+	width: '100%',
+	marginTop: theme.spacing(2),
+	marginBottom: theme.spacing(2),
+}));
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles<StyleInput>()((theme, { open }) => ({
 	root: {
 		width: '100vw',
 		height: `calc(100vh - ${theme.spacing(3)})`,
@@ -56,7 +54,7 @@ const useStyles = makeStyles((theme) => ({
 		marginTop: theme.spacing(3),
 		transition: 'transform .1s ease-in-out',
 		WebkitAppRegion: 'no-drag',
-		transform: ({ open }: StyleInput) => (open ? 'translateX(0)' : 'translateX(-100%)'),
+		transform: open ? 'translateX(0)' : 'translateX(-100%)',
 	},
 	header: {
 		display: 'flex',
@@ -166,7 +164,7 @@ const DisabledTooltip: React.FC<DisabledTooltipProps> = function ({ disabled, ch
 };
 
 const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: SettingsProps) {
-	const classes = useStyles({ open });
+	const { classes } = useStyles({ open });
 	const [settings, setSettings, setLobbySettings] = useContext(SettingsContext);
 	const gameState = useContext(GameStateContext);
 	const [hostLobbySettings] = useContext(HostSettingsContext);

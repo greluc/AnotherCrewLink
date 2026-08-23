@@ -2,14 +2,14 @@ import { ipcRenderer } from 'electron';
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { GamePlatformInstance, GamePlatformMap } from '../common/GamePlatform';
 import { SettingsContext } from './contexts';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import { IpcMessages } from '../common/ipc-messages';
 import { Button, ClickAwayListener, MenuItem, MenuList, Paper, Popper } from '@mui/material';
 import { ToggleButton } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { CustomPlatformSettings } from './settings/CustomPlatformSettings';
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	button_group: {
 		display: 'inline-flex',
 		margin: '0px 10px',
@@ -62,7 +62,7 @@ export interface LauncherProps {
 }
 
 const LaunchButton: React.FC<LauncherProps> = function ({ t }: LauncherProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 
 	const [settings, setSettings] = useContext(SettingsContext);
 

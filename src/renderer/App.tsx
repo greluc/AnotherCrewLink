@@ -6,8 +6,8 @@ import { AmongUsState } from '../common/AmongUsState';
 import Settings from './settings/Settings';
 import SettingsStore, { setSetting, setLobbySetting } from './settings/SettingsStore';
 import { GameStateContext, SettingsContext, PlayerColorContext, HostSettingsContext } from './contexts';
-import { ThemeProvider, Theme, StyledEngineProvider } from '@mui/material/styles';
-import makeStyles from '@mui/styles/makeStyles';
+import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
+import { makeStyles } from 'tss-react/mui';
 import {
 	AutoUpdaterState,
 	IpcHandlerMessages,
@@ -39,18 +39,13 @@ import { withTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ISettings } from '../common/ISettings';
 
-declare module '@mui/styles/defaultTheme' {
-	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-	interface DefaultTheme extends Theme {}
-}
-
 let appVersion = '';
 if (typeof window !== 'undefined' && window.location) {
 	const query = new URLSearchParams(window.location.search.substring(1));
 	appVersion = ' v' + query.get('version') || '';
 }
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	root: {
 		position: 'absolute',
 		width: '100vw',
@@ -95,7 +90,7 @@ interface TitleBarProps {
 }
 
 const RawTitleBar: React.FC<TitleBarProps> = function ({ settingsOpen, setSettingsOpen }: TitleBarProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	return (
 		<div className={classes.root}>
 			<div className={classes.resizeStrip} />

@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import { ThemeProvider, Theme, StyledEngineProvider } from '@mui/material/styles';
-import makeStyles from '@mui/styles/makeStyles';
+import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
+import { makeStyles } from 'tss-react/mui';
 import RefreshSharpIcon from '@mui/icons-material/RefreshSharp';
 import CloseIcon from '@mui/icons-material/Close';
 import MinimizeIcon from '@mui/icons-material/Minimize';
@@ -15,12 +15,7 @@ import LobbyBrowser from './LobbyBrowser';
 import { withTranslation } from 'react-i18next';
 import { ipcRenderer } from 'electron';
 
-declare module '@mui/styles/defaultTheme' {
-	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-	interface DefaultTheme extends Theme {}
-}
-
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	root: {
 		position: 'absolute',
 		width: '100vw',
@@ -53,7 +48,7 @@ const useStyles = makeStyles(() => ({
 }));
 
 const TitleBar = function () {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	return (
 		<div className={classes.root}>
 			<span className={classes.title} style={{ marginLeft: 10 }}>

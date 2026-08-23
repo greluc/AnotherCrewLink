@@ -3,7 +3,7 @@ import { ipcRenderer } from 'electron';
 import { AmongUsState, GameState, VoiceState } from '../common/AmongUsState';
 import { IpcOverlayMessages, IpcMessages } from '../common/ipc-messages';
 import ReactDOM from 'react-dom';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import './css/overlay.css';
 import Avatar from './Avatar';
 import { ISettings } from '../common/ISettings';
@@ -19,32 +19,33 @@ export interface playerContainerCss extends CSSProperties {
 	'--size': string;
 }
 
-const useStyles = makeStyles(() => ({
+// tss-react takes the props once as a parameter instead of a function per rule.
+const useStyles = makeStyles<UseStylesProps>()((_theme, { width, height, oldHud }) => ({
 	meetingHud: {
 		position: 'absolute',
 		top: '50%',
 		left: '50%',
-		width: ({ width }: UseStylesProps) => width,
-		height: ({ height }: UseStylesProps) => height,
+		width,
+		height,
 		transform: 'translate(-50%, -50%)',
 	},
 	tabletContainer: {
-		width: ({ oldHud }: UseStylesProps) => (oldHud ? '88.45%' : '100%'),
+		width: oldHud ? '88.45%' : '100%',
 		height: '10.5%',
-		left: ({ oldHud }: UseStylesProps) => (oldHud ? '4.7%' : '0.4%'),
-		top: ({ oldHud }: UseStylesProps) => (oldHud ? '18.4703%' : '15%'),
+		left: oldHud ? '4.7%' : '0.4%',
+		top: oldHud ? '18.4703%' : '15%',
 		position: 'absolute',
 		display: 'flex',
 		flexWrap: 'wrap',
 	},
 	playerContainer: {
-		width: ({ oldHud }: UseStylesProps) => (oldHud ? '46.41%' : '30%'),
-		height: ({ oldHud }: UseStylesProps) => (oldHud ? '100%' : '109%'),
-		borderRadius: ({ height }: UseStylesProps) => height / 100,
+		width: oldHud ? '46.41%' : '30%',
+		height: oldHud ? '100%' : '109%',
+		borderRadius: height / 100,
 		transition: 'opacity .1s linear',
-		marginBottom: ({ oldHud }: UseStylesProps) => (oldHud ? '2%' : '1.9%'),
-		marginRight: ({ oldHud }: UseStylesProps) => (oldHud ? '2.34%' : '0.23%'),
-		marginLeft: ({ oldHud }: UseStylesProps) => (oldHud ? '0%' : '2.4%'),
+		marginBottom: oldHud ? '2%' : '1.9%',
+		marginRight: oldHud ? '2.34%' : '0.23%',
+		marginLeft: oldHud ? '0%' : '2.4%',
 		boxSizing: 'border-box',
 	},
 }));
@@ -286,7 +287,7 @@ const MeetingHud: React.FC<MeetingHudProps> = ({ voiceState, gameState, playerCo
 		return [resultW, resultH];
 	}, [windowWidth, windowheight, gameState.oldMeetingHud]);
 
-	const classes = useStyles({
+	const { classes } = useStyles({
 		width: width,
 		height: height,
 		oldHud: gameState.oldMeetingHud,

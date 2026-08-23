@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import withStyles from '@mui/styles/withStyles';
-import makeStyles from '@mui/styles/makeStyles';
+import { styled } from '@mui/material/styles';
+import { makeStyles } from 'tss-react/mui';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
@@ -24,28 +24,26 @@ const serverUrl = SettingsStore.get('serverURL', 'http://localhost:9736');
 const language = SettingsStore.get('language', 'en');
 i18next.changeLanguage(language);
 
-const StyledTableCell = withStyles((theme) => ({
-	head: {
+const StyledTableCell = styled(TableCell)(({ theme }) => ({
+	'&.MuiTableCell-head': {
 		backgroundColor: '#1d1a23',
 		color: theme.palette.common.white,
 	},
-	body: {
+	'&.MuiTableCell-body': {
 		fontSize: 14,
 	},
-}))(TableCell);
+}));
 
-const StyledTableRow = withStyles(() => ({
-	root: {
-		'&:nth-of-type(odd)': {
-			backgroundColor: '#25232a',
-		},
-		'&:nth-of-type(even)': {
-			backgroundColor: '#1d1a23',
-		},
+const StyledTableRow = styled(TableRow)({
+	'&:nth-of-type(odd)': {
+		backgroundColor: '#25232a',
 	},
-}))(TableRow);
+	'&:nth-of-type(even)': {
+		backgroundColor: '#1d1a23',
+	},
+});
 
-const useStyles = makeStyles({
+const useStyles = makeStyles()({
 	table: {
 		minWidth: 700,
 	},
@@ -95,7 +93,7 @@ interface LobbyBrowserProps {
 }
 
 export default function LobbyBrowser({ t }: LobbyBrowserProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	const [publiclobbies, setPublicLobbies] = useState<PublicLobbyMap>({});
 	const [socket, setSocket] = useState<Socket>();
 	const [code, setCode] = React.useState('');

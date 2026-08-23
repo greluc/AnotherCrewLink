@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import { DialogContent, DialogTitle, DialogActions, Dialog, Button, TextField, IconButton } from '@mui/material';
 import languages from '../language/languages';
 import { ILobbySettings } from '../../common/ISettings';
@@ -14,7 +14,7 @@ type publicLobbySettingProps = {
 	className: string;
 };
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles()((theme) => ({
 	specialButton: {
 		width: '90%',
 		marginBottom: '10px',
@@ -38,7 +38,7 @@ const RawPublicLobbySettings: React.FC<publicLobbySettingProps> = function ({
 	className,
 }: publicLobbySettingProps) {
 	const [open, setOpen] = useState(false);
-	const classes = useStyles();
+	const { classes } = useStyles();
 	useEffect(() => {
 		setLobbySettingState(lobbySettings);
 	}, [lobbySettings]);

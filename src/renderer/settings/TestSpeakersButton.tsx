@@ -3,14 +3,14 @@ import React, { useState, useEffect } from 'react';
 import chime from '../../../static/sounds/chime.mp3';
 import { ExtendedAudioElement } from '../Voice';
 import Button from '@mui/material/Button';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 
 interface TestSpeakersProps {
 	t: (key: string) => string;
 	speaker: string;
 }
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	button: {
 		width: 'fit-content',
 		margin: '5px auto',
@@ -21,7 +21,7 @@ const audio = new Audio() as ExtendedAudioElement;
 audio.src = chime;
 
 const TestSpeakersButton: React.FC<TestSpeakersProps> = ({ t, speaker }: TestSpeakersProps) => {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	const [playing, setPlaying] = useState(false);
 
 	useEffect(() => {

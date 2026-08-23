@@ -11,7 +11,7 @@ import {
 	RadioGroup,
 	TextField,
 } from '@mui/material';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import React, { useMemo, useState, useEffect, useContext } from 'react';
 import ChevronLeft from '@mui/icons-material/ArrowBack';
 import { GamePlatformInstance, PlatformRunType } from '../../common/GamePlatform';
@@ -20,7 +20,7 @@ import { platform } from 'process';
 import { SettingsContext } from '../contexts';
 import { webUtils } from 'electron';
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles()((theme) => ({
 	header: {
 		display: 'flex',
 		alignItems: 'center',
@@ -60,7 +60,7 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = func
 }: CustomPlatformSettingProps) {
 	const desktopPlatform = platform;
 
-	const classes = useStyles();
+	const { classes } = useStyles();
 	const [settings, setSettings] = useContext(SettingsContext);
 	const [advanced, setAdvanced] = useState(false);
 

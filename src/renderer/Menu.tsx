@@ -1,11 +1,11 @@
 import React from 'react';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
 import SupportLink from './SupportLink';
 import LaunchButton from './LaunchButton';
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles()((theme) => ({
 	root: {
 		width: '100vw',
 		height: '100vh',
@@ -40,7 +40,7 @@ export interface MenuProps {
 }
 
 const Menu: React.FC<MenuProps> = function ({ t, error }: MenuProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 
 	return (
 		<div className={classes.root}>

@@ -11,7 +11,7 @@ import {
 	getHatsRevision,
 	HatDementions,
 } from './cosmetics';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import MicOff from '@mui/icons-material/MicOff';
 import VolumeOff from '@mui/icons-material/VolumeOff';
 import WifiOff from '@mui/icons-material/WifiOff';
@@ -26,7 +26,7 @@ import IconButton from '@mui/material/IconButton';
 import Grid from '@mui/material/Grid';
 import { ModsType } from '../common/Mods';
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	canvas: {
 		position: 'absolute',
 		width: '100%',
@@ -115,7 +115,7 @@ const Avatar: React.FC<AvatarProps> = function ({
 	onConfigChange,
 	mod,
 }: AvatarProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	let icon;
 	deafened = deafened === true || socketConfig?.isMuted === true || socketConfig?.volume === 0;
 	switch (connectionState) {
@@ -233,68 +233,55 @@ interface UseCanvasStylesParams {
 	borderColor: string;
 	paddingLeft: number;
 }
-const useCanvasStyles = makeStyles(() => ({
-	base: {
-		width: '105%',
-		position: 'absolute',
-		top: '22%',
-		left: ({ paddingLeft }: UseCanvasStylesParams) => paddingLeft,
-		zIndex: 2,
-	},
-	hat: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.hat.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.hat.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.hat.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 4,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
-	},
-	skin: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.skin.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.skin.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.skin.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 3,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
-	},
-	visor: {
-		pointerEvents: 'none',
-		width: ({ dementions }: UseCanvasStylesParams) => dementions.visor.width,
-		position: 'absolute',
-		top: ({ dementions }: UseCanvasStylesParams) => `calc(22% + ${dementions.visor.top})`,
-		left: ({ size, paddingLeft, dementions }: UseCanvasStylesParams) =>
-			`calc(${dementions.visor.left} + ${Math.max(2, size / 40) / 2 + paddingLeft}px)`,
-		zIndex: 3,
-		display: ({ isAlive }: UseCanvasStylesParams) => (isAlive ? 'block' : 'none'),
-	},
-	avatar: {
-		// overflow: 'hidden',
-		borderRadius: '50%',
-		position: 'relative',
-		borderStyle: 'solid',
-		transition: 'border-color .2s ease-out',
-		borderColor: ({ borderColor }: UseCanvasStylesParams) => borderColor,
-		borderWidth: ({ size }: UseCanvasStylesParams) => Math.max(2, size / 40),
-		transform: ({ lookLeft }: UseCanvasStylesParams) => (lookLeft ? 'scaleX(-1)' : 'scaleX(1)'),
-		width: '100%',
-		paddingBottom: '100%',
-		cursor: 'pointer',
-	},
-	radio: {
-		position: 'absolute',
-		left: '70%',
-		top: '80%',
-		width: '30px',
-		transform: 'translate(-50%, -50%)',
-		fill: 'white',
-		padding: 2,
-		zIndex: 12,
-	},
-}));
+// tss-react takes the props once as a parameter instead of a function per rule.
+const useCanvasStyles = makeStyles<UseCanvasStylesParams>()(
+	(_theme, { isAlive, dementions, lookLeft, size, borderColor, paddingLeft }) => {
+		const border = Math.max(2, size / 40);
+		const offset = `${border / 2 + paddingLeft}px`;
+		const cosmetic = (d: HatDementions) => ({
+			pointerEvents: 'none' as const,
+			width: d.width,
+			position: 'absolute' as const,
+			top: `calc(22% + ${d.top})`,
+			left: `calc(${d.left} + ${offset})`,
+			display: isAlive ? ('block' as const) : ('none' as const),
+		});
+		return {
+			base: {
+				width: '105%',
+				position: 'absolute' as const,
+				top: '22%',
+				left: paddingLeft,
+				zIndex: 2,
+			},
+			hat: { ...cosmetic(dementions.hat), zIndex: 4 },
+			skin: { ...cosmetic(dementions.skin), zIndex: 3 },
+			visor: { ...cosmetic(dementions.visor), zIndex: 3 },
+			avatar: {
+				borderRadius: '50%',
+				position: 'relative' as const,
+				borderStyle: 'solid',
+				transition: 'border-color .2s ease-out',
+				borderColor,
+				borderWidth: border,
+				transform: lookLeft ? 'scaleX(-1)' : 'scaleX(1)',
+				width: '100%',
+				paddingBottom: '100%',
+				cursor: 'pointer',
+			},
+			radio: {
+				position: 'absolute' as const,
+				left: '70%',
+				top: '80%',
+				width: '30px',
+				transform: 'translate(-50%, -50%)',
+				fill: 'white',
+				padding: 2,
+				zIndex: 12,
+			},
+		};
+	}
+);
 
 // Re-renders the avatar once the hat collection finishes downloading.
 function useHatsRevision(): number {
@@ -336,7 +323,7 @@ function Canvas({
 		};
 	}, [color, hat, skin, visor, isAlive, mod, hatsRevision]);
 
-	const classes = useCanvasStyles({
+	const { classes } = useCanvasStyles({
 		isAlive,
 		dementions: hatImg.dementions,
 		lookLeft,

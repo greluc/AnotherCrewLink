@@ -20,7 +20,7 @@ import { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings'
 import { IpcRendererMessages, IpcMessages, IpcOverlayMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import Typography from '@mui/material/Typography';
 import Grid from '@mui/material/Grid';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 import SupportLink from './SupportLink';
 import Divider from '@mui/material/Divider';
 import { validateClientPeerConfig } from './validateClientPeerConfig';
@@ -141,7 +141,7 @@ export interface VoiceProps {
 	error: string;
 }
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles()((theme) => ({
 	error: {
 		position: 'absolute',
 		top: '50%',
@@ -263,7 +263,7 @@ const Voice: React.FC<VoiceProps> = function ({ t, error: initialError }: VoiceP
 	const [peerConnections, setPeerConnections] = useState<PeerConnections>({});
 	const convolverBuffer = useRef<AudioBuffer | null>(null);
 	const playerSocketIdsRef = useRef<numberStringMap>({});
-	const classes = useStyles();
+	const { classes } = useStyles();
 	const [ownAvatarRef, ownAvatarWidth] = useElementWidth<HTMLDivElement>();
 	const [otherAvatarsRef, otherAvatarsWidth] = useElementWidth<HTMLDivElement>();
 

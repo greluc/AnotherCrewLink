@@ -2,9 +2,9 @@ import Link from '@mui/material/Link';
 import Typography from '@mui/material/Typography';
 import React from 'react';
 import { shell, ipcRenderer } from 'electron';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles()(() => ({
 	button: {
 		color: 'white',
 		background: 'none',
@@ -27,7 +27,7 @@ const onRefreshClick = () => {
 };
 
 const SupportLink: React.FC = function () {
-	const classes = useStyles();
+	const { classes } = useStyles();
 
 	return (
 		<Typography align="center">

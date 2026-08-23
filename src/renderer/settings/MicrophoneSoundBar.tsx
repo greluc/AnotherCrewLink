@@ -1,13 +1,13 @@
 import LinearProgress from '@mui/material/LinearProgress';
 import Typography from '@mui/material/Typography';
 import React, { useEffect, useState } from 'react';
-import makeStyles from '@mui/styles/makeStyles';
+import { makeStyles } from 'tss-react/mui';
 
 interface TestMicProps {
 	microphone: string;
 }
 
-const useStyles = makeStyles((theme) => ({
+const useStyles = makeStyles()((theme) => ({
 	root: {
 		display: 'flex',
 		width: '100%',
@@ -24,7 +24,7 @@ const useStyles = makeStyles((theme) => ({
 }));
 
 const TestMicrophoneButton: React.FC<TestMicProps> = function ({ microphone }: TestMicProps) {
-	const classes = useStyles();
+	const { classes } = useStyles();
 	const [error, setError] = useState<boolean>(false);
 	const [rms, setRms] = useState<number>(0);
 
