@@ -1,0 +1,12 @@
+# Normalise line endings so the LF-enforcing lint rules mean something on Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.wav binary
+*.ogx binary
+*.mp3 binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.pdn binary
