@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import io, { Socket } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import Avatar from './Avatar';
 import { GameStateContext, HostSettingsContext, PlayerColorContext, SettingsContext } from './contexts';
 import {
@@ -74,8 +74,8 @@ interface AudioElements {
 }
 
 interface ConnectionStuff {
-	socket?: typeof Socket;
-	overlaySocket?: typeof Socket;
+	socket?: Socket;
+	overlaySocket?: Socket;
 	stream?: MediaStream;
 	instream?: MediaStream;
 

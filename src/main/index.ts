@@ -9,6 +9,8 @@ import { format as formatUrl } from 'url';
 import './hook';
 import { overlayWindow } from 'electron-overlay-window';
 import { initializeIpcHandlers, initializeIpcListeners } from './ipc-handlers';
+import { GenerateHat } from './avatarGenerator';
+import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
@@ -299,6 +301,12 @@ if (!gotTheLock) {
 		protocol.registerFileProtocol('static', (request, callback) => {
 			const pathname = app.getPath('userData') + '/static/' + request.url.replace('static:///', '');
 			callback(pathname);
+		});
+
+		protocol.registerFileProtocol('generate', async (request, callback) => {
+			const url = new URL(request.url.replace('generate:///', ''));
+			const path = await GenerateHat(url, gameReader.playercolors, Number(url.searchParams.get('color')));
+			callback(path);
 		});
 
 		initializeIpcListeners();

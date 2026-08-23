@@ -11,7 +11,7 @@ import Paper from '@mui/material/Paper';
 import Button from '@mui/material/Button';
 import { ipcRenderer } from 'electron';
 import { IpcHandlerMessages, IpcMessages } from '../../common/ipc-messages';
-import io from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import i18next from 'i18next';
 import { Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Tooltip } from '@mui/material';
 import languages from '../language/languages';
@@ -20,7 +20,7 @@ import { modList, ModsType } from '../../common/Mods';
 import { GameState } from '../../common/AmongUsState';
 import SettingsStore from '../settings/SettingsStore';
 
-const serverUrl = SettingsStore.get('serverURL', 'https://bettercrewl.ink/');
+const serverUrl = SettingsStore.get('serverURL', 'http://localhost:9736');
 const language = SettingsStore.get('language', 'en');
 i18next.changeLanguage(language);
 
@@ -93,7 +93,7 @@ function getModName(mod: string): string {
 export default function lobbyBrowser({ t }) {
 	const classes = useStyles();
 	const [publiclobbies, setPublicLobbies] = useState<PublicLobbyMap>({});
-	const [socket, setSocket] = useState<SocketIOClient.Socket>();
+	const [socket, setSocket] = useState<Socket>();
 	const [code, setCode] = React.useState('');
 	const [, forceRender] = useState({});
 

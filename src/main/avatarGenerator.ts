@@ -1,6 +1,7 @@
 import Color from 'color';
-import jimp from 'jimp';
+import { Jimp, JimpInstance } from 'jimp';
 import fs from 'fs';
+import path from 'path';
 
 // @ts-ignore
 import playerBase from '../../static/images/generate/player.png?inline';
@@ -8,6 +9,16 @@ import ghostBase from '../../static/images/generate/ghost.png?inline';
 import { app } from 'electron';
 
 export { DEFAULT_PLAYERCOLORS } from '../common/playerColors';
+
+function pathToHash(input: string): number {
+	let hash = 0;
+	for (let i = 0; i < input.length; i++) {
+		const char = input.charCodeAt(i);
+		hash = (hash << 5) - hash + char;
+		hash = hash & hash; // Convert to 32bit integer
+	}
+	return hash;
+}
 
 export function numberToColorHex(colour: number): string {
 	return (
@@ -23,7 +34,9 @@ export function numberToColorHex(colour: number): string {
 
 
 async function colorImages(playerColors: string[][], image: string, imagename: string): Promise<void> {
-	const img = await jimp.read(Buffer.from(image.replace(/^data:image\/png;base64,/, ''), 'base64')); //`${app.getAppPath()}/../test/${imagename}.png`
+	const img = (await Jimp.fromBuffer(
+		Buffer.from(image.replace(/^data:image\/png;base64,/, ''), 'base64')
+	)) as JimpInstance; //`${app.getAppPath()}/../test/${imagename}.png`
 	const originalData = new Uint8Array(img.bitmap.data);
 	for (let colorId = 0; colorId < playerColors.length; colorId++) {
 		const color = playerColors[colorId][0];
@@ -48,8 +61,8 @@ function isBetween(h: number, h1: number, maxdiffrence: number) {
 	return 180 - Math.abs(Math.abs(h - h1) - 180) < maxdiffrence;
 }
 
-async function colorImage(img: jimp, originalData: Uint8Array, color: string, shadow: string, savepath: string, returnImg = false) {
-	img.bitmap.data = new Uint8Array(originalData) as Buffer;
+async function colorImage(img: JimpInstance, originalData: Uint8Array, color: string, shadow: string, savepath: string) {
+	img.bitmap.data = Buffer.from(originalData);
 	for (let i = 0, l = img.bitmap.data.length; i < l; i += 4) {
 		const data = img.bitmap.data;
 		const r = data[i];
@@ -69,12 +82,16 @@ async function colorImage(img: jimp, originalData: Uint8Array, color: string, sh
 			data[i + 2] = pixelColor.blue();
 		}
 	}
-	var savepathTemp = `${savepath}.${Math.floor(Math.random() * 101)}`;
-	await img.writeAsync(savepathTemp);
-	try{
-	await fs.promises.rename(savepathTemp, savepath);
-	}
-	catch(ex){
+	// jimp 1.x infers the encoder from the file extension, which the old random numeric
+	// suffix is not. Encode explicitly and write the bytes, then rename, so a reader
+	// never observes a half-written file.
+	await fs.promises.mkdir(path.dirname(savepath), { recursive: true });
+	const savepathTemp = `${savepath}.${Math.floor(Math.random() * 101)}.tmp`;
+	const encoded = await img.getBuffer('image/png');
+	await fs.promises.writeFile(savepathTemp, encoded);
+	try {
+		await fs.promises.rename(savepathTemp, savepath);
+	} catch {
 		await fs.promises.unlink(savepathTemp);
 	}
 }
@@ -89,3 +106,24 @@ export async function GenerateAvatars(colors: string[][]): Promise<void> {
 	}
 }
 
+export async function GenerateHat(imagePath: URL, colors: string[][], colorId: number): Promise<string> {
+	try {
+		const img = (await Jimp.read(imagePath.href)) as JimpInstance;
+		const originalData = new Uint8Array(img.bitmap.data);
+		const color = colors[colorId][0];
+		const shadow = colors[colorId][1];
+
+		// The filename is a content hash of image plus both colours, so a cached file can
+		// never be stale. The previous mtime check re-rendered every hat every 5 minutes.
+		const temp = `${app.getPath('userData')}/static/generated/hats/${pathToHash(
+			imagePath + '/' + color + '/' + shadow
+		)}.png`;
+		if (!fs.existsSync(temp)) {
+			await colorImage(img, originalData, color, shadow, temp);
+		}
+		return temp;
+	} catch (exception) {
+		console.log('error while generating the hat..', exception);
+		return '';
+	}
+}

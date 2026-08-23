@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import { DialogContent, DialogTitle, DialogActions, Dialog, Button, TextField } from '@mui/material';
-import { isHttpUri, isHttpsUri } from 'valid-url';
 
 type URLInputProps = {
 	t: (key: string) => string;
@@ -12,8 +11,10 @@ type URLInputProps = {
 
 function validateServerUrl(uri: string): boolean {
 	try {
-		if (!isHttpUri(uri) && !isHttpsUri(uri)) return false;
 		const url = new URL(uri);
+		// Replaces valid-url, which was unmaintained; URL already parses this and the
+		// only extra check it did was the scheme.
+		if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
 		if (url.hostname === 'discord.gg') return false;
 		if (url.pathname !== '/') return false;
 		return true;

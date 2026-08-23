@@ -125,7 +125,9 @@ export const SettingsStore = new Store<ISettings>({
 		},
 		serverURL: {
 			type: 'string',
-			default: 'https://bettercrewl.ink',
+			// The official bettercrewl.ink stays on socket.io 2, whose Engine.IO v3 wire
+			// protocol this client can no longer speak. Point this at your own server.
+			default: 'http://localhost:9736',
 			format: 'uri',
 		},
 		pushToTalkShortcut: {

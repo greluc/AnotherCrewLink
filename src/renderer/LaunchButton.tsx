@@ -25,7 +25,7 @@ const useStyles = makeStyles((theme) => ({
 		fontSize: 24,
 		outline: 'none',
 		fontWeight: 500,
-		fontFamily: '"Varela", sans-serif',
+		fontFamily: '"Varela Round", sans-serif',
 		'&:hover': {
 			borderColor: '#00ff00',
 			cursor: 'pointer',
