@@ -70,6 +70,18 @@ export default defineConfig({
 		build: {
 			rollupOptions: {
 				input: resolve(__dirname, 'src/main/index.ts'),
+				// externalizeDepsPlugin covers plain dependencies. electron sits in
+				// devDependencies and the vendored modules are file: paths, so neither is
+				// caught, and both were being bundled. Their loaders use __dirname to find
+				// their .node binaries, which does not exist in the ESM output.
+				external: [
+					'electron',
+					'memoryjs',
+					'node-keyboard-watcher',
+					'electron-overlay-window',
+					'structron',
+					'registry-js',
+				],
 			},
 		},
 	},

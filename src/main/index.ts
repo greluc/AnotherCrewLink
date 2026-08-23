@@ -17,7 +17,8 @@ import { protocol } from 'electron';
 import Store from 'electron-store';
 import { ISettings } from '../common/ISettings';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
-const args = require('minimist')(process.argv); // eslint-disable-line
+import minimist from 'minimist';
+const args = minimist(process.argv);
 // electron-vite only defines ELECTRON_RENDERER_URL while the dev server runs, which
 // is a more reliable signal here than NODE_ENV.
 const isDevelopment = !!process.env.ELECTRON_RENDERER_URL;
