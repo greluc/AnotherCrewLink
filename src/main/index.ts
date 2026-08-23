@@ -1,8 +1,8 @@
 import { autoUpdater } from 'electron-updater';
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { windowStateKeeper } from './windowState';
 import { platform } from 'node:os';
-import { join as joinPath, dirname } from 'node:path';
+import { join as joinPath, dirname, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { format as formatUrl } from 'node:url';
 import './hook';
@@ -10,6 +10,7 @@ import overlayWindowModule from 'electron-overlay-window';
 const { overlayWindow } = overlayWindowModule;
 import { initializeIpcHandlers, initializeIpcListeners } from './ipc-handlers';
 import { GenerateHat } from './avatarGenerator';
+import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
@@ -72,6 +73,7 @@ function createMainWindow() {
 		},
 	});
 	mainWindowState.manage(window);
+	hardenWindow(window);
 
 	if (devTools) {
 		//Force devtools into detached mode otherwise they are unusable
@@ -141,6 +143,8 @@ function createLobbyBrowser() {
 			contextIsolation: false,
 		},
 	});
+
+	hardenWindow(window);
 
 	window.on('closed', () => {
 		global.lobbyBrowser = null;
@@ -212,10 +216,39 @@ function createOverlay() {
 			})
 		);
 	}
+	hardenWindow(overlay);
 	overlay.setIgnoreMouseEvents(true);
 	overlayWindow.attachTo(overlay, 'Among Us');
 	overlay.setBackgroundColor('#00000000');
 	return overlay;
+}
+
+/**
+ * With nodeIntegration enabled, any navigation away from our own pages would hand a
+ * remote document full Node access, so navigation and window creation are refused
+ * outright. Links are opened in the user's browser instead.
+ */
+function hardenWindow(window: BrowserWindow): void {
+	const isOwnPage = (target: string) =>
+		target.startsWith('file://') ||
+		(!!process.env.ELECTRON_RENDERER_URL && target.startsWith(process.env.ELECTRON_RENDERER_URL));
+
+	window.webContents.on('will-navigate', (event, target) => {
+		if (!isOwnPage(target)) {
+			event.preventDefault();
+			console.warn('Blocked navigation to', target);
+		}
+	});
+	window.webContents.setWindowOpenHandler(({ url }) => {
+		// Only ever hand http(s) to the system browser; never open a second renderer.
+		if (url.startsWith('https://') || url.startsWith('http://')) {
+			shell.openExternal(url);
+		}
+		return { action: 'deny' };
+	});
+	window.webContents.on('will-attach-webview', (event) => {
+		event.preventDefault();
+	});
 }
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -301,15 +334,70 @@ if (!gotTheLock) {
 
 	// create main BrowserWindow when electron is ready
 	app.whenReady().then(() => {
+		const staticRoot = joinPath(app.getPath('userData'), 'static');
 		protocol.registerFileProtocol('static', (request, callback) => {
-			const pathname = `${app.getPath('userData')}/static/${request.url.replace('static:///', '')}`;
-			callback(pathname);
+			// Contain the path inside userData/static. The URL is built from data read out
+			// of game memory, and the previous string concatenation let ../ escape it.
+			const requested = decodeURIComponent(request.url.replace('static:///', '')).split('?')[0];
+			const resolved = resolvePath(staticRoot, requested);
+			if (resolved !== staticRoot && !resolved.startsWith(staticRoot + sep)) {
+				console.warn('Blocked static: request outside of the static directory:', requested);
+				callback({ error: -6 }); // FILE_NOT_FOUND
+				return;
+			}
+			callback(resolved);
 		});
 
 		protocol.registerFileProtocol('generate', async (request, callback) => {
-			const url = new URL(request.url.replace('generate:///', ''));
-			const path = await GenerateHat(url, gameReader.playercolors, Number(url.searchParams.get('color')));
-			callback(path);
+			try {
+				const url = new URL(request.url.replace('generate:///', ''));
+				// Only the pinned hat collection may be fetched and recoloured. Without this
+				// the renderer could make the main process retrieve any URL and write the
+				// result into userData.
+				if (`${url.origin}${url.pathname}`.startsWith(HAT_COLLECTION_URL) !== true) {
+					console.warn('Blocked generate: request for an unexpected origin:', url.origin);
+					callback({ error: -6 });
+					return;
+				}
+				if (!gameReader?.playercolors?.length) {
+					callback({ error: -6 });
+					return;
+				}
+				const path = await GenerateHat(url, gameReader.playercolors, Number(url.searchParams.get('color')));
+				callback(path || { error: -6 });
+			} catch (error) {
+				console.warn('generate: handler failed', error);
+				callback({ error: -6 });
+			}
+		});
+
+		// No CSP was ever set, which Electron warns about at runtime. Scripts and styles
+		// come from the bundle; images additionally from the pinned hat CDN and our own
+		// protocols; connections go to the configured server and STUN/TURN.
+		session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+			callback({
+				responseHeaders: {
+					...details.responseHeaders,
+					'Content-Security-Policy': [
+						[
+							"default-src 'self'",
+							// 'unsafe-eval' is required by electron-store: conf validates its schema
+							// with ajv, which compiles schemas by generating and evaluating code.
+							// Remote scripts stay blocked, which is the vector that matters here.
+							// Dropping it means moving the settings store behind IPC in the main
+							// process, which is worth doing but is its own change.
+							"script-src 'self' 'unsafe-eval'",
+							"style-src 'self' 'unsafe-inline'",
+							"img-src 'self' data: static: generate: https://cdn.jsdelivr.net",
+							"media-src 'self' data:",
+							"font-src 'self' data:",
+							'connect-src *',
+							"object-src 'none'",
+							"frame-src 'none'",
+						].join('; '),
+					],
+				},
+			});
 		});
 
 		initializeIpcListeners();

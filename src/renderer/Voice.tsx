@@ -832,12 +832,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		let iceConfig: RTCConfiguration = DEFAULT_ICE_CONFIG;
 		socket.on('clientPeerConfig', (clientPeerConfig: ClientPeerConfig) => {
 			if (!validateClientPeerConfig(clientPeerConfig)) {
-				let errorsFormatted = '';
-				if (validateClientPeerConfig.errors) {
-					errorsFormatted = validateClientPeerConfig.errors
-						.map((error) => `${error.instancePath} ${error.message}`)
-						.join('\n');
-				}
+				const errorsFormatted = validateClientPeerConfig.errors.join('\n');
 				alert(
 					`Server sent a malformed peer config. Default config will be used. See errors below:\n${errorsFormatted}`
 				);
