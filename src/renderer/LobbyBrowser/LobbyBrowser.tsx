@@ -89,8 +89,12 @@ function getModName(mod: string): string {
 	return modList.find((o) => o.id === mod)?.label || (mod ?? 'None');
 }
 
-// @ts-ignore
-export default function lobbyBrowser({ t }) {
+interface LobbyBrowserProps {
+	/** Injected by withTranslation() in the container. */
+	t: (key: string) => string;
+}
+
+export default function LobbyBrowser({ t }: LobbyBrowserProps) {
 	const classes = useStyles();
 	const [publiclobbies, setPublicLobbies] = useState<PublicLobbyMap>({});
 	const [socket, setSocket] = useState<Socket>();
@@ -214,12 +218,12 @@ export default function lobbyBrowser({ t }) {
 														row.gameState !== GameState.LOBBY
 															? t('lobbybrowser.code_tooltips.in_progress')
 															: row.max_players === row.current_players
-															? t('lobbybrowser.code_tooltips.full_lobby')
-															: row.mods != mod
-															? `${t('lobbybrowser.code_tooltips.incompatible')} '${getModName(mod)}' ${t(
-																	'lobbybrowser.code_tooltips.and'
-															  )} '${getModName(row.mods)}'`
-															: ''
+																? t('lobbybrowser.code_tooltips.full_lobby')
+																: row.mods != mod
+																	? `${t('lobbybrowser.code_tooltips.incompatible')} '${getModName(mod)}' ${t(
+																			'lobbybrowser.code_tooltips.and'
+																		)} '${getModName(row.mods)}'`
+																	: ''
 													}
 												>
 													<span>

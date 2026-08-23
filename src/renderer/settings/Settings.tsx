@@ -308,8 +308,8 @@ const Settings: React.FC<SettingsProps> = function ({ t, open, onClose }: Settin
 				const lang = Object.keys(languages).includes(locale)
 					? locale
 					: Object.keys(languages).includes(locale.split('-')[0])
-					? locale.split('-')[0]
-					: undefined;
+						? locale.split('-')[0]
+						: undefined;
 				if (lang) {
 					settings.language = lang;
 					setSettings('language', settings.language);

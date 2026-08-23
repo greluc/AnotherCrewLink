@@ -204,8 +204,8 @@ export default class GameReader {
 				state === GameState.MENU
 					? ''
 					: lobbyCodeInt === this.lastState.lobbyCodeInt
-					? this.gameCode
-					: this.IntToGameCode(lobbyCodeInt);
+						? this.gameCode
+						: this.IntToGameCode(lobbyCodeInt);
 
 			// if (DEBUG) {
 			// 	this.gameCode = 'oof';

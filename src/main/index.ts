@@ -1,4 +1,4 @@
-'use strict'; // eslint-disable-line
+'use strict';
 
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, ipcMain, session } from 'electron';

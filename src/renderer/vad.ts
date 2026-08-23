@@ -115,7 +115,7 @@ export default function (
 		const averageEnvFreq = envFreqRange.length
 			? envFreqRange.reduce(function (p, c) {
 					return Math.min(p, c);
-			  }, 1)
+				}, 1)
 			: options.minNoiseLevel || 0.1;
 
 		baseLevel = averageEnvFreq * options.avgNoiseMultiplier;
