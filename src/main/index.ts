@@ -314,7 +314,7 @@ if (!gotTheLock) {
 
 		if (isDevelopment)
 			installExtension(REACT_DEVELOPER_TOOLS)
-				.then((name: string) => console.log(`Added Extension:  ${name}`))
+				.then((extension) => console.log(`Added Extension:  ${extension.name}`))
 				.catch((err: string) => console.log('An error occurred: ', err));
 	});
 
