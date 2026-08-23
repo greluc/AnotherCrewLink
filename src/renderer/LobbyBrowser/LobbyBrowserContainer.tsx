@@ -12,7 +12,7 @@ import '@fontsource/varela-round/400.css';
 import '../language/i18n';
 import theme from '../theme';
 import LobbyBrowser from './LobbyBrowser';
-import { withNamespaces } from 'react-i18next';
+import { withTranslation } from 'react-i18next';
 import { ipcRenderer } from 'electron';
 
 
@@ -99,6 +99,6 @@ export default function App({ t }): JSX.Element {
     );
 }
 // @ts-ignore
-const App2 = withNamespaces()(App);
+const App2 = withTranslation()(App);
 // @ts-ignore
 ReactDOM.render(<App2 />, document.getElementById('app'));

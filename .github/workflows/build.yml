@@ -29,16 +29,16 @@ jobs:
           sudo apt-get install -y libxcb1-dev libx11-dev
 
       - name: Check out Git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Node.js, NPM and Yarn
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.x
         
       - name: Cache Node Modules
         id: node-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             node_modules
@@ -48,19 +48,24 @@ jobs:
       - name: Install Dependencies
         if: steps.node-cache.outputs.cache-hit != 'true'
         run: npm ci
-        
+
+      # Fails the build if a dependency picks up a high or critical advisory, so
+      # this does not have to be noticed by hand later.
+      - name: Audit Dependencies
+        run: npm audit --audit-level=high
+
       - name: Build App
         run: npm run ${{ matrix.dist }} --publish never
      
       - name: Upload Installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BetterCrewLink Installer ${{ runner.os }}
           path: ${{ matrix.installer }}
           if-no-files-found: error
           
       - name: Upload Unpacked
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.os == 'windows-latest'}}
         with:
           name: BetterCrewLink Unpacked 64bit 
