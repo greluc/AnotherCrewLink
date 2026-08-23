@@ -32,6 +32,17 @@ it from the toolchain up.
   forwarded; a race dropped signals arriving in the same tick as the join; an orphaned
   connection tore down its own replacement on offer glare; and `natFix` discarded the
   server's ICE configuration in favour of a hardcoded foreign relay.
+- **Losing a voice connection meant restarting the app.** A peer connection that
+  failed was never rebuilt: new ones were only created when a socket joined the lobby
+  or sent an offer, and a peer already in the lobby does neither. A connection that
+  never completed was invisible on top of that, because an offer nobody answers leaves
+  it in the `new` state, where ICE never starts and so can never fail. Connections now
+  give up after twenty seconds without coming up and are rebuilt with a growing delay,
+  with only one of the two ends offering so the attempts cannot collide.
+- Server: departures were never announced, so the only sign that a player had left was
+  their connection failing, which is what a broken connection looks like too. A `left`
+  event now distinguishes the two. Leaving also ran the lobby cleanup twice, and the
+  occupant count was only ever incremented.
 - **Microphone and volume settings not surviving a restart.** Per-player volumes were
   deleted wholesale once the map passed fifty entries, and the microphone was stored
   as a Chromium device id, which changes across driver updates and re-plugging.
@@ -61,4 +72,10 @@ it from the toolchain up.
 - 134 dependency advisories down to zero, on both client and server.
 - The hat collection is pinned to a commit rather than tracking a branch.
 - CI installs with `npm ci`, fails on high or critical advisories, and pins every
-  action to a commit SHA.
+  action to a commit SHA. Dependabot keeps those pins moving, CodeQL runs on both
+  repositories, and the server has tests for the first time.
+- The installer no longer carries a second copy of every bundled library. Only the
+  native modules and the updater have to be resolvable at runtime; everything else is
+  in the bundle already. The app payload dropped from 84 MB to 11 MB.
+- Install scripts are an explicit allow-list, so a dependency that starts running code
+  at install time is noticed rather than silently trusted.
