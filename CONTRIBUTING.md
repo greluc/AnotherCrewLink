@@ -48,6 +48,21 @@ Before opening a pull request, run the same checks CI does:
 npm run lint && npm run typecheck && npm test
 ```
 
+### Where a new dependency belongs
+
+`dependencies` holds only what has to be loadable from `node_modules` when the app
+runs: the native modules and `electron-updater`. Everything else belongs in
+`devDependencies`, because Vite bundles it into `out/`, and electron-builder copies
+every production dependency into the installer whether the bundle needs it or not.
+Putting a bundled library in `dependencies` therefore ships its sources a second time.
+
+A package that runs an install script has to be approved once, which records it under
+`allowScripts` in `package.json`:
+```sh
+npm approve-scripts <package>
+```
+
+
 <!-- TRANSLATING -->
 ## Translating
 

@@ -33,53 +33,61 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"electron-overlay-window": "file:native/electron-overlay-window",
+		"electron-store": "^11.0.2",
+		"electron-updater": "^6.8.9",
+		"memoryjs": "file:native/memoryjs",
+		"node-keyboard-watcher": "file:native/node-keyboard-watcher",
+		"registry-js": "^1.16.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.10",
 		"@emotion/react": "^11.14.0",
 		"@emotion/styled": "^11.14.1",
 		"@fontsource/source-code-pro": "^5.3.0",
 		"@fontsource/varela-round": "^5.3.0",
 		"@mui/icons-material": "^9.3.1",
 		"@mui/material": "^9.3.1",
-		"color": "^5.0.3",
-		"cross-spawn": "^7.0.6",
-		"electron-overlay-window": "file:native/electron-overlay-window",
-		"electron-store": "^11.0.2",
-		"electron-updater": "^6.8.9",
-		"i18next": "^26.4.0",
-		"jimp": "^1.6.1",
-		"memoryjs": "file:native/memoryjs",
-		"minimist": "^1.2.8",
-		"node-keyboard-watcher": "file:native/node-keyboard-watcher",
-		"path-intersection": "^4.1.0",
-		"pretty-bytes": "^7.1.1",
-		"react": "^19.2.8",
-		"react-dom": "^19.2.8",
-		"react-i18next": "^17.0.12",
-		"registry-js": "^1.16.1",
-		"socket.io-client": "^4.8.3",
-		"structron": "file:vendor/structron",
-		"tss-react": "^4.9.21",
-		"webrtc-adapter": "^9.0.6"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "^2.5.10",
 		"@types/cross-spawn": "^6.0.6",
 		"@types/minimist": "^1.2.5",
 		"@types/node": "^24.10.1",
 		"@types/react": "^19.2.18",
 		"@types/react-dom": "^19.2.4",
 		"@vitejs/plugin-react": "^6.1.0",
+		"color": "^5.0.3",
+		"cross-spawn": "^7.0.6",
 		"electron": "^43.4.1",
 		"electron-builder": "^26.15.3",
 		"electron-devtools-installer": "^4.0.0",
 		"electron-vite": "^5.0.0",
+		"i18next": "^26.4.0",
+		"jimp": "^1.6.1",
+		"minimist": "^1.2.8",
+		"path-intersection": "^4.1.0",
+		"pretty-bytes": "^7.1.1",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8",
+		"react-i18next": "^17.0.12",
+		"socket.io-client": "^4.8.3",
+		"structron": "file:vendor/structron",
+		"tss-react": "^4.9.21",
 		"typescript": "^7.0.2",
 		"vite": "^8.2.2",
-		"vitest": "^4.1.11"
+		"vitest": "^4.1.11",
+		"webrtc-adapter": "^9.0.6"
 	},
 	"main": "out/main/index.mjs",
 	"overrides": {
 		"electron-vite": {
 			"vite": "$vite"
 		}
+	},
+	"allowScripts": {
+		"file:../native/memoryjs": true,
+		"file:../native/node-keyboard-watcher": true,
+		"file:../native/electron-overlay-window": true,
+		"registry-js@1.16.1": true,
+		"esbuild@0.25.12": true,
+		"electron-winstaller@5.4.0": true
 	}
 }
