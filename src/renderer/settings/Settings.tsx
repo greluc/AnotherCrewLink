@@ -1,4 +1,4 @@
-import React, { type ReactNode, useCallback, useContext, useEffect, useReducer, useState } from 'react';
+import React, { type ReactNode, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { SettingsContext, GameStateContext, HostSettingsContext } from '../contexts';
 import MicrophoneSoundBar from './MicrophoneSoundBar';
 import TestSpeakersButton from './TestSpeakersButton';
@@ -195,6 +195,23 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 		settings.micSensitivityEnabled,
 	]);
 
+	// Closing happens through the back arrow below, but also through the settings button
+	// in the title bar, which sits above this panel and stays clickable while it is open.
+	// Only the arrow used to do the closing work, so the other way silently dropped every
+	// lobby setting changed in this session and skipped the reload that a newly picked
+	// microphone or speaker needs to take effect: the device was saved but the running
+	// app kept capturing from the old one until it was restarted by hand.
+	const wasOpen = useRef(open);
+	useEffect(() => {
+		if (wasOpen.current && !open) {
+			setSettings('localLobbySettings', localLobbySettingsBuffer);
+			if (unsaved) {
+				location.reload();
+			}
+		}
+		wasOpen.current = open;
+	}, [open, localLobbySettingsBuffer, unsaved, setSettings]);
+
 	useEffect(() => {
 		ipcRenderer.send('setAlwaysOnTop', settings.alwaysOnTop);
 	}, [settings.alwaysOnTop]);
@@ -372,13 +389,9 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 				<IconButton
 					className={classes.back}
 					size="small"
-					onClick={() => {
-						setSettings('localLobbySettings', localLobbySettingsBuffer);
-						if (unsaved) {
-							onClose();
-							location.reload();
-						} else onClose();
-					}}
+					// Committing and reloading is handled by the effect above, so that this
+					// button and the title bar's do the same thing.
+					onClick={onClose}
 				>
 					<ChevronLeft htmlColor="#777" />
 				</IconButton>
