@@ -574,6 +574,14 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		});
 		connection.destroy();
 		disconnectAudioElement(peer);
+		// Set when a stream arrives and never taken back, so a player whose connection
+		// died still counted as having voice: the avatar kept showing them as connected
+		// instead of falling back to the no-voice marker.
+		setAudioConnected((old) => {
+			if (!(peer in old)) return old;
+			const { [peer]: _gone, ...rest } = old;
+			return rest;
+		});
 	}
 	// Handle pushToTalk, if set
 	useEffect(() => {
@@ -1365,6 +1373,12 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			) {
 				foundRadioUser = true;
 			}
+			// Talking is derived fresh every pass, including for players we cannot hear.
+			// It used to be written only inside the branch below, so a player whose
+			// connection dropped mid-sentence kept their last state: the avatar showed the
+			// green speaking ring next to the offline icon for the rest of the session,
+			// with no audio behind it.
+			let nowTalking = false;
 			if (audio) {
 				handledPeerIds.push(peerId);
 				let gain = calculateVoiceAudio(gameState, settingsRef.current, myPlayer, player, audio);
@@ -1382,11 +1396,15 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					gain = gain * (settings.masterVolume / 100);
 				}
 				audio.gain.gain.value = gain;
-				tempTalking[player.clientId] = otherVAD[player.clientId] && gain > 0;
-				if (tempTalking[player.clientId] != otherTalking[player.clientId]) {
-					talkingUpdate = true;
-				}
+				nowTalking = otherVAD[player.clientId] === true && gain > 0;
 			}
+			// Compared as strict booleans: an entry that has never been set is undefined,
+			// and undefined != false would mark an update on every pass for every player
+			// who has never spoken.
+			if (nowTalking !== (otherTalking[player.clientId] === true)) {
+				talkingUpdate = true;
+			}
+			tempTalking[player.clientId] = nowTalking;
 		}
 		if (talkingUpdate) {
 			setOtherTalking(tempTalking);
