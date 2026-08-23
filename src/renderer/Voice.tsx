@@ -263,6 +263,9 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const [playerConfigs] = useState<playerConfigMap>(settingsRef.current.playerConfigMap);
 	const socketClientsRef = useRef(socketClients);
 	const [peerConnections, setPeerConnections] = useState<PeerConnections>({});
+	// Last reason a player was inaudible, per client id, so the log records the change
+	// rather than the same line on every pass. See describeSilence.
+	const silenceReason = useRef<Record<number, string>>({});
 	// Pending rebuild of a peer connection that failed, and how many times it has been
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -1364,6 +1367,38 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		for (const player of otherPlayers) {
 			const peerId = playerSocketIds[player.clientId];
 			const audio = player.clientId === myPlayer.clientId ? undefined : audioElements.current[peerId];
+			// Why a specific player cannot be heard is decided from several places at once,
+			// and afterwards there is nothing left to look at. Report every change, so a
+			// report of "we could not hear him" comes with the state that caused it.
+			if (player.clientId !== myPlayer.clientId) {
+				const reason = player.isDummy
+					? 'the game reports the player as a dummy'
+					: player.disconnected
+						? 'the game reports the player as disconnected'
+						: player.bugged
+							? 'the player record could not be read'
+							: !peerId
+								? 'no socket is mapped to this player'
+								: !audio
+									? 'no audio element for the socket'
+									: player.isDead && !myPlayer.isDead
+										? 'the player is dead and you are not'
+										: playerConfigs[player.nameHash]?.isMuted
+											? 'you muted this player'
+											: playerConfigs[player.nameHash]?.volume === 0
+												? 'you set this player to zero volume'
+												: '';
+				if (reason !== (silenceReason.current[player.clientId] ?? '')) {
+					silenceReason.current[player.clientId] = reason;
+					console.log(
+						reason
+							? `Not hearing ${player.name}: ${reason} (state ${gameState.gameState}, distance ${
+									Math.round(Math.hypot(player.x - myPlayer.x, player.y - myPlayer.y) * 10) / 10
+								} of ${Math.round(maxDistanceRef.current * 10) / 10})`
+							: `Hearing ${player.name} again`
+					);
+				}
+			}
 			if (
 				player.clientId === impostorRadioClientId.current &&
 				player.isImpostor &&
