@@ -3,6 +3,13 @@
 # this also swallowed the prebuilt dist/ of the vendored modules under native/.
 /dist/
 /out/
+
+# And every scratch variant of them. `dist-diag/`, `dist-verify2/` and three more
+# siblings were committed by a `git add -A` on 2026-08-23 because the anchored rules
+# above match `dist/` exactly and nothing beside it — 48.5 MB of packed app.asar in a
+# repository that holds no build output on purpose.
+/dist-*/
+/out-*/
 node_modules/
 thumbs.db
 .idea/
