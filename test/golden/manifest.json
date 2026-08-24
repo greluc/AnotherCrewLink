@@ -448,6 +448,80 @@
 			"sha256": "9294edf0eb7d953c7706605d21d4c3403cc5cc22e28a8e7cea556bd9ce218747"
 		},
 		{
+			"name": "input__noise__0.512s",
+			"node": "input",
+			"input": "noise",
+			"config": {
+				"seconds": 0.512
+			},
+			"channels": 1,
+			"frames": 24576,
+			"sha256": "1d0260347a9363fe890184c6689261baf5cc54fc8ea5253f01af71a122b16013"
+		},
+		{
+			"name": "analyser__noise__fftSize-1024_smoothing-0.2",
+			"node": "analyser",
+			"input": "noise",
+			"from": "input__noise__0.512s",
+			"config": {
+				"fftSize": 1024,
+				"smoothingTimeConstant": 0.2
+			},
+			"channels": 1,
+			"frames": 512,
+			"sha256": "537e38e8acf9e0745a7dd1c6e0a310458131cc431bd83f8f39eb4dc425d17733"
+		},
+		{
+			"name": "input__sweep__0.512s",
+			"node": "input",
+			"input": "sweep",
+			"config": {
+				"seconds": 0.512
+			},
+			"channels": 1,
+			"frames": 24576,
+			"sha256": "362109d2a2d46d916b51084abdc86bb434fc6b3b4353c76c444d565749fcd46f"
+		},
+		{
+			"name": "analyser__sweep__fftSize-1024_smoothing-0.2",
+			"node": "analyser",
+			"input": "sweep",
+			"from": "input__sweep__0.512s",
+			"config": {
+				"fftSize": 1024,
+				"smoothingTimeConstant": 0.2
+			},
+			"channels": 1,
+			"frames": 512,
+			"sha256": "f028858384f7690719d5ac4516a1908a3b8eca7b93ce2f74ac6d4ed889522df8"
+		},
+		{
+			"name": "analyser__noise__fftSize-2048_smoothing-0.8",
+			"node": "analyser",
+			"input": "noise",
+			"from": "input__noise__0.512s",
+			"config": {
+				"fftSize": 2048,
+				"smoothingTimeConstant": 0.8
+			},
+			"channels": 1,
+			"frames": 1024,
+			"sha256": "0f495b12fe0e967ade6cc207cad352ec6e2252579757772c59005d05475c840b"
+		},
+		{
+			"name": "analyser__sweep__fftSize-2048_smoothing-0.8",
+			"node": "analyser",
+			"input": "sweep",
+			"from": "input__sweep__0.512s",
+			"config": {
+				"fftSize": 2048,
+				"smoothingTimeConstant": 0.8
+			},
+			"channels": 1,
+			"frames": 1024,
+			"sha256": "4dbb275b5b40f77718380bbfca2a6e6d2bcefb0efd85d45b4d351ca3ed3ba7c9"
+		},
+		{
 			"name": "input__recorded__0.5s",
 			"node": "input",
 			"input": "recorded",

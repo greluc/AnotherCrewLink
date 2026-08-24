@@ -14,6 +14,9 @@ async (sampleRate, assets) => {
 	/** Most vectors are this long. Enough to settle, short enough to commit. */
 	const SHORT = 0.5;
 
+	/** 0.512 s is 24576 frames, which is exactly 192 render quanta of 128. */
+	const ANALYSER_SECONDS = 0.512;
+
 	/** The convolver needs room for the tail, or the vector ends mid-reverb. */
 	const LONG = 2.0;
 
@@ -265,6 +268,58 @@ async (sampleRate, assets) => {
 			node.connect(convolver).connect(offline.destination);
 			node.start();
 		});
+	}
+
+	// ---------------------------------------------------------------- analyser
+
+	// The node the voice-activity detector reads. Its output is not a waveform but a
+	// frequency picture, so the vector is what `getByteFrequencyData` returned at the end
+	// of the render -- one byte per bin, written as samples scaled to 0..1 so the same
+	// float WAV carries it.
+	//
+	// The client's own settings: an fftSize of 1024 and a smoothing constant of 0.2. The
+	// defaults are rendered too, because a reader of the specification would implement
+	// those and the difference between the two is a whole rewrite of the smoothing.
+	for (const settings of [
+		{ fftSize: 1024, smoothingTimeConstant: 0.2 },
+		{ fftSize: 2048, smoothingTimeConstant: 0.8 },
+	]) {
+		for (const input of ['noise', 'sweep']) {
+			// A whole number of 128-frame render quanta. Web Audio renders in blocks of
+			// that size, and a length that is not a multiple of it leaves the analyser
+			// looking at a window that includes however much silence the last partial
+			// block was padded with -- which is not something a replay can know about.
+			const seconds = ANALYSER_SECONDS;
+			const from = addInput(input, seconds);
+			const frames = Math.round(sampleRate * seconds);
+			const offline = new OfflineAudioContext(1, frames, sampleRate);
+			const buffer = offline.createBuffer(1, frames, sampleRate);
+			buffer.copyToChannel(inputs[input](sampleRate, seconds), 0);
+			const node = offline.createBufferSource();
+			node.buffer = buffer;
+
+			const analyser = offline.createAnalyser();
+			analyser.fftSize = settings.fftSize;
+			analyser.smoothingTimeConstant = settings.smoothingTimeConstant;
+			node.connect(analyser);
+			// The analyser passes its input through, and something has to pull it.
+			analyser.connect(offline.destination);
+			node.start();
+			await offline.startRendering();
+
+			const bins = new Uint8Array(analyser.frequencyBinCount);
+			analyser.getByteFrequencyData(bins);
+			vectors.push({
+				name: `analyser__${input}__fftSize-${settings.fftSize}_smoothing-${settings.smoothingTimeConstant}`,
+				node: 'analyser',
+				input,
+				from,
+				config: settings,
+				channels: 1,
+				// 0..255 carried as 0..1, so one float WAV format serves every vector.
+				samples: [...bins].map((value) => value / 255),
+			});
+		}
 	}
 
 	// ---------------------------------------------------------------- chain

@@ -5,6 +5,7 @@
 //! out, so every part of it can be measured against the Electron client's own output
 //! rather than against an opinion.
 
+pub mod analyser;
 pub mod biquad;
 pub mod convolver;
 pub mod fft;

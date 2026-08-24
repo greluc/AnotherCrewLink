@@ -19,6 +19,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use acl_audio::analyser::Analyser;
 use acl_audio::biquad::{Biquad, FilterKind};
 use acl_audio::convolver::Convolver;
 use acl_audio::gain::Gain;
@@ -199,6 +200,29 @@ fn run(vector: &Vector, input: &[f32], sample_rate: f32) -> Option<Vec<f32>> {
                 out.push(gain.process(right.process(frame[1])));
             }
             Some(out)
+        }
+        "analyser" => {
+            // Not audio: the vector is what `getByteFrequencyData` returned at the end of
+            // the render, carried as 0..1 so one float WAV format serves everything.
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let size = number(&vector.config, "fftSize") as usize;
+            let mut analyser = Analyser::new(
+                size,
+                f64::from(number(&vector.config, "smoothingTimeConstant")),
+            );
+            // One push, not one per render quantum. Chromium recomputes the transform and
+            // applies the smoothing when the data is *asked for*, not as audio flows
+            // through, and the generator asks once at the end of the render. Feeding it
+            // per block applies the smoothing hundreds of times and converges somewhere
+            // else entirely — which is what four vectors said, at -4 to -10 dBFS.
+            analyser.push(input);
+            Some(
+                analyser
+                    .byte_frequency_data()
+                    .into_iter()
+                    .map(|byte| f32::from(byte) / 255.0)
+                    .collect(),
+            )
         }
         _ => None,
     }

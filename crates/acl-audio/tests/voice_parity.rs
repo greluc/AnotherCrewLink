@@ -213,6 +213,10 @@ fn the_voice_decision_agrees_with_the_electron_one() {
     let mut compared = 0usize;
     let mut differing = 0usize;
     let mut effects_differ = 0usize;
+    // Of those, how many are frames where the peer went silent — the case the
+    // stickiness explanation predicts, and the one that would make it a wrong guess if
+    // the numbers did not agree.
+    let mut effects_differ_while_silent = 0usize;
     let mut first = String::new();
 
     for path in &paths {
@@ -304,6 +308,9 @@ fn the_voice_decision_agrees_with_the_electron_one() {
                 };
                 if muffle_differs || ours.reverb != recorded.outputs.reverb {
                     effects_differ += 1;
+                    if !ours.placed {
+                        effects_differ_while_silent += 1;
+                    }
                 }
                 continue;
             }
@@ -326,9 +333,16 @@ fn the_voice_decision_agrees_with_the_electron_one() {
         "gate G2: {differing} of {compared} tuples differ in gain or pan.\n{first}"
     );
 
+    // The explanation, asserted rather than offered. An effect difference on a frame the
+    // decision ran to the end of is not stickiness, and would want looking at.
+    assert_eq!(
+        effects_differ,
+        effects_differ_while_silent,
+        "{} effect differences are on frames the decision completed, which stickiness does not explain",
+        effects_differ - effects_differ_while_silent
+    );
+
     eprintln!(
-        "gate G2 (voice): {compared} tuples, no difference in gain or pan. \
-         {effects_differ} differ in the muffle or reverb, which the client carries as node \
-         state between calls."
+        "gate G2 (voice): {compared} tuples, no difference in gain or pan. {effects_differ} differ in the muffle or reverb, all of them on a frame where the decision returned early -- the client leaves the graph alone there and keeps the effect it had."
     );
 }
