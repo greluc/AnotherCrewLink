@@ -21,7 +21,7 @@
 //! - **Continuity**: how many output frames came from a real packet, from the redundancy,
 //!   from concealment, or from nothing. The last is the one a listener notices.
 //! - **Added latency**: the buffer's depth in milliseconds. It is fixed here by
-//!   construction, which is the point of a fixed buffer and the thing NetEQ varies.
+//!   construction, which is the point of a fixed buffer and the thing `NetEQ` varies.
 //! - **Quality**: correlation with the clean decode of the same stream, per frame,
 //!   averaged. Not PESQ — that is a licensed algorithm and a dependency this does not
 //!   have — but it moves the same way and it is honest about being a proxy.

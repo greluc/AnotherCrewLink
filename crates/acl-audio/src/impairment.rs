@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(arrivals.len(), COUNT as usize);
         for (index, arrival) in arrivals.iter().enumerate() {
             assert_eq!(arrival.sequence as usize, index);
-            assert_eq!(arrival.at_ms, index as u32 * FRAME_MS);
+            assert_eq!(arrival.at_ms, u32::try_from(index).unwrap() * FRAME_MS);
         }
     }
 
@@ -321,10 +321,11 @@ mod tests {
         assert_eq!(arrivals.len(), COUNT as usize);
         let mut out_of_order = 0;
         for pair in arrivals.windows(2) {
-            if pair[1].sequence < pair[0].sequence {
+            let [first, second] = pair else { continue };
+            if second.sequence < first.sequence {
                 out_of_order += 1;
                 // Never by more than one place.
-                assert_eq!(pair[0].sequence - pair[1].sequence, 1);
+                assert_eq!(first.sequence - second.sequence, 1);
             }
         }
         assert!(out_of_order > 0, "nothing was reordered");
