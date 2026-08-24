@@ -36,7 +36,9 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libx11-dev
+          # libXtst, libXrandr and libXt are libuiohook's: it records input through the
+          # XRecord extension, which the old key watcher did not use.
+          sudo apt-get install -y libxcb1-dev libx11-dev libxtst-dev libxrandr-dev libxt-dev
 
       # node-gyp fetches the Node headers through undici, which has crashed mid-parse
       # when the connection drops (assert(!this.paused) inside its response parser).

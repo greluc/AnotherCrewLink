@@ -59,7 +59,9 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libx11-dev
+          # libXtst, libXrandr and libXt are libuiohook's: it records input through the
+          # XRecord extension, which the old key watcher did not use.
+          sudo apt-get install -y libxcb1-dev libx11-dev libxtst-dev libxrandr-dev libxt-dev
 
       - name: Check out Git repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
