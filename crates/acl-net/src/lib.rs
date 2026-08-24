@@ -12,3 +12,4 @@ pub mod client;
 pub mod engineio;
 pub mod reconnect;
 pub mod socketio;
+pub mod transport;
