@@ -30,8 +30,14 @@ use acl_net::client::Action;
 use acl_net::transport::Connection;
 use serde_json::json;
 
-/// A port unlikely to collide with a server someone is running for real.
-const PORT: u16 = 19_736;
+/// Ports unlikely to collide with a server someone is running for real.
+///
+/// One per test, not one shared. Tests in a binary run concurrently, so a shared port
+/// means the second server cannot bind and the test fails on a race rather than on
+/// anything it was written to check. Running locally with `--test-threads=1` hides that
+/// completely, which is how this reached CI.
+const PORT_SESSION: u16 = 19_736;
+const PORT_HEARTBEAT: u16 = 19_737;
 
 /// Kills the server however the test ends, including on a panic.
 struct Server(Child);
@@ -57,10 +63,10 @@ fn server_binary() -> Option<PathBuf> {
     from_workspace.exists().then_some(from_workspace)
 }
 
-fn start() -> Option<Server> {
+fn start(port: u16) -> Option<Server> {
     let binary = server_binary()?;
     let child = Command::new(binary)
-        .env("PORT", PORT.to_string())
+        .env("PORT", port.to_string())
         .env("BIND", "127.0.0.1")
         .env("RUST_LOG", "warn")
         .stdout(Stdio::null())
@@ -70,9 +76,9 @@ fn start() -> Option<Server> {
     Some(Server(child))
 }
 
-async fn wait_for_health() -> bool {
+async fn wait_for_health(port: u16) -> bool {
     for _ in 0..100 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", PORT))
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_ok()
         {
@@ -102,18 +108,18 @@ where
 
 #[tokio::test]
 async fn talks_to_a_real_server() {
-    let Some(_server) = start() else {
+    let Some(_server) = start(PORT_SESSION) else {
         eprintln!(
             "skipping: set ACL_SERVER_BIN to an acl-server binary to run the conformance test"
         );
         return;
     };
     assert!(
-        wait_for_health().await,
+        wait_for_health(PORT_SESSION).await,
         "the server did not start listening"
     );
 
-    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT}"))
+    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT_SESSION}"))
         .await
         .expect("the handshake should succeed");
 
@@ -182,18 +188,18 @@ async fn answers_the_servers_heartbeat_for_longer_than_its_timeout() {
     // test proves the client answers a ping. This proves the server accepts the answer:
     // a client that pongs wrongly is dropped after pingTimeout, so surviving past that is
     // the only observation that distinguishes the two.
-    let Some(_server) = start() else {
+    let Some(_server) = start(PORT_HEARTBEAT) else {
         eprintln!(
             "skipping: set ACL_SERVER_BIN to an acl-server binary to run the conformance test"
         );
         return;
     };
     assert!(
-        wait_for_health().await,
+        wait_for_health(PORT_HEARTBEAT).await,
         "the server did not start listening"
     );
 
-    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT}"))
+    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT_HEARTBEAT}"))
         .await
         .expect("the handshake should succeed");
 

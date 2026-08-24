@@ -509,12 +509,13 @@ de-risk the two most expensive phases are run here rather than discovered later.
    of `acl-types`.
 
 **What cargo-vet actually buys, measured rather than claimed.** With Mozilla's,
-Google's and the Bytecode Alliance's shared sets imported: 38 of 316 crates
-covered, 278 exemptions. `sonora`, `eframe`, `egui`, `winit`, `x11rb`,
+Google's and the Bytecode Alliance's shared sets imported: 45 of 346 crates
+covered, 301 exemptions. `sonora`, `eframe`, `egui`, `winit`, `x11rb`,
 `windows-sys`, `kurbo`, `serde_json`, `tokio-tungstenite` and `webpki-roots` have
-no audit in any shared set; `postcard` does. The count moved from 283 when the
-WebSocket transport landed, and the gate failed until the new crates were written
-down. §8 asked that this be said plainly instead of letting a
+no audit in any shared set; `postcard` does. The count moved twice during this
+phase — 283, then 316 when the transport landed, then 346 when the overlay probe
+named eframe's platform features — and the gate failed each time until the new
+crates were written down. §8 asked that this be said plainly instead of letting a
 supply-chain table imply coverage that does not exist, and `supply-chain/README.md`
 says it.
 
