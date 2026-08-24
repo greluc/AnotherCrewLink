@@ -15,6 +15,7 @@ pub mod scan;
 pub mod sparse;
 pub mod state;
 pub mod store;
+pub mod systems;
 
 #[cfg(target_os = "linux")]
 pub mod linux;

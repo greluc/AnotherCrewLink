@@ -81,3 +81,77 @@ Two of G2's preconditions remain open and neither is a build question. The A/B
 echo-return-loss-enhancement measurement against `webrtc-audio-processing` needs real
 speaker-and-mic captures on Linux, where both crates build. And sonora's bus factor is
 one — 209 of its 221 commits are from a single author — which no test run changes.
+
+### The comparison is no longer sonora against `webrtc-audio-processing`
+
+**Measured 2026-08-24.** Striking gate G2's criterion 6 removed the
+`i686-pc-windows-msvc` target, and that target was the only thing foreclosing
+`libwebrtc` — LiveKit's binding to the real Chromium stack, which would supply AEC3, NS
+and AGC together with Opus, RTP/RTCP and NetEQ as one dependency. Whether it builds where
+the users are had never been asked, because until the injection path was removed it could
+not matter. It does:
+
+| Candidate | `x86_64-pc-windows-msvc` |
+| --- | --- |
+| `sonora` 0.2.0 | builds, links, runs |
+| `libwebrtc` 0.3.45 | builds, links, runs — 48 s |
+| `webrtc-audio-processing` 2.1.0 | still no. PR #102 "Support MSVC targets" open since 2026-08-08, issue #34 "Windows build" open since 2023-09-27, latest release still 2.1.0 |
+
+So `webrtc-audio-processing` is out on the same grounds as before, and the real choice is
+**sonora against libwebrtc**.
+
+**It is not a like-for-like comparison, and the difference is not about audio quality.**
+`libwebrtc` does not build the Chromium stack: `webrtc-sys-build` downloads a prebuilt
+release from LiveKit and links it. That is an 86 MB `webrtc.lib` and 493 MB in the build
+directory, and it is a binary this project did not compile. Two weeks of work in this
+repository has gone the other way — the prebuilt `.node` files were deliberately left out
+of `native/uiohook-napi` so libuiohook is compiled from the C sources in the tree, and the
+code-signing application rests on every artifact being built from source in a verifiable
+way. Taking `libwebrtc` would put a downloaded binary blob at the centre of the audio path
+and would have to be argued for on those terms, not on ERLE.
+
+### The A/B, and the decision
+
+**Measured 2026-08-24.** Both cancellers, the same speech-like far end, the same echo path
+— 60 ms of delay, three reflections, twelve seconds, measured over the last two after the
+adaptive filter has converged:
+
+| Canceller | ERLE |
+| --- | --- |
+| `sonora` 0.2.0 | **11.6 dB** |
+| AEC3, through `libwebrtc` 0.3.45 | **11.3 dB** |
+
+`cargo run -p apm-probe --release` produces the first. The second needs its own binary, for
+a reason below, and is not in this repository.
+
+**Read that difference as "no difference".** Three tenths of a decibel is not a result, and
+the fact that two independent cancellers land on the same number is a warning about the
+measurement rather than a finding about them: this echo path is probably easy enough that
+both reach whatever ceiling the harness imposes. A real A/B with room recordings could
+still separate them.
+
+**It does not matter, because the decision does not turn on ERLE.** What the measurement
+establishes is the negative that was actually in doubt — sonora is not *worse* — and with
+that gone, the remaining differences all point one way:
+
+- `libwebrtc` links a prebuilt 86 MB `webrtc.lib` downloaded from LiveKit, 493 MB in the
+  build directory, compiled by nobody here. This project spent the same week removing
+  prebuilt binaries from `native/uiohook-napi` so libuiohook is built from the C in the
+  tree, and the code-signing application rests on that.
+- It **does not link at all in release on Windows** without `-C target-feature=+crt-static`.
+  The conflict is inside `webrtc-sys` itself: `desktop_frame.obj` is `/MT` and the
+  cxx-generated `desktop_capturer.rs.o` is `/MD`, so `link.exe` gives LNK2038 and LNK1169.
+  Debug links. Release does not. Forcing the static CRT on the whole binary to work around
+  a defect in a dependency is a decision with its own consequences.
+- It brings NetEQ, RTP/RTCP and Opus with it, which sounds like an argument for it until
+  you notice that phase 4 has not chosen a transport yet and this would choose it.
+
+**Decision: sonora.** Revisit if a room-recording A/B shows a real gap, or if the prebuilt
+blob stops being a concern.
+
+**A warning about measuring this.** The first attempt reported a hard failure —
+`fatal error C1083: Cannot open include file: 'absl/types/optional.h'` — and the header
+was there all along. The build ran under a path 298 characters deep, and `cl.exe` does not
+opt in to long paths whatever `LongPathsEnabled` says. Anyone repeating this must build
+from a short directory, or they will record "libwebrtc does not build on Windows" and be
+wrong.

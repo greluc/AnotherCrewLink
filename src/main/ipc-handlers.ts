@@ -14,7 +14,7 @@ import spawn from 'cross-spawn';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { IpcMessages, type IpcOverlayMessages } from '../common/ipc-messages';
+import { IpcHandlerMessages, IpcMessages, type IpcOverlayMessages } from '../common/ipc-messages';
 
 // Listeners are fire and forget, they do not have "responses" or return values
 export const initializeIpcListeners = (): void => {
@@ -28,9 +28,10 @@ export const initializeIpcListeners = (): void => {
 		const error = () => dialog.showErrorBox('Error', 'Could not start the game.');
 
 		if (platform.launchType === PlatformRunType.URI) {
-			// Just open the URI if we can to launch the game
-			// TODO: Try to add error checking here
-			shell.openExternal(platform.runPath);
+			// openExternal rejects rather than throwing, so the EXE branch's try/catch
+			// would not have caught this. Same dialog either way: from here the two
+			// failures are the same thing, the game did not start.
+			shell.openExternal(platform.runPath).catch(error);
 		} else if (platform.launchType === PlatformRunType.EXE) {
 			try {
 				const process = spawn(path.join(platform.runPath, platform.execute[0]), platform.execute.slice(1), {
@@ -88,6 +89,13 @@ export const initializeIpcListeners = (): void => {
 // or the caller should be "await"'ing them.  If neither of these are the case
 // consider making it a "listener" instead for performance and readability
 export const initializeIpcHandlers = (): void => {
+	// The same ACL_RECORD that drives the memory recorder, so one variable turns on both
+	// halves of what gate G1 and G2 need and they cannot be captured out of step.
+	ipcMain.handle(IpcHandlerMessages.REQUEST_VOICE_RECORDING, () => {
+		const name = process.env.ACL_RECORD;
+		return name ? { userData: app.getPath('userData'), name } : null;
+	});
+
 	ipcMain.handle(IpcMessages.REQUEST_PLATFORMS_AVAILABLE, (_, customPlatforms: GamePlatformMap) => {
 		const desktop_platform = platform();
 

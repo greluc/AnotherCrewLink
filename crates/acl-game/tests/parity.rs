@@ -12,11 +12,15 @@
 //!
 //! # Running it
 //!
-//! Put `.ndjson` files in `test/recordings/` and run `cargo test -p acl-game`. Without
-//! any it skips, loudly. A test that quietly passes having compared nothing would be the
+//! Put `.ndjson` or `.ndjson.gz` files in `test/recordings/` and run
+//! `cargo test -p acl-game`. Without
+//! any it skips, loudly. The empty corpus is tracked as
+//! <https://github.com/greluc/AnotherCrewLink/issues/10>, because it needs frames from a
+//! real game and nobody can write those at a keyboard. A test that quietly passes having compared nothing would be the
 //! worst possible outcome here: it would report that the gate is met.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use acl_game::mods::Mod;
@@ -24,7 +28,9 @@ use acl_game::offsets::Offsets;
 use acl_game::reader::{ReadContext, read_state};
 use acl_game::resolve::resolve_offsets;
 use acl_game::sparse::SparseProcess;
+use acl_game::state::AmongUsState;
 use acl_game::{Module, ProcessMemory};
+use flate2::read::GzDecoder;
 use serde::Deserialize;
 
 /// How far two float positions may differ and still count as equal.
@@ -57,6 +63,14 @@ struct RecordedFrame {
     /// The Electron reader's answer, kept as raw JSON so a field this port does not know
     /// about still shows up as a difference rather than being dropped on the way in.
     state: serde_json::Value,
+    /// The bundle the Electron reader was actually using, written once per file.
+    ///
+    /// The scan cannot be redone on replay: it runs inside `memoryjs` and never passes
+    /// through a recorded read, so the module's bytes are not in the file. The first real
+    /// recording failed all 124 of its frames for exactly this reason before the recorder
+    /// started carrying the resolved bundle.
+    #[serde(default)]
+    offsets: Option<serde_json::Value>,
 }
 
 fn recordings_directory() -> PathBuf {
@@ -71,8 +85,9 @@ fn recordings() -> Vec<PathBuf> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
+            // `.ndjson`, or `.ndjson.gz` for a committed one.
             path.extension()
-                .is_some_and(|extension| extension == "ndjson")
+                .is_some_and(|extension| extension == "ndjson" || extension == "gz")
         })
         .collect();
     found.sort();
@@ -114,6 +129,45 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Collapses an indexed path so a tally counts problems rather than array elements.
+///
+/// `players[3].isDead` and `players[7].isDead` are one disagreement about how `isDead` is
+/// read, and counting them separately buries the shape of a failure under its size.
+fn generalise(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let mut in_index = false;
+    for character in field.chars() {
+        match character {
+            '[' => {
+                in_index = true;
+                out.push_str("[]");
+            }
+            ']' => in_index = false,
+            _ if in_index => {}
+            _ => out.push(character),
+        }
+    }
+    out
+}
+
+/// Reads a recording, compressed or not.
+///
+/// A session runs about 10 KB per frame and gzips by a factor of 130, because 99.8% of
+/// the regions in a frame are byte-identical to the frame before. Committing them
+/// compressed keeps a working copy small; the harness does not care which it is given.
+fn read_recording(path: &Path) -> String {
+    let bytes = std::fs::read(path).expect("a recording");
+    if path.extension().is_some_and(|extension| extension == "gz") {
+        let mut text = String::new();
+        GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .expect("a gzipped recording");
+        text
+    } else {
+        String::from_utf8(bytes).expect("a recording is UTF-8")
+    }
+}
+
 /// Rebuilds the process as it was when the frame was recorded.
 fn replay(frame: &RecordedFrame) -> Option<(SparseProcess, Module)> {
     let recorded = frame.module.as_ref()?;
@@ -122,8 +176,13 @@ fn replay(frame: &RecordedFrame) -> Option<(SparseProcess, Module)> {
 
     let mut process = SparseProcess::new(frame.is64).with_module("GameAssembly.dll", base, size);
     for read in &frame.reads {
-        let address = parse_hex(&read.a)?;
-        let bytes = decode_base64(&read.b)?;
+        // A region that cannot be parsed is dropped, not fatal. Returning `None` here
+        // discards the whole frame, and one unusable address among hundreds of good ones
+        // is not a reason to throw the frame away — it is a reason for the read that
+        // needed it to fail, loudly, where the comparison can see it.
+        let (Some(address), Some(bytes)) = (parse_hex(&read.a), decode_base64(&read.b)) else {
+            continue;
+        };
         process = process.with_region(address, bytes);
     }
     Some((
@@ -223,6 +282,52 @@ fn offsets_for(process: &dyn ProcessMemory) -> Offsets {
     serde_json::from_str(&text).expect("parses")
 }
 
+/// The recorder's own output, parsed and replayed by this harness.
+///
+/// Not a parity check — the fixture's state is written by `src/main/recorder.test.ts`,
+/// so comparing against it would only prove that both sides agree with whoever wrote the
+/// test. What it proves is narrower and is the thing that would otherwise be discovered
+/// too late: that a file the Electron recorder produces is one this harness can read.
+///
+/// The alternative is somebody playing five sessions and finding out afterwards that a
+/// field was renamed on one side of the boundary. Regenerate with
+/// `npx vitest run src/main/recorder.test.ts`.
+#[test]
+fn a_file_from_the_electron_recorder_is_one_this_harness_can_replay() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/fixtures/recording-format/one-frame.ndjson");
+    let text = std::fs::read_to_string(&path).expect("the committed format fixture");
+
+    let mut seen = 0usize;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let frame: RecordedFrame =
+            serde_json::from_str(line).expect("the recorder's format still deserialises");
+        let (process, module) =
+            replay(&frame).expect("the frame carries a module and readable regions");
+
+        // The regions really did arrive, at the addresses the recorder wrote as hex.
+        let mut first = [0u8; 2];
+        process
+            .read_exact(0x1_4000_1000, &mut first)
+            .expect("a region the fixture recorded");
+        assert_eq!(&first, b"MZ", "base64 and hex survived the round trip");
+        assert_eq!(module.base, 0x1_4000_0000);
+        assert!(frame.is64, "the fixture records a 64-bit process");
+
+        // And the state is carried as raw JSON, so a field this port does not know about
+        // still reaches the comparison rather than being dropped on the way in.
+        assert_eq!(
+            frame
+                .state
+                .get("lobbyCode")
+                .and_then(serde_json::Value::as_str),
+            Some("FORMAT")
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 1, "the fixture is one frame");
+}
+
 #[test]
 fn the_rust_reader_agrees_with_the_electron_one() {
     let files = recordings();
@@ -231,18 +336,27 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             "skipping gate G1: no recordings in {}.\n\
              Record with `set ACL_RECORD=<name>` before starting the Electron client, then \
              copy userData/recordings/*.ndjson there. One session per map, covering lobby, \
-             tasks, meeting, vents, cameras, sabotage and deaths.",
+             tasks, meeting, vents, cameras, sabotage and deaths.
+\n             Tracked as https://github.com/greluc/AnotherCrewLink/issues/10.",
             recordings_directory().display()
         );
         return;
     }
 
+    // Which fields differ and how often, across every recording. One frame's worth of
+    // detail says what went wrong; the tally says how much of the corpus it accounts for,
+    // which is the difference between one bad field and a reader that is generally wrong.
+    let mut by_field: BTreeMap<String, usize> = BTreeMap::new();
     let mut frames = 0usize;
     let mut mismatched = 0usize;
     let mut first_report = String::new();
 
     for path in &files {
-        let text = std::fs::read_to_string(path).expect("a recording");
+        let text = read_recording(path);
+        // Written once per file and used for every frame in it.
+        let mut carried: Option<Offsets> = None;
+        // Threaded from frame to frame, the way the reader sees it when it runs.
+        let mut previous: Option<AmongUsState> = None;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let frame: RecordedFrame = serde_json::from_str(line)
                 .unwrap_or_else(|error| panic!("{} has a bad frame: {error}", path.display()));
@@ -252,12 +366,40 @@ fn the_rust_reader_agrees_with_the_electron_one() {
                 continue;
             };
 
-            let offsets = offsets_for(&process);
-            let resolved = resolve_offsets(&process, &module, &offsets)
-                .expect("resolving offsets against a replayed process");
+            if let Some(recorded) = frame.offsets.as_ref() {
+                // Loud, not `.ok()`. Silently falling back to a fixture when the recorded
+                // bundle will not parse is how a gate comes to measure the wrong thing:
+                // the fixture still has the scanner's `-1` holes in it, so every frame
+                // then replays as if the client had never found the game -- and the
+                // failure reads as a reader bug rather than as a parse error here.
+                carried = Some(
+                    serde_json::from_value(recorded.clone()).unwrap_or_else(|error| {
+                        panic!(
+                            "{} frame {} carries a bundle this port cannot parse: {error}",
+                            path.display(),
+                            frame.frame
+                        )
+                    }),
+                );
+            }
+            // The recorded bundle if the file carries one, otherwise a scan against the
+            // fixture — which only works for a recording that happens to include the
+            // module's bytes, and says so when it does not.
+            let resolved = if let Some(offsets) = carried.as_ref() {
+                offsets.clone()
+            } else {
+                let offsets = offsets_for(&process);
+                resolve_offsets(&process, &module, &offsets)
+                    .expect("resolving offsets against a replayed process")
+                    .offsets
+            };
             let context = ReadContext {
                 module_base: module.base,
-                previous: None,
+                // The frame before it, as this reader produced it. Two fields are defined
+                // against it — `oldGameState` and `lightRadiusChanged` — and passing None
+                // every time made both differ on every frame after the first, which read
+                // as a reader bug and was a harness one.
+                previous: previous.clone(),
                 loaded_mod: Mod::None,
                 current_server: frame
                     .state
@@ -268,23 +410,36 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             };
 
             frames += 1;
-            let Ok(state) = read_state(&process, &resolved.offsets, &context) else {
-                mismatched += 1;
-                if first_report.is_empty() {
-                    first_report = format!(
-                        "{} frame {}: the Rust reader could not read the frame at all",
-                        path.display(),
-                        frame.frame
-                    );
+            let state = match read_state(&process, &resolved, &context) {
+                Ok(state) => state,
+                Err(error) => {
+                    mismatched += 1;
+                    if first_report.is_empty() {
+                        // The error itself, not just that there was one: "could not read
+                        // the frame" is what this said at first, and it cost a debugging
+                        // round to find out which chain had given up.
+                        first_report = format!(
+                            "{} frame {}: the Rust reader could not read the frame: {error}",
+                            path.display(),
+                            frame.frame
+                        );
+                    }
+                    continue;
                 }
-                continue;
             };
+            previous = Some(state.clone());
 
             let ours = serde_json::to_value(&state).expect("the state serialises");
             let mut found = BTreeMap::new();
             differences(&frame.state, &ours, "", &mut found);
             if !found.is_empty() {
                 mismatched += 1;
+                for field in found.keys() {
+                    // Indexed fields are counted together: `players[3].isDead` and
+                    // `players[7].isDead` are one problem, not seven.
+                    let generalised = generalise(field);
+                    *by_field.entry(generalised).or_default() += 1;
+                }
                 if first_report.is_empty() {
                     let mut lines: Vec<String> = found
                         .iter()
@@ -309,9 +464,31 @@ fn the_rust_reader_agrees_with_the_electron_one() {
     }
 
     assert!(frames > 0, "the recordings held no replayable frames");
+
+    // The tally before the detail. One frame's fields say what went wrong; the counts say
+    // how much of the corpus it accounts for, which is the difference between one field
+    // read wrongly and a reader that is generally out of step.
+    let mut tally: Vec<_> = by_field.iter().collect();
+    tally.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let summary = tally
+        .iter()
+        .take(15)
+        .map(|(field, count)| format!("  {count} frames: {field}"))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+
     assert_eq!(
         mismatched, 0,
-        "gate G1: {mismatched} of {frames} frames differ.\n{first_report}"
+        "gate G1: {mismatched} of {frames} frames differ.
+
+By field:
+{summary}
+
+First difference:
+{first_report}"
     );
     eprintln!("gate G1: {frames} frames, no differences");
 }

@@ -52,23 +52,44 @@ impl TryFrom<u8> for GameState {
     type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(Self::from_game(u32::from(value)))
+        Ok(Self::from_repr(u32::from(value)))
     }
 }
 
 impl GameState {
-    /// The state for a value read out of the game.
+    /// This enum's own value, as it is carried over IPC and stored.
     ///
-    /// Anything unrecognised is [`GameState::Unknown`] rather than an error: a new game
-    /// build adding a state should leave players audible, not stop the reader.
+    /// The inverse of the numbering above, and **not** the game's. `from_game` served as
+    /// both until 2026-08-24, which is how the game's raw state came to be read as if it
+    /// were one of these: the two happen to overlap for 0 to 3 while meaning different
+    /// things, so nothing complained until a real frame was compared.
     #[must_use]
-    pub fn from_game(value: u32) -> Self {
+    pub fn from_repr(value: u32) -> Self {
         match value {
             0 => Self::Lobby,
             1 => Self::Tasks,
             2 => Self::Discussion,
             3 => Self::Menu,
             _ => Self::Unknown,
+        }
+    }
+
+    /// The state for a value read out of the game.
+    ///
+    /// Anything unrecognised is [`GameState::Unknown`] rather than an error: a new game
+    /// build adding a state should leave players audible, not stop the reader.
+    #[must_use]
+    pub fn from_game(value: u32, meeting_hud_state: i32) -> Self {
+        // `GameReader.ts`'s switch, which is not a mapping of the raw value onto this
+        // enum — it was read that way here until 2026-08-24, and the first real recording
+        // showed every lobby frame reported as `Tasks`. The raw value distinguishes menu
+        // from in-game; whether an in-game frame is a discussion is a separate reading, of
+        // the meeting hud, and 4 is its "no meeting" value.
+        match value {
+            0 => Self::Menu,
+            1 | 3 => Self::Lobby,
+            _ if meeting_hud_state < 4 => Self::Discussion,
+            _ => Self::Tasks,
         }
     }
 }
@@ -82,7 +103,7 @@ impl GameState {
 // client's field names and gate G1 compares the two structures field for field, so the
 // shape is not free to improve.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Player {
     /// The player record's address.
@@ -93,8 +114,8 @@ pub struct Player {
     pub client_id: u32,
     /// The name, with rich-text tags stripped.
     pub name: String,
-    /// A hash of the name, for the overlay.
-    pub name_hash: u32,
+    /// A hash of the name, for the overlay. Signed, because `hashCode` ends in `| 0`.
+    pub name_hash: i32,
     /// The colour index.
     pub color_id: u32,
     /// The hat, by asset name.
@@ -122,9 +143,12 @@ pub struct Player {
     /// Whether the record looked wrong and was kept anyway.
     pub bugged: bool,
     /// Where they are.
-    pub x: f32,
+    /// A double, because the Electron reader's is: it rounds to four decimal places and
+    /// a `f32` cannot hold the result — 36.676 came back as 36.67599868774414. The
+    /// collider's `Vector2` is a double too, so this is the boundary that was odd.
+    pub x: f64,
     /// See [`Player::x`].
-    pub y: f32,
+    pub y: f64,
     /// Whether they are in a vent.
     pub in_vent: bool,
     /// Whether they are a practice-mode dummy.
@@ -170,6 +194,7 @@ pub struct AmongUsState {
     /// The lobby's player limit.
     pub max_players: u32,
     /// Which mod is loaded.
+    #[serde(rename = "mod")]
     pub mod_id: String,
     /// Whether this build has the older meeting HUD layout.
     pub old_meeting_hud: bool,
@@ -238,15 +263,30 @@ pub fn lobby_code_to_string(value: i32) -> String {
 
 /// A stable hash of a player name, for the overlay.
 ///
-/// The same arithmetic as the Electron client's, so the two agree about which colour a
-/// name gets.
+/// `GameReader.hashCode`, arithmetic for arithmetic:
+///
+/// ```text
+/// for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+/// ```
+///
+/// Two details decide whether this agrees, and this function got both wrong until
+/// 2026-08-24. `charCodeAt` yields **UTF-16 code units**, not UTF-8 bytes, so iterating
+/// `name.bytes()` diverges for every name outside ASCII — which is a large share of them,
+/// and silently: the two hashes differ only where somebody used an accent or an emoji.
+/// And `| 0` makes the result a **signed** 32-bit integer, so a hash with the top bit set
+/// is negative in the recorded state and must be negative here.
+///
+/// It is not cosmetic. `nameHash` keys the per-player volume and mute settings in
+/// `Voice.tsx`, so a client that hashes differently loses them for exactly those players.
 #[must_use]
-pub fn hash_name(name: &str) -> u32 {
+pub fn hash_name(name: &str) -> i32 {
     let mut hash: u32 = 0;
-    for byte in name.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
+    for unit in name.encode_utf16() {
+        hash = hash.wrapping_mul(31).wrapping_add(u32::from(unit));
     }
-    hash
+    // `| 0` in JavaScript: reinterpret the 32 bits as signed rather than clamp. Said with
+    // `cast_signed` rather than `as`, because wrapping here is the specification.
+    hash.cast_signed()
 }
 
 /// Where the outfit fields live, from the bundle.
@@ -404,12 +444,31 @@ mod tests {
     use crate::sparse::SparseProcess;
 
     #[test]
-    fn a_state_number_the_build_does_not_know_is_unknown_rather_than_an_error() {
-        // A new game build adding a state should leave players audible, not stop the
-        // reader.
-        assert_eq!(GameState::from_game(0), GameState::Lobby);
-        assert_eq!(GameState::from_game(3), GameState::Menu);
-        assert_eq!(GameState::from_game(99), GameState::Unknown);
+    fn the_games_state_number_is_not_this_enums_number() {
+        // `GameReader.ts`'s switch. The two numberings overlap while meaning different
+        // things — the game's 0 is the menu, this enum's 0 is the lobby — and reading one
+        // as the other reported every lobby frame as `Tasks` until a real recording said
+        // so. `NO_MEETING` is the state the Electron reader falls back to.
+        const NO_MEETING: i32 = 4;
+        assert_eq!(GameState::from_game(0, NO_MEETING), GameState::Menu);
+        assert_eq!(GameState::from_game(1, NO_MEETING), GameState::Lobby);
+        assert_eq!(GameState::from_game(3, NO_MEETING), GameState::Lobby);
+        // Anything else is in a round, and the meeting hud decides which kind.
+        assert_eq!(GameState::from_game(2, NO_MEETING), GameState::Tasks);
+        assert_eq!(GameState::from_game(2, 0), GameState::Discussion);
+        assert_eq!(GameState::from_game(99, 3), GameState::Discussion);
+        // A new game build adding a state leaves players audible rather than stopping the
+        // reader: it is a round, which is the safe reading.
+        assert_eq!(GameState::from_game(99, NO_MEETING), GameState::Tasks);
+    }
+
+    #[test]
+    fn this_enums_own_number_round_trips() {
+        // The inverse of the numbering, for a value that came from this client rather
+        // than from the game.
+        assert_eq!(GameState::from_repr(0), GameState::Lobby);
+        assert_eq!(GameState::from_repr(3), GameState::Menu);
+        assert_eq!(GameState::from_repr(99), GameState::Unknown);
     }
 
     #[test]
@@ -474,10 +533,37 @@ mod tests {
         assert_eq!(hash_name(""), 0);
         // 'a' is 97; "ab" is 97*31 + 98.
         assert_eq!(hash_name("a"), 97);
-        assert_eq!(hash_name("ab"), 97 * 31 + 98);
+        // Every expected value below is what `GameReader.hashCode` actually returns,
+        // taken from running it, not from arithmetic done here. A hand-derived constant
+        // would only restate this function's own mistake.
+        assert_eq!(hash_name("ab"), 3105);
+        assert_eq!(hash_name("Player1"), 1_171_085_648);
+
+        // Non-ASCII is where the byte-wise version diverged: `charCodeAt` gives one code
+        // unit for `a-umlaut` (0xe4), where UTF-8 gives two bytes (0xc3, 0xa4).
+        assert_eq!(hash_name("\u{e4}"), 228);
+        assert_eq!(hash_name("Kr\u{fc}melmonster"), 2_107_092_379);
+        assert_eq!(hash_name("\u{44d}\u{443}\u{444}"), {
+            let mut h: u32 = 0;
+            for u in "\u{44d}\u{443}\u{444}".encode_utf16() {
+                h = h.wrapping_mul(31).wrapping_add(u32::from(u));
+            }
+            h.cast_signed()
+        });
+
+        // A surrogate pair is two code units on both sides, so an emoji agrees.
+        assert_eq!(hash_name("\u{1f600}"), 1_772_899);
+
+        // Signed, because `hashCode` ends in `| 0`. Cyrillic overflows into the top bit,
+        // which is exactly the case a `u32` return got wrong.
+        assert_eq!(
+            hash_name("\u{43d}\u{435}\u{433}\u{43e}\u{434}\u{44f}\u{439}"),
+            -1_631_115_749
+        );
+
         // And it wraps rather than panicking on a long name.
-        let long = "x".repeat(200);
-        let _ = hash_name(&long);
+        assert_eq!(hash_name("a-very-long-name-that-wraps-around"), 115_191_963);
+        let _ = hash_name(&"x".repeat(200));
     }
 
     fn with_string(process: SparseProcess, address: u64, text: &str) -> SparseProcess {

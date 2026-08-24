@@ -124,6 +124,32 @@ impl SignatureEntry {
     }
 }
 
+/// Reads a number that should be an integer but may not be.
+///
+/// Only the five dead write-path fields use this. They are never read, and a bundle is
+/// not worth refusing over a value nothing consumes — a float out of range saturates
+/// rather than failing, which is what an unused field deserves.
+fn lenient_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Number(number) => number.as_i64().unwrap_or_else(|| {
+            // `as_f64` covers both a float and an integer past i64, and the cast
+            // saturates rather than wrapping.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "saturating is the point: the value is never read"
+            )]
+            {
+                number.as_f64().unwrap_or(0.0) as i64
+            }
+        }),
+        _ => 0,
+    })
+}
+
 /// One field of the player struct the reader parses out of a buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructField {
@@ -174,20 +200,25 @@ pub struct PlayerOffsets {
 /// adds one is not silently truncated by a round trip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Offsets {
-    /// Where the join function is, before the pattern scan overwrites it.
-    #[serde(rename = "connectFunc")]
+    /// Where the join function was, in a bundle written for the removed write path.
+    ///
+    /// Read leniently and never used. A 32-bit client scanned for these and, when the
+    /// signature missed, wrote an unsigned wrap of a negative number — 1.8446744073709552e19,
+    /// a float, in a field this struct reads as an integer. Refusing the bundle over it
+    /// made gate G1 discard a whole recording and blame the reader.
+    #[serde(rename = "connectFunc", deserialize_with = "lenient_i64")]
     pub connect_func: i64,
     /// See [`Offsets::connect_func`].
-    #[serde(rename = "fixedUpdateFunc")]
+    #[serde(rename = "fixedUpdateFunc", deserialize_with = "lenient_i64")]
     pub fixed_update_func: i64,
     /// See [`Offsets::connect_func`].
-    #[serde(rename = "showModStampFunc")]
+    #[serde(rename = "showModStampFunc", deserialize_with = "lenient_i64")]
     pub show_mod_stamp_func: i64,
     /// See [`Offsets::connect_func`].
-    #[serde(rename = "modLateUpdateFunc")]
+    #[serde(rename = "modLateUpdateFunc", deserialize_with = "lenient_i64")]
     pub mod_late_update_func: i64,
     /// See [`Offsets::connect_func`].
-    #[serde(rename = "pingMessageString")]
+    #[serde(rename = "pingMessageString", deserialize_with = "lenient_i64")]
     pub ping_message_string: i64,
     /// Whether this build's writes are disabled.
     #[serde(rename = "disableWriting")]

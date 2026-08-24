@@ -57,14 +57,30 @@ comment and `unsafe_op_in_unsafe_fn = "deny"` forces them to be explicit. On
 Linux the reader can hold none of it, because `nix::sys::uio::process_vm_readv`
 is a safe function whose lengths derive from the slices passed in.
 
-There is no low-level keyboard hook among those lines, and the port must not
-introduce one. `native/node-keyboard-watcher/src/lib/keyhandler.cpp` is a 60 ms
-`GetAsyncKeyState` poll, aliased to `XQueryKeymap` on Linux; the port keeps the
-poll. `SetWindowsHookEx(WH_KEYBOARD_LL)` would be new code described as a port,
-and its callback runs on the installing thread's message pump — a desktop-wide
-latency dependency in front of every keystroke on the machine, silently unhooked
-if it ever exceeds `LowLevelHooksTimeout`, for no gain over a poll that
-intercepts nothing.
+**This section described a poll, and the client no longer has one.**
+`native/node-keyboard-watcher` was removed because it carried no licence at all,
+and `native/uiohook-napi` replaced it. libuiohook installs
+`SetWindowsHookEx(WH_KEYBOARD_LL)` and `WH_MOUSE_LL`.
+
+The objection recorded here was aimed at a naive hook, and libuiohook is not one:
+the hook runs on its own thread with its own message pump, so it is not in front
+of the client's work, and events reach JavaScript through a non-blocking
+thread-safe call on a copied event, so the callback returns without waiting for
+anything the app does. What the callback still costs is libuiohook's own decoding,
+which is bounded, and it is the same cost every application using this library
+imposes.
+
+The client also carries a local patch dropping mouse motion, drags and the wheel
+on the hook thread before anything is allocated: it binds keys and two mouse
+buttons, and `WH_MOUSE_LL` otherwise reported about 126 motion events a second,
+measured. A consequence worth having on purpose is that the process never
+receives a cursor position at all.
+
+**The port should still prefer the poll.** Nothing above makes a desktop-wide hook
+free, and the port has no licensing reason to take one: it can call
+`GetAsyncKeyState` itself. This paragraph exists so that the next person to read
+it does not grep for `SetWindowsHookEx`, find it, and conclude the document was
+lying.
 
 The net C and C++ also runs the wrong way. The port deletes 4,390 lines and adds
 libopus, the C and assembly of whichever crypto backend TLS resolves to, and —
@@ -216,8 +232,8 @@ memory-safety bug in libopus, and it does nothing at all about the elevation.
 
 The answer is two processes, and it is cheap enough to be a requirement rather
 than a roadmap item; [03-target-architecture.md](03-target-architecture.md) §3.2
-now specifies them. `acl-helper` runs elevated and holds memory reading,
-injection, the key-state poll and the overlay window. `acl-core` never elevates
+now specifies them. `acl-helper` runs elevated and holds memory reading, the
+key-state poll and the overlay window. `acl-core` never elevates
 and holds tokio, signalling, WebRTC, audio and the GUI. Between them,
 length-prefixed `postcard` over a named pipe or a Unix socket.
 
@@ -281,19 +297,23 @@ is right and unsound if it is not, and the compiler cannot check the length
 against a remote address space. Every read goes through one checked helper that
 takes a `&mut [u8]` and passes `buf.len()`; no call site computes a length.
 
-### Injection is still injection
+### Injection is still injection — so it is gone
 
 `VirtualAllocEx` with `PAGE_EXECUTE_READWRITE` followed by `WriteProcessMemory`
 of hand-assembled shellcode and two `JMP` patches into a running process is the
 same operation whichever language issues the syscall. Rust does not make it
-safer. What the port should do:
+safer. This section listed four things the port should do about that:
+feature-gate it, keep it 32-bit-only, document the stubs beside their bytes, and
+verify the target bytes before patching.
 
-- keep it feature-gated and off by default in any build that does not need it;
-- keep it 32-bit-Windows-only, as today;
-- document precisely what the two stubs do, in the code, next to the bytes —
-  the current arrays have partial comments and are otherwise opaque;
-- verify the target bytes before patching, so an unexpected game build fails
-  closed instead of writing a `JMP` into the middle of an instruction.
+> **Resolved 2026-08-24 by removing the path instead.** Asked what the operation
+> bought, the answer was a version stamp in the game's menu corner — the
+> join-by-lobby-click feature it also served had been commented out for longer
+> than anyone could date. Neither the shipping client nor the port does any of
+> this now, and `native/memoryjs` no longer holds the handle that would allow it.
+> The four mitigations below are moot. They are kept because they are the correct
+> mitigations if this is ever proposed again, and the fourth in particular
+> describes a real defect in code that shipped for years.
 
 That last point is a real improvement available for free: the current code
 computes relative jumps from pattern-scan results and writes them without
@@ -456,12 +476,14 @@ Two orderings follow, and they are prerequisites rather than preferences:
 - [ ] `cargo-deny` and `cargo-vet` blocking in CI from phase 1
 - [ ] `unsafe_op_in_unsafe_fn = "deny"`, safety comment on every `unsafe` block
 - [ ] One checked helper for all remote reads; no call site computes a length
-- [ ] `OpenProcess` with least privilege — `PROCESS_VM_READ |
-      PROCESS_QUERY_LIMITED_INFORMATION` for the reader, `PROCESS_VM_WRITE |
-      PROCESS_VM_OPERATION` only under `--features injection`,
-      `PROCESS_CREATE_THREAD` never, and never `PROCESS_ALL_ACCESS` as the
-      current C++ does
-- [ ] Injection feature-gated, 32-bit only, verifies target bytes before patching
+- [x] `OpenProcess` with least privilege — `PROCESS_VM_READ |
+      PROCESS_QUERY_LIMITED_INFORMATION` and nothing else. No write right, no
+      allocation right, `PROCESS_CREATE_THREAD` never, and never
+      `PROCESS_ALL_ACCESS` as the C++ did until 2026-08-24. Done in the Rust
+      reader **and** in `native/memoryjs`, verified against a live process: the
+      read succeeds and the write leaves the bytes unchanged
+- [x] ~~Injection feature-gated, 32-bit only, verifies target bytes before
+      patching~~ — removed outright instead, so there is nothing to gate
 - [ ] `cargo-fuzz` over RTP → jitter buffer → decode, in CI, corpus committed
 - [ ] `cargo-fuzz` over the game reader too, through a `FuzzProcess`
       implementation of the `ProcessMemory` trait; chain depth and array lengths
@@ -563,12 +585,13 @@ written out rather than left as an oversight. Every number in the
 result is then used unchecked. `player.bufferLength` sizes an allocation. The
 pointer chains that produce the player list, `hostId` and the game state are
 offsets into another process's address space that arrive over the network.
-`fixedUpdateFunc` and `modLateUpdateFunc` become the RVAs at which the injection
-path writes a five-byte `E9 rel32` into `GameAssembly.dll`, and `disableWriting`
-is the flag that gates that write — so whoever controls the file also controls
-its own safety check. The write half is 32-bit-Windows-only, as injection is
-everywhere else in this document, so it reaches a shrinking minority; the read
-half reaches everyone. The client doing either may be running elevated, and none
+`fixedUpdateFunc` and `modLateUpdateFunc` were the RVAs at which the injection
+path wrote a five-byte `E9 rel32` into `GameAssembly.dll`, and `disableWriting`
+was the flag that gated that write — so whoever controlled the file also
+controlled its own safety check. **That half of the threat is gone:** nothing
+writes any more, and the five fields are still parsed and bounds-checked but
+never resolved against a live process. The read half, which reaches everyone,
+is unchanged and is what the validator exists for. The client doing either may be running elevated, and none
 of it requires compromising any infrastructure of ours.
 
 It also violates the port's own dependency rule against unpinned branch HEADs

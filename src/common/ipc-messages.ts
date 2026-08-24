@@ -30,10 +30,16 @@ export enum IpcOverlayMessages {
 export enum IpcHandlerMessages {
 	START_HOOK = 'START_HOOK',
 	RESET_KEYHOOKS = 'RESET_KEYHOOKS',
-	JOIN_LOBBY = 'JOIN_LOBBY',
-	JOIN_LOBBY_ERROR = 'JOIN_LOBBY_ERROR',
 	OPEN_LOBBYBROWSER = 'OPEN_LOBBYBROWSER',
 	RESET_OFFSETS = 'RESET_OFFSETS',
+	/**
+	 * Where to record voice decisions, and whether to at all.
+	 *
+	 * Gate G2 compares the Rust `voice_params` against this client on recorded tuples,
+	 * and the decision is made in the renderer while the directory is only known to the
+	 * main process.
+	 */
+	REQUEST_VOICE_RECORDING = 'REQUEST_VOICE_RECORDING',
 }
 
 // Main --> Renderer (send/on)

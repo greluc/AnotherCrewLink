@@ -21,6 +21,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # Gate G1 replays these against the Rust reader. Without them here, adding a
+      # recording the reader disagrees with leaves the repository green until somebody
+      # happens to touch a crate.
+      - 'test/recordings/**'
   pull_request:
     paths:
       - 'crates/**'
@@ -31,6 +35,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # Gate G1 replays these against the Rust reader. Without them here, adding a
+      # recording the reader disagrees with leaves the repository green until somebody
+      # happens to touch a crate.
+      - 'test/recordings/**'
   workflow_dispatch:
 
 permissions:
@@ -97,13 +105,13 @@ jobs:
       # eframe links against the system's windowing and GL stack. Without these the Linux
       # leg fails at link time with an error about a missing .so rather than anything to
       # do with this code.
-      - name: Install the Linux windowing libraries
+      - name: Install the Linux windowing and audio libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
-            libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
+            libxi-dev libgl1-mesa-dev libegl1-mesa-dev libasound2-dev xvfb
 
       - name: Build
         run: cargo build --locked --workspace --all-targets --target ${{ matrix.target }}
@@ -142,12 +150,12 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Install the Linux windowing libraries
+      - name: Install the Linux windowing and audio libraries
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
-            libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
+            libxi-dev libgl1-mesa-dev libegl1-mesa-dev libasound2-dev xvfb
 
       - name: Run the overlay probe under a virtual display
         env:

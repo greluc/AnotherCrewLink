@@ -14,7 +14,7 @@ import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
 import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
-import { endFrame, isRecording, noteRead } from './recorder';
+import { endFrame, isRecording, noteRead, noteString } from './recorder';
 import Errors from '../common/Errors';
 
 /** The length of the `E9 rel32` detour this client writes, plus its `0x90` padding byte. */
@@ -43,6 +43,44 @@ const SIZE_OF: Record<string, number> = {
 	uint64: 8,
 	double: 8,
 };
+
+/**
+ * Decodes one memoryjs value from the bytes it would have read.
+ *
+ * Only the types this reader asks for. `uint64` comes back as a Number, which is what
+ * memoryjs returns and what every pointer in this file is treated as -- exact up to 2^53,
+ * and a user-space pointer is well inside that.
+ */
+function decodeValue<T>(bytes: Buffer, dataType: DataType): T | undefined {
+	switch (dataType) {
+		case 'byte':
+			return bytes.readUInt8(0) as T;
+		case 'boolean':
+		case 'bool':
+			return (bytes.readUInt8(0) !== 0) as T;
+		case 'short':
+			return bytes.readInt16LE(0) as T;
+		case 'int':
+		case 'int32':
+			return bytes.readInt32LE(0) as T;
+		case 'uint32':
+		case 'dword':
+			return bytes.readUInt32LE(0) as T;
+		case 'float':
+			return bytes.readFloatLE(0) as T;
+		case 'double':
+			return bytes.readDoubleLE(0) as T;
+		case 'long':
+		case 'int64':
+			return Number(bytes.readBigInt64LE(0)) as T;
+		case 'uint64':
+			return Number(bytes.readBigUInt64LE(0)) as T;
+		default:
+			// A type this decoder does not know falls back to the ordinary read, which
+			// leaves the recording short one region rather than wrong about it.
+			return undefined;
+	}
+}
 
 import { CameraLocation, MapType } from '../common/AmongusMap';
 import { GenerateAvatars, numberToColorHex } from './avatarGenerator';
@@ -420,7 +458,12 @@ export default class GameReader {
 				players,
 				gameState: lobbyCode === 'MENU' ? GameState.MENU : state,
 				oldGameState: this.oldGameState,
-				isHost: (hostId && clientId && hostId === clientId) as boolean,
+				// `(hostId && clientId && hostId === clientId) as boolean` until 2026-08-24,
+				// which is a cast rather than a conversion: with hostId zero the expression is
+				// the number 0, and that is what went into a field declared boolean and out
+				// over IPC. Falsy either way, so nothing misbehaved -- but the Rust reader
+				// produces `false`, and gate G1 compares the two exactly.
+				isHost: hostId !== 0 && clientId !== 0 && hostId === clientId,
 				hostId: hostId,
 				clientId: clientId,
 				comsSabotaged,
@@ -452,7 +495,9 @@ export default class GameReader {
 								base: this.gameAssembly.modBaseAddr,
 								size: this.gameAssembly.modBaseSize,
 							}
-						: undefined
+						: undefined,
+					// Resolved, with the scanner's holes filled -- the replay cannot rescan.
+					this.offsets
 				);
 			}
 			this.lastState = newState;
@@ -573,35 +618,14 @@ export default class GameReader {
 		this.offsets.innerNetClient.base[0] = innerNetClient;
 		this.offsets.shipStatus[0] = shipStatus;
 		this.offsets.miniGame[0] = miniGame;
-		if (!this.is_64bit) {
-			this.offsets.connectFunc = this.findPattern(
-				this.offsets.signatures.connectFunc.sig,
-				this.offsets.signatures.connectFunc.patternOffset,
-				this.offsets.signatures.connectFunc.addressOffset,
-				true
-			);
-			this.offsets.fixedUpdateFunc = this.findPattern(
-				this.offsets.signatures.fixedUpdateFunc.sig,
-				this.offsets.signatures.fixedUpdateFunc.patternOffset,
-				this.offsets.signatures.fixedUpdateFunc.addressOffset,
-				false,
-				true
-			);
-			this.offsets.showModStampFunc = this.findPattern(
-				this.offsets.signatures.showModStamp.sig,
-				this.offsets.signatures.showModStamp.patternOffset,
-				this.offsets.signatures.showModStamp.addressOffset,
-				false,
-				true
-			);
-			this.offsets.modLateUpdateFunc = this.findPattern(
-				this.offsets.signatures.modLateUpdate.sig,
-				this.offsets.signatures.modLateUpdate.patternOffset,
-				this.offsets.signatures.modLateUpdate.addressOffset,
-				false,
-				true
-			);
-		}
+		// `connectFunc`, `fixedUpdateFunc`, `showModStampFunc` and `modLateUpdateFunc` were
+		// scanned for here, on 32-bit builds only. All four were addresses to write to, and
+		// the write path was removed on 2026-08-24, so nothing reads them any more.
+		//
+		// Scanning for them was not merely wasted: on a build where the signature misses,
+		// `findPattern` returns an unsigned wrap of a negative number, which went into the
+		// bundle as 1.8446744073709552e19 -- a float, in a field the Rust port reads as an
+		// integer, and it is what made gate G1 refuse a whole recording.
 		this.offsets.serverManager_currentServer[0] = this.findPattern(
 			this.offsets.signatures.serverManager.sig,
 			this.offsets.signatures.serverManager.patternOffset,
@@ -720,31 +744,54 @@ export default class GameReader {
 		}
 		const { address: addr, last } = this.offsetAddress(address, offsets || []);
 		if (addr === 0) return defaultParam as T;
-		const value = readMemoryRaw<T>(this.amongUs.handle, addr + last, dataType);
-		// Recording captures the bytes rather than the decoded value, so a replay drives
-		// the same decoder rather than trusting this one's answer.
+		const at = addr + last;
+
+		// While recording, the bytes that back the answer are the bytes that get written
+		// down -- read once and decoded here, rather than read again afterwards. The
+		// re-read was a second trip into a process that may have moved on: during a
+		// teardown it failed while the first read had already succeeded, so the recording
+		// was missing regions the reader had genuinely used, and the replay disagreed
+		// about values it had no way to see.
 		if (isRecording()) {
-			this.recordRead(addr + last, SIZE_OF[dataType] ?? 8);
+			const recorded = this.readRecorded<T>(at, dataType);
+			if (recorded !== undefined) return recorded;
 		}
-		return value;
+
+		return readMemoryRaw<T>(this.amongUs.handle, at, dataType);
 	}
 
-	/** Re-reads a region as bytes, for the recorder. Off by default and never throws. */
-	recordRead(address: number, length: number): void {
-		if (!this.amongUs || length <= 0) return;
+	/**
+	 * Reads one value as bytes, notes them, and decodes the answer from the same bytes.
+	 *
+	 * Returns undefined if the region cannot be read at all, so the caller falls back to
+	 * the ordinary path and behaves exactly as it would without recording.
+	 */
+	readRecorded<T>(address: number, dataType: DataType): T | undefined {
+		if (!this.amongUs || !Number.isSafeInteger(address) || address < 0) return undefined;
+		const length = SIZE_OF[dataType] ?? 8;
+		let bytes: Buffer;
 		try {
-			noteRead(address, readBuffer(this.amongUs.handle, address, length));
+			bytes = readBuffer(this.amongUs.handle, address, length);
 		} catch {
-			// A region that cannot be re-read is one the replay will not have either, and
-			// the parity run will say so. Failing the frame here would be worse.
+			return undefined;
 		}
+		if (!bytes || bytes.length < length) return undefined;
+		noteRead(address, bytes);
+		return decodeValue<T>(bytes, dataType);
 	}
 
 	offsetAddress(address: number, offsets: number[]): { address: number; last: number } {
 		if (!this.amongUs) throw 'Among Us not open? Weird error';
 		address = this.is_64bit ? address : address;
+		const pointerType: DataType = this.is_64bit ? 'uint64' : 'uint32';
 		for (let i = 0; i < offsets.length - 1; i++) {
-			address = readMemoryRaw<number>(this.amongUs.handle, address + offsets[i], this.is_64bit ? 'uint64' : 'uint32');
+			const step = address + offsets[i];
+			// Every pointer along the chain, not just the value at the end of it: a replay
+			// has to walk the same chain, and without these it cannot take the first step.
+			// Read once and decoded from the same bytes, so the recording cannot end up
+			// missing a pointer the reader actually used.
+			const recorded = isRecording() ? this.readRecorded<number>(step, pointerType) : undefined;
+			address = recorded ?? readMemoryRaw<number>(this.amongUs.handle, step, pointerType);
 
 			if (address == 0) break;
 		}
@@ -757,13 +804,17 @@ export default class GameReader {
 			if (address === 0 || !this.amongUs) {
 				return '';
 			}
-			const length = Math.max(
-				0,
-				Math.min(readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int'), maxLength)
-			);
+			// The .NET string's length field, which a replay needs before it can know how
+			// far the characters run.
+			const lengthAt = address + (this.is_64bit ? 0x10 : 0x8);
+			const recordedLength = isRecording() ? this.readRecorded<number>(lengthAt, 'int') : undefined;
+			const rawLength = recordedLength ?? readMemoryRaw<number>(this.amongUs.handle, lengthAt, 'int');
+			const length = Math.max(0, Math.min(rawLength, maxLength));
 			// readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int')
 			const buffer = readBuffer(this.amongUs.handle, address + (this.is_64bit ? 0x14 : 0xc), length << 1);
-			if (isRecording()) noteRead(address + (this.is_64bit ? 0x14 : 0xc), buffer);
+			// noteString rather than noteRead: the scrubber replaces a name where it lives,
+			// and searching every region for its bytes would be the unsafe way to find it.
+			if (isRecording()) noteString(address + (this.is_64bit ? 0x14 : 0xc), buffer);
 			if (buffer) {
 				return buffer.toString('utf16le').replace(/\0/g, '');
 			} else {
@@ -990,7 +1041,10 @@ export default class GameReader {
 			nameHash,
 			colorId,
 			hatId: data.hat ?? '',
-			petId: data.pet ?? '',
+			// `?? ''` until 2026-08-24, in a field declared `number` and carried as one into
+			// the OBS payload. Only the eight pre-outfit bundles set `data.pet` at all, so on
+			// every current build this was the empty string in a numeric field.
+			petId: data.pet ?? 0,
 			skinId: data.skin ?? '',
 			visorId: data.visor ?? '',
 			disconnected: data.disconnected != 0,

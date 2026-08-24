@@ -548,10 +548,14 @@ malicious-bundle corpus and the full-prologue write-side check are where the two
 extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
 
 1. `ProcessMemory` trait and the Windows implementation. `OpenProcess` requests
-   `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more;
-   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` go behind `--features injection` and
-   `PROCESS_CREATE_THREAD` is never requested. Today's C++ opens the game with
-   `PROCESS_ALL_ACCESS`; this is the cheapest security improvement in the port.
+   `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more.
+   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` were to go behind `--features
+   injection`; item 6 was dropped instead, so there is no feature and no write
+   right at all, and `PROCESS_CREATE_THREAD` is never requested. This was written
+   as the cheapest security improvement in the port, and it turned out to be
+   cheaper still: `native/memoryjs` opened the game with `PROCESS_ALL_ACCESS`
+   until 2026-08-24 and now asks for the same two rights this line does, so the
+   improvement landed in 1.x rather than waiting for 2.0. **Delivered.**
    Process enumeration is roughly 25 lines of Toolhelp32 on Windows and a `/proc`
    scan on Linux — a direct transliteration of code already in `native/` — rather
    than a crate that costs 25 dependencies and drags `winapi` 0.3.9 in with it,
@@ -586,12 +590,14 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
    and a short read is an error; and Yama `ptrace_scope=1` is the Ubuntu and
    Debian default and blocks reading a non-descendant process, which no crate
    choice fixes and which the packaging phase has to document.
-6. Injection module, 32-bit Windows, feature-gated. Verify the **full replayed
-   prologue**, not just the five bytes the patch overwrites — the instruction at
-   +4 straddles the boundary — and carry an explicit "already patched by us"
-   third state, because the initialisation path can re-run against a live
-   patched process and a naive check then kills the mod stamp until the user
-   restarts the game.
+6. ~~Injection module, 32-bit Windows, feature-gated.~~ **Dropped 2026-08-24, and
+   removed from the Electron client with it.** The full-replayed-prologue check
+   and the "already patched by us" third state were both real requirements — the
+   instruction at +4 straddles the five-byte boundary, and the initialisation path
+   can re-run against a live patched process — but they were requirements of a
+   feature that drew a version stamp in the menu corner and nothing else. The
+   note below §4.4's item list prices it. Nothing replaced this item; the phase is
+   six items.
 7. A `FuzzProcess` implementation of `ProcessMemory`, backed by arbitrary bytes
    answering from a sparse map, so `AmongUsState::read_from` is fuzzable for
    almost nothing on top of the trait that already exists. Two hazards are
@@ -675,6 +681,16 @@ per map (Skeld, Mira, Polus, Airship, Fungle) covering lobby, tasks, meeting,
 vents, cameras, sabotage, and deaths. Those recordings become `ReplayProcess`
 fixtures.
 
+> **Status: the harness is built and the corpus is empty.**
+> `src/main/recorder.ts` and `crates/acl-game/tests/parity.rs` both exist and the
+> replay works; `test/recordings/` has nothing in it, so the test skips loudly
+> rather than passing. Tracked as
+> [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10), because the
+> input cannot be produced at a keyboard — a fixture written by hand would only
+> prove the two implementations share an author's assumptions, which is the one
+> thing this gate is not for. It needs somebody to play the game with
+> `ACL_RECORD` set.
+
 > **Gate G1 — parity of the reader.**
 > For every recorded frame, the Rust reader's `AmongUsState` must equal the
 > Electron reader's, field for field, with float positions within 1e-6.
@@ -734,10 +750,20 @@ replaying those tuples through the Rust function. Every tuple must match.
 
 `cpal` device enumeration and streams, `rubato` resampling pinned `=5.0.0` and
 used through `process_into_buffer` only, APM wiring, the VAD port, `opus` encode
-with FEC and DTX, pinned `=0.3.1`.
+with FEC and DTX, pinned `=0.4.0`.
+
+> **Corrected 2026-08-24: `=0.3.1` is not usable.** That pin binds libopus through
+> `audiopus_sys`, which carries RUSTSEC-2026-0150 — implicitly unmaintained, last commit
+> five years old, and pinning a CMake version that CMake 4.0 refuses, so the build breaks
+> for anyone with a current one. `cargo-deny` fails on it, which is the gate doing its job.
+> `opus` 0.4.0, released 2026-08-23, binds through `opusic-sys` instead and builds clean.
+> The pin stands as a pin; only the number moved.
 
 The APM is `sonora` 0.2.0, behind the trait boundary the architecture already
-specifies for it, conditional on the green i686 build P1+ ran and G2 confirms.
+specifies for it. The condition attached to this — a green `i686` build, run by
+P1+ and confirmed by G2 — lapsed on 2026-08-24 with the target itself. The trait
+boundary is what matters now, because LiveKit's `libwebrtc` binding is reachable
+again and P3 should weigh it against `sonora` before committing.
 `webrtc-audio-processing` `=2.1.0` stays in the tree as a **Linux-only test
 baseline**, not as the shipping canceller: it does not build on either Windows
 target, PR #102 "Support MSVC targets" has been open and unmerged since
@@ -786,7 +812,58 @@ harmful. Then implement the receive half: `decode(input, output, fec: true)` on
 packet *N+1* to reconstruct *N*, driven by the jitter buffer's loss signal.
 Whether `neteq` 0.9.1 can signal loss to the decoder in a way that permits
 out-of-order FEC recovery is not established anywhere in its documented surface;
-that is why it is a G2 criterion. No bitrate ladder — below roughly 16–20 kbps
+that is why it is a G2 criterion.
+
+> **Answered 2026-08-24: it cannot.** `neteq` 0.9.1's `AudioDecoder` trait is
+> `sample_rate`, `channels` and `decode(&[u8])` — there is no way to say "this payload is
+> the next packet, decode the redundant copy of the previous one out of it". Its source
+> does not mention forward error correction at all; it fills a gap from its own expansion
+> in `expand.rs` rather than by asking the decoder.
+>
+> So recovery has to be arranged by whatever owns the packet sequence, and the fixed
+> buffer this item already required as a baseline is where it lives:
+> `acl-audio::jitter`. It holds packet *N+1* before giving up on *N*, which is what makes
+> the recovery possible at all, and it reports per frame whether the audio came from a
+> packet, from the redundancy, from concealment or from nothing — so the impairment
+> harness can say *how* a stream survived rather than only that it did.
+>
+> That does not rule `neteq` out. It rules out `neteq` alone meeting criterion 5, which
+> means the comparison the item asks for is now between a buffer that can recover and one
+> that cannot, and the measurement has to say what that is worth.
+>
+> **Sending half done, 2026-08-24.** `acl-audio::fec` turns a receiver report into
+> `OPUS_SET_PACKET_LOSS_PERC`: it rises quickly, falls slowly, holds a dead band so a
+> settled call stops re-planning libopus's bit allocation every interval, and clamps at 25%
+> so a peer that lies degrades its own audio and nobody else's. `idle()` decays when reports
+> stop, or a peer that left would be paid for until the call ended.
+>
+> **The `ReceiverReportInterceptor` wiring is deliberately not written, and this is the
+> decision rather than a gap.** `rtc-rtcp` has a stable 0.20.3 matching the `webrtc =0.20.3`
+> that §7 proposes, so it *could* be taken today. It should not be: §4.6 item 1 schedules a
+> three-week spike to choose between `webrtc` and `str0m`, and taking a dependency on one
+> of them to save a single call would make that choice by accident, in the wrong phase, for
+> the wrong reason. The seam is `observe_fraction_lost(u8)`, and its argument is RFC 3550
+> §6.4.1's `fraction lost` — a definition no crate choice changes. Whichever arm the spike
+> picks, the wiring is one line at the point the interceptor delivers a report.
+>
+> Criterion 5's Chromium sender is phase 4 for the same reason: there is no transport to
+> put a Chromium peer on the other end of.
+>
+> **Building the join found that the receiving half had been measuring nothing.**
+> `decode_lost` succeeds whether or not the packet it is handed carries a redundant copy:
+> given none it produces concealment and returns the same frame size. The buffer counted
+> those successes as recoveries, so it reported *identical* numbers for a sender that had
+> been told about loss and one that never had -- 46 frames either way -- which is the exact
+> failure this item exists to prevent, wearing the label of the fix. `codec::has_redundancy`
+> asks `opus_packet_has_lbrr` instead. With the loop closed: 37 recovered, 22 gaps. With it
+> open: 0 recovered, 59 gaps.
+>
+> The corrected classification also exposed a threshold nothing in the plan anticipated:
+> **below about 5% reported loss libopus emits no usable redundancy at all.** At 1% and 2%
+> the recovery count is zero, not small. That is defensible -- concealment holds quality at
+> 0.995 and 0.984 there -- but it means the controller's output between 1% and 4% is intent
+> without effect, and no reading of the impairment table should attribute those rows to
+> error correction. No bitrate ladder — below roughly 16–20 kbps
 libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
 loop exactly when it is needed.
 
@@ -807,8 +884,29 @@ Run the same impairments through the Electron client for reference numbers.
 >    recovers Opus in-band FEC — `decode(..., fec: true)` on the following
 >    packet, driven by the jitter buffer's loss signal — and `getStats()` on the
 >    Electron peer shows `fecPacketsSent` climbing in both directions.
-> 6. A green `cargo build --target i686-pc-windows-msvc` of whichever APM is
->    shipping, and its test suite passing there.
+> 6. ~~A green `cargo build --target i686-pc-windows-msvc` of whichever APM is
+>    shipping, and its test suite passing there.~~ **Struck 2026-08-24.** The
+>    `i686` target existed only for the injection path, which no longer exists.
+>    The criterion is not weakened, it is unreachable: there is no such build to
+>    be green. This also removes the constraint that ruled `libwebrtc` out, so
+>    the APM choice in §4.5 is open again on wider grounds than when it was
+>    made.
+>
+>    **Measured 2026-08-24:** `libwebrtc` 0.3.45 builds, links and runs on
+>    `x86_64-pc-windows-msvc`, so it really is a live option and not a
+>    theoretical one. But `webrtc-sys-build` downloads a prebuilt 86 MB
+>    `webrtc.lib` from LiveKit rather than compiling it — 493 MB in the build
+>    directory — and this project has spent the same week going the other way,
+>    stripping prebuilt binaries out of `native/uiohook-napi` so everything is
+>    compiled from source. That is the axis the choice now turns on, not echo
+>    return loss. See `experiments/README.md`.
+>
+>    **Decided 2026-08-24: sonora.** The A/B was run — same far end, same echo
+>    path, both cancellers — and it came out 11.6 dB against 11.3 dB, which is to
+>    say no difference at all. That settles the only thing that was in doubt,
+>    which was whether sonora is worse. It is not, so the decision falls to the
+>    prebuilt blob, and to the fact that `webrtc-sys` does not link in release on
+>    Windows without forcing the static CRT on the whole binary.
 >
 > Criterion 3's 30 ms latency budget and the NACK target-delay decision are made
 > **jointly**, not independently: a buffer deep enough to make a retransmission
@@ -855,6 +953,32 @@ mapping — and the Socket.IO client that used to be item 1 has moved to P1+.
    pattern becomes a generation counter or an atomic detached flag inside the
    handler. That is where offer glare and stuck-in-`new` come back.
 3. The peer mesh: join, leave, offer glare, orphan cleanup, rebuild-on-failure.
+
+   **Relay discipline, learned the expensive way in 1.0.4** (§5.3). A mesh's demand
+   for relay reservations is quadratic in the lobby, and a relay grants a finite
+   number of them: the production one was granting twelve, shared across every
+   player, and the Electron client was asking for three per connection. One player
+   exhausted the server. Four rules follow, and none of them is obvious from the
+   `webrtc` crate's API:
+
+   - **One allocation per connection.** A server that advertises the same relay
+     twice must not produce two.
+   - **A refusal is temporary.** RFC 5766's 486 means the relay is reachable and
+     full; the reservations come back when somebody leaves. Retry, and never
+     report it as a network problem at this end.
+   - **Never force relay-only without a relay candidate in hand.** It leaves the
+     connection with no candidates at all, so a peer that sometimes connected
+     directly stops connecting ever. This is the escalation that makes things
+     worse, and it is the one a counter-based rule reaches for.
+   - **Do not give up.** Six attempts and then silence for the rest of the round
+     was the old behaviour, and the obstacle is frequently not permanent.
+
+   Rebuild-on-failure is also not the first response to trouble. A connection that
+   goes `disconnected` should get an ICE restart after a few seconds -- it keeps
+   the connection, its tracks and its DTLS session -- and only a `failed` should
+   cost a full rebuild. Measure that the restart really renegotiates on whatever
+   stack this lands on; a repair that quietly does nothing is indistinguishable
+   from the fault.
 4. `validateClientPeerConfig` port — its tests come across unchanged.
 
 **The four 1.0.0 connection bugs become named regression tests**, because a port
@@ -933,15 +1057,19 @@ over the IPC and never fetches or decodes an image, so no image decoder enters
 the elevated process. Port the UIPI access check too; it is the difference
 between "the overlay is broken" and an accurate message about elevation.
 
-**The keyboard hook stays a poll.** `native/node-keyboard-watcher` is a 60 ms
-`GetAsyncKeyState` loop on Windows, aliased to `XQueryKeymap` on Linux. There is
-no `SetWindowsHookEx` anywhere in the current tree, so a `WH_KEYBOARD_LL` hook is
-not a port of anything: it is new code that puts a desktop-wide latency
-dependency in front of every keystroke, gets silently unhooked if a callback
-exceeds `LowLevelHooksTimeout`, and buys nothing over a poll that already works
-and intercepts nothing. One free Linux improvement while porting it: the current
-code opens and closes the X11 display on every key check — open one connection at
-startup.
+**The keyboard hook stays a poll**, though the reason has changed. The Electron
+client used to poll `GetAsyncKeyState` every 60 ms through
+`native/node-keyboard-watcher`; that module carried no licence and was replaced by
+`native/uiohook-napi`, which installs `SetWindowsHookEx(WH_KEYBOARD_LL)` and
+`WH_MOUSE_LL`. So `SetWindowsHookEx` is now in the tree, and a port that used one
+would be porting something real.
+
+It should not. A desktop-wide hook is a latency dependency in front of every
+keystroke on the machine and is silently unhooked if a callback exceeds
+`LowLevelHooksTimeout`; the Electron client accepted that to escape an unlicensed
+dependency, which is not a constraint the port has. `GetAsyncKeyState` is a direct
+call and needs no crate. See §6.1 for what libuiohook does to make its hook
+tolerable, and for the mouse-motion patch the client carries.
 
 Also here: exclusive-fullscreen detection, because with Fullscreen Optimizations
 off a layered window will not appear at all and the alternative is a swapchain

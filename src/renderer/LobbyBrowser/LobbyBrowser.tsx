@@ -10,7 +10,7 @@ import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 import Button from '@mui/material/Button';
 import { ipcRenderer } from 'electron';
-import { IpcHandlerMessages, IpcMessages } from '../../common/ipc-messages';
+import { IpcMessages } from '../../common/ipc-messages';
 import { io, type Socket } from 'socket.io-client';
 import i18next from 'i18next';
 import { Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Tooltip } from '@mui/material';
@@ -53,17 +53,6 @@ const useStyles = makeStyles()({
 		maxHeight: 'calc(100vh - 130px)',
 	},
 });
-
-const servers: {
-	[server: string]: string;
-} = {
-	// '50.116.1.42': 'North America',
-	// '172.105.251.170': 'Europe',
-	// '139.162.111.196': 'Asia',
-	'192.241.154.115': 'skeld.net',
-	'154.16.67.100': 'Modded (North America)',
-	'78.47.142.18': 'Modded (Europe)',
-};
 
 function sortLobbies(a: PublicLobby, b: PublicLobby) {
 	if (a.gameState === GameState.LOBBY && b.gameState !== GameState.LOBBY) {
@@ -131,12 +120,6 @@ export default function LobbyBrowser({ t }: LobbyBrowserProps) {
 		s.on('connect', () => {
 			s.emit('lobbybrowser', true);
 		});
-
-		const onJoinLobbyError = (_event: Electron.IpcRendererEvent, code: string, server: string) => {
-			console.log('ERROR: ', code);
-			setCode(`${code}  ${servers[server] ? `on region ${servers[server]}` : `\n Custom Server: ${server}`}`);
-		};
-		ipcRenderer.on(IpcHandlerMessages.JOIN_LOBBY_ERROR, onJoinLobbyError);
 		const secondPassed = setInterval(() => {
 			forceRender({});
 		}, 1000);
@@ -145,7 +128,6 @@ export default function LobbyBrowser({ t }: LobbyBrowserProps) {
 			// the first render, which is still undefined, so the socket was never closed.
 			s.emit('lobbybrowser', false);
 			s.close();
-			ipcRenderer.off(IpcHandlerMessages.JOIN_LOBBY_ERROR, onJoinLobbyError);
 			clearInterval(secondPassed);
 		};
 	}, []);
@@ -241,7 +223,9 @@ export default function LobbyBrowser({ t }: LobbyBrowserProps) {
 																	(state: number, codeOrError: string, server: string, _publicLobby: PublicLobby) => {
 																		if (state === 0) {
 																			setCode(`${t('lobbybrowser.code')}: ${codeOrError} \n Region: ${server}`);
-																			// ipcRenderer.send(IpcHandlerMessages.JOIN_LOBBY, codeOrError, server);
+																			// This once asked the main process to write the lobby code
+																			// into the game so it joined by itself. The write path was
+																			// removed on 2026-08-24 and the code is shown instead.
 																		} else {
 																			setCode(`Error: ${codeOrError}`);
 																		}

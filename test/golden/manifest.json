@@ -1,0 +1,550 @@
+{
+	"sampleRate": 48000,
+	"vectors": [
+		{
+			"name": "input__noise__0.5s",
+			"node": "input",
+			"input": "noise",
+			"config": {
+				"seconds": 0.5
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "9790a966040b1a1bc7ff2224b09654dc8574ead5d3590e35af99c35fd5dcf531"
+		},
+		{
+			"name": "gain__noise__value-0",
+			"node": "gain",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"value": 0
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "3b3aa3fc9afdf348981d586edc71404a5b78ed4deae8914916a4d302f55889f6"
+		},
+		{
+			"name": "gain__noise__value-0.5",
+			"node": "gain",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"value": 0.5
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "765eb5978d1fff69d637bf8196bb472ae45382670f5f128b532d64262714d885"
+		},
+		{
+			"name": "gain__noise__value-0.8",
+			"node": "gain",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"value": 0.8
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "ebad54ff195a85cab722c5db022020e2e30cc06b6d1bc8dff9bea583e0f29f94"
+		},
+		{
+			"name": "gain__noise__value-1",
+			"node": "gain",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"value": 1
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "9790a966040b1a1bc7ff2224b09654dc8574ead5d3590e35af99c35fd5dcf531"
+		},
+		{
+			"name": "input__impulse__0.5s",
+			"node": "input",
+			"input": "impulse",
+			"config": {
+				"seconds": 0.5
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "7dc1da4994641ab2061ce3362cf773d8eaf9fe3a9f599e303e86e949aa5d71c0"
+		},
+		{
+			"name": "biquad__impulse__type-lowpass_frequency-350_Q-1",
+			"node": "biquad",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 350,
+				"Q": 1
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "a79dde3cd70d5ed34752553d325b7ff0cf9e1aeffb8d075f637816d171ac6c8b"
+		},
+		{
+			"name": "input__sweep__0.5s",
+			"node": "input",
+			"input": "sweep",
+			"config": {
+				"seconds": 0.5
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "c7466ab97265cc5fef2999debbddbd26e7ea70a8383d827bb93a42b40f07193d"
+		},
+		{
+			"name": "biquad__sweep__type-lowpass_frequency-350_Q-1",
+			"node": "biquad",
+			"input": "sweep",
+			"from": "input__sweep__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 350,
+				"Q": 1
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "b60afabdc1c195df1905a07f0919607877af868e8ab92bdb30694b9a3d9d371f"
+		},
+		{
+			"name": "biquad__noise__type-lowpass_frequency-350_Q-1",
+			"node": "biquad",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 350,
+				"Q": 1
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "11578ebaa4a44b00da39b80fdd135a4727c8e836e95bf602100f98a2c440d928"
+		},
+		{
+			"name": "biquad__impulse__type-lowpass_frequency-2000_Q-20",
+			"node": "biquad",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2000,
+				"Q": 20
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "5b18ab8ad93d9c8fdf864992ecc83143771c155d7e9895b5ba00ad6e2d4e55e8"
+		},
+		{
+			"name": "biquad__sweep__type-lowpass_frequency-2000_Q-20",
+			"node": "biquad",
+			"input": "sweep",
+			"from": "input__sweep__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2000,
+				"Q": 20
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "3417571199312ee8beb3c14b564c5cf0c1f0a84ef2e6e8ca3eea65cc03ea41e7"
+		},
+		{
+			"name": "biquad__noise__type-lowpass_frequency-2000_Q-20",
+			"node": "biquad",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2000,
+				"Q": 20
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "2e0e1c658883ebae6aea2d8bd05685cc735c71e7bd0dc8ba4f2bf2a3bd2bdb98"
+		},
+		{
+			"name": "biquad__impulse__type-lowpass_frequency-2300_Q--15",
+			"node": "biquad",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2300,
+				"Q": -15
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "77f46a20daa42dc86b33ae89101cc151db5d6ecdb69c53af6b066cd1ac8ccf24"
+		},
+		{
+			"name": "biquad__sweep__type-lowpass_frequency-2300_Q--15",
+			"node": "biquad",
+			"input": "sweep",
+			"from": "input__sweep__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2300,
+				"Q": -15
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "c0c9881c56635e1a87ccc6928b3539d9e5901bc918adab6a114a30ac75f28934"
+		},
+		{
+			"name": "biquad__noise__type-lowpass_frequency-2300_Q--15",
+			"node": "biquad",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"type": "lowpass",
+				"frequency": 2300,
+				"Q": -15
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "54eb5ff55378dff7038138e09af0c29780c468f89d0407a23210b6ad5774c60a"
+		},
+		{
+			"name": "biquad__impulse__type-highpass_frequency-1000_Q-10",
+			"node": "biquad",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"type": "highpass",
+				"frequency": 1000,
+				"Q": 10
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "71967d809c3cc8024842096d648e88166e244710b61dd8fdf54c4c60ca081a10"
+		},
+		{
+			"name": "biquad__sweep__type-highpass_frequency-1000_Q-10",
+			"node": "biquad",
+			"input": "sweep",
+			"from": "input__sweep__0.5s",
+			"config": {
+				"type": "highpass",
+				"frequency": 1000,
+				"Q": 10
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "112189e864013e79e0d33684f1b88b203b10f8561927b4da75b0794c43a438cc"
+		},
+		{
+			"name": "biquad__noise__type-highpass_frequency-1000_Q-10",
+			"node": "biquad",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"type": "highpass",
+				"frequency": 1000,
+				"Q": 10
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "12196d06d9540c2a4d4d610ba66d3da2b7a07a2416ceb0b2bd7b8bf7d60fee63"
+		},
+		{
+			"name": "panner__impulse__x-0_y-0_z--0.5",
+			"node": "panner",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"x": 0,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "91597bd4a46b611a807052c3ff54555b2eb434c8d1177525513d3b8dd97d8c88"
+		},
+		{
+			"name": "panner__noise__x-0_y-0_z--0.5",
+			"node": "panner",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"x": 0,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "6fd3c858613d2d04f9b27a538d0f12f1d7b9c8bab72e4a6f646df0cb9571f9c5"
+		},
+		{
+			"name": "panner__impulse__x-1_y-0_z--0.5",
+			"node": "panner",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"x": 1,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "89b5af6ceb04550e4d427d55cd7c11f68890a0623082a5ffe9b9f8a2661fdd64"
+		},
+		{
+			"name": "panner__noise__x-1_y-0_z--0.5",
+			"node": "panner",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"x": 1,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "4e1b756a982c34717713b486a3b4c8688a44b04a4c5920a5d69155cd8092c6fc"
+		},
+		{
+			"name": "panner__impulse__x--1_y-0_z--0.5",
+			"node": "panner",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"x": -1,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "7acac8f3f53c0db5d4fd75fb1c0dd9f9546091cbf636de36c8f091aa38d092a8"
+		},
+		{
+			"name": "panner__noise__x--1_y-0_z--0.5",
+			"node": "panner",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"x": -1,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "0b86f199ac51470c12c6b59797de55de715ffc6c29505b61bb18ebc7fa5e3282"
+		},
+		{
+			"name": "panner__impulse__x-3_y-3_z--0.5",
+			"node": "panner",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"x": 3,
+				"y": 3,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "6112386a7f5caca15269c2b078a4176919e077b8636500fc66e3df6722902f12"
+		},
+		{
+			"name": "panner__noise__x-3_y-3_z--0.5",
+			"node": "panner",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"x": 3,
+				"y": 3,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "bdbd53f2f9af76050e994f61611786d14c025af12b266fba762b7b11f9d3760c"
+		},
+		{
+			"name": "panner__impulse__x-5.32_y-0_z--0.5",
+			"node": "panner",
+			"input": "impulse",
+			"from": "input__impulse__0.5s",
+			"config": {
+				"x": 5.32,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "a286cd3f10a7f0c9382cfe7b2dd392b51b65f7c1286712e5289fd2ce6c9918dc"
+		},
+		{
+			"name": "panner__noise__x-5.32_y-0_z--0.5",
+			"node": "panner",
+			"input": "noise",
+			"from": "input__noise__0.5s",
+			"config": {
+				"x": 5.32,
+				"y": 0,
+				"z": -0.5
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "dd4d4f3af3573e69010c07444ee4f4ad1dc351029dbd73854a5227bddef77a59"
+		},
+		{
+			"name": "impulse-response",
+			"node": "impulse-response",
+			"input": "reverb.ogx",
+			"config": {
+				"sampleRate": 48000
+			},
+			"channels": 2,
+			"frames": 144892,
+			"sha256": "844aa6a5e99d21a809fad798c4fc3060870fcbb1fa32a9110d01090583539a0f"
+		},
+		{
+			"name": "input__impulse__2s",
+			"node": "input",
+			"input": "impulse",
+			"config": {
+				"seconds": 2
+			},
+			"channels": 1,
+			"frames": 96000,
+			"sha256": "6c4237db3e71fafc6e357d3d9e3f5a520d547b5b6e0f9bf597543702714ab979"
+		},
+		{
+			"name": "convolver__impulse__normalize-true",
+			"node": "convolver",
+			"input": "impulse",
+			"from": "input__impulse__2s",
+			"config": {
+				"normalize": true
+			},
+			"channels": 2,
+			"frames": 96000,
+			"sha256": "d0a3dcba66ea964a1ec4914107d53b33931e65f8447928641262471f14aa767d"
+		},
+		{
+			"name": "input__recorded__2s",
+			"node": "input",
+			"input": "recorded",
+			"config": {
+				"seconds": 2
+			},
+			"channels": 1,
+			"frames": 96000,
+			"sha256": "fb0f7710dd62fc34f5dfda7abf5e10d6b4335409adbde9bc2b2ca6739da0cc46"
+		},
+		{
+			"name": "convolver__recorded__normalize-true",
+			"node": "convolver",
+			"input": "recorded",
+			"from": "input__recorded__2s",
+			"config": {
+				"normalize": true
+			},
+			"channels": 2,
+			"frames": 96000,
+			"sha256": "9294edf0eb7d953c7706605d21d4c3403cc5cc22e28a8e7cea556bd9ce218747"
+		},
+		{
+			"name": "input__noise__0.512s",
+			"node": "input",
+			"input": "noise",
+			"config": {
+				"seconds": 0.512
+			},
+			"channels": 1,
+			"frames": 24576,
+			"sha256": "1d0260347a9363fe890184c6689261baf5cc54fc8ea5253f01af71a122b16013"
+		},
+		{
+			"name": "analyser__noise__fftSize-1024_smoothing-0.2",
+			"node": "analyser",
+			"input": "noise",
+			"from": "input__noise__0.512s",
+			"config": {
+				"fftSize": 1024,
+				"smoothingTimeConstant": 0.2
+			},
+			"channels": 1,
+			"frames": 512,
+			"sha256": "537e38e8acf9e0745a7dd1c6e0a310458131cc431bd83f8f39eb4dc425d17733"
+		},
+		{
+			"name": "input__sweep__0.512s",
+			"node": "input",
+			"input": "sweep",
+			"config": {
+				"seconds": 0.512
+			},
+			"channels": 1,
+			"frames": 24576,
+			"sha256": "362109d2a2d46d916b51084abdc86bb434fc6b3b4353c76c444d565749fcd46f"
+		},
+		{
+			"name": "analyser__sweep__fftSize-1024_smoothing-0.2",
+			"node": "analyser",
+			"input": "sweep",
+			"from": "input__sweep__0.512s",
+			"config": {
+				"fftSize": 1024,
+				"smoothingTimeConstant": 0.2
+			},
+			"channels": 1,
+			"frames": 512,
+			"sha256": "f028858384f7690719d5ac4516a1908a3b8eca7b93ce2f74ac6d4ed889522df8"
+		},
+		{
+			"name": "analyser__noise__fftSize-2048_smoothing-0.8",
+			"node": "analyser",
+			"input": "noise",
+			"from": "input__noise__0.512s",
+			"config": {
+				"fftSize": 2048,
+				"smoothingTimeConstant": 0.8
+			},
+			"channels": 1,
+			"frames": 1024,
+			"sha256": "0f495b12fe0e967ade6cc207cad352ec6e2252579757772c59005d05475c840b"
+		},
+		{
+			"name": "analyser__sweep__fftSize-2048_smoothing-0.8",
+			"node": "analyser",
+			"input": "sweep",
+			"from": "input__sweep__0.512s",
+			"config": {
+				"fftSize": 2048,
+				"smoothingTimeConstant": 0.8
+			},
+			"channels": 1,
+			"frames": 1024,
+			"sha256": "4dbb275b5b40f77718380bbfca2a6e6d2bcefb0efd85d45b4d351ca3ed3ba7c9"
+		},
+		{
+			"name": "input__recorded__0.5s",
+			"node": "input",
+			"input": "recorded",
+			"config": {
+				"seconds": 0.5
+			},
+			"channels": 1,
+			"frames": 24000,
+			"sha256": "9ff88a8f0496cbc246a3930a04c7f0702728a5d2fe996ae45a360f6ca130e752"
+		},
+		{
+			"name": "chain__recorded__muffle-lowpass-2000_gain-0.5_x-1",
+			"node": "chain",
+			"input": "recorded",
+			"from": "input__recorded__0.5s",
+			"config": {
+				"muffle": "lowpass-2000",
+				"gain": 0.5,
+				"x": 1
+			},
+			"channels": 2,
+			"frames": 24000,
+			"sha256": "191bba4e71519d4caefac50a62c08c6f48e727cb7499c72653e7d7687ca8b48c"
+		}
+	]
+}

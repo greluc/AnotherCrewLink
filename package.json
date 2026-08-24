@@ -1,7 +1,7 @@
 {
 	"name": "anothercrewlink",
 	"productName": "AnotherCrewLink",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"license": "GPL-3.0-or-later",
 	"description": "Free, open, Among Us proximity voice chat",
 	"repository": {
@@ -30,14 +30,15 @@
 		"format": "biome format --write src electron.vite.config.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"golden": "electron scripts/golden-vectors/main.mjs"
 	},
 	"dependencies": {
 		"electron-overlay-window": "file:native/electron-overlay-window",
 		"electron-store": "^11.0.2",
 		"electron-updater": "^6.8.9",
 		"memoryjs": "file:native/memoryjs",
-		"node-keyboard-watcher": "file:native/node-keyboard-watcher",
+		"uiohook-napi": "file:native/uiohook-napi",
 		"registry-js": "^1.16.1"
 	},
 	"devDependencies": {
@@ -85,7 +86,7 @@
 	},
 	"allowScripts": {
 		"file:../native/memoryjs": true,
-		"file:../native/node-keyboard-watcher": true,
+		"file:../native/uiohook-napi": true,
 		"file:../native/electron-overlay-window": true,
 		"registry-js@1.16.1": true,
 		"esbuild@0.25.12": true,

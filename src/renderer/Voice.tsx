@@ -15,9 +15,18 @@ import {
 	type VoiceState,
 } from '../common/AmongUsState';
 import Peer, { type SignalData } from './peer';
-import { initiatesReconnect, reconnectDelay, shouldGiveUp } from './reconnectPolicy';
+import {
+	RECONNECT_RELAY_AFTER,
+	initiatesReconnect,
+	reconnectDelay,
+	shouldUseRelay,
+	RECONNECT_MAX_ATTEMPTS,
+	RECONNECT_SLOW_DELAY,
+	shouldGiveUp,
+} from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
+import { isVoiceRecording, noteVoice, startVoiceRecording } from './voiceRecorder';
 import type { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
 import { IpcRendererMessages, IpcMessages, IpcOverlayMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import Typography from '@mui/material/Typography';
@@ -41,6 +50,8 @@ import adapter from 'webrtc-adapter';
 import type { VADOptions } from './vad';
 import { pushToTalkOptions } from './settings/SettingsStore';
 import { poseCollide } from '../common/ColliderMap';
+import { hasRelay, isRelayUrl, withTcpRelays, withTransportPolicy } from './iceServers';
+import { routeSignal } from './signalRoute';
 
 console.log(adapter.browserDetails.browser);
 
@@ -60,6 +71,14 @@ interface VadNode {
 }
 
 interface AudioNodes {
+	/**
+	 * The context every node below lives in.
+	 *
+	 * One per peer, which is wasteful but works; what did not work is that nothing ever
+	 * closed them. Each holds an audio thread and its buffers for as long as the process
+	 * runs, so a session that saw thirty players over an evening kept thirty of them.
+	 */
+	context: AudioContext;
 	dummyAudioElement: HTMLAudioElement;
 	audioElement: HTMLAudioElement;
 	gain: GainNode;
@@ -122,6 +141,7 @@ interface ClientPeerConfig {
 }
 
 const DEFAULT_ICE_CONFIG: RTCConfiguration = {
+	bundlePolicy: 'max-bundle',
 	iceTransportPolicy: 'all',
 	iceServers: [
 		{
@@ -262,11 +282,30 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const [socketClients, setSocketClients] = useState<SocketClientMap>({});
 	const [playerConfigs] = useState<playerConfigMap>(settingsRef.current.playerConfigMap);
 	const socketClientsRef = useRef(socketClients);
-	const [peerConnections, setPeerConnections] = useState<PeerConnections>({});
+	// A ref, not state, and deliberately. Nothing renders from this map: it is how the
+	// socket handlers find the connection a signal belongs to, and those handlers are
+	// registered once, in an effect with no dependencies.
+	//
+	// It was `useState`, and it worked only by accident. The updater mutated the object and
+	// returned it rather than building a new one, so React never saw a change and never
+	// replaced the object -- which meant the empty object those handlers captured on the
+	// first render stayed the live map. Anybody correcting that to the immutable update
+	// React actually asks for would have severed every one of those closures at once, and
+	// the symptom would have been connections that never complete: a network bug, to look
+	// at, with nothing in the diff to suggest otherwise.
+	const peerConnections = useRef<PeerConnections>({});
 	// Last reason a player was inaudible, per client id, so the log records the change
 	// rather than the same line on every pass. See describeSilence.
 	const silenceReason = useRef<Record<number, string>>({});
 	// Pending rebuild of a peer connection that failed, and how many times it has been
+	// Peers whose direct path has failed often enough to be worth relaying instead. Kept
+	// per socket id because the answering end builds its connection from an incoming offer
+	// and has to agree about the policy.
+	const relayedPeers = useRef<Record<string, boolean>>({});
+	/// How many relay candidates each peer's last failed connection gathered.
+	const relayCandidatesSeen = useRef<Record<string, number>>({});
+	/// Peers whose relay answered but had no reservation left to give.
+	const relayWasFull = useRef<Record<string, boolean>>({});
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 	const reconnectAttempts = useRef<Record<string, number>>({});
@@ -306,8 +345,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			// round leaves the player silent if the second step throws.
 			gain.connect(effectNode);
 			effectNode.connect(destination);
-			gain.disconnect(destination);
-			return true;
 		} catch {
 			console.log('error with applying effect: ', player.name, effectNode);
 			try {
@@ -317,6 +354,20 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			}
 			return false;
 		}
+
+		// Separately, and tolerant of already being gone. Another effect may hold this
+		// path already -- the reverb and the muffle can both be live at once -- and the
+		// specification requires `disconnect` to throw for a pair that is not connected.
+		// Counting that as a failure is what corrupted the graph: the catch above put the
+		// direct path back while both effects stayed connected, so the player was summed
+		// three times and the flag said the effect had not been applied, which stopped it
+		// ever being taken out again.
+		try {
+			gain.disconnect(destination);
+		} catch {
+			/* the direct path was already replaced by another effect */
+		}
+		return true;
 	}
 
 	function restoreEffect(gain: AudioNode, effectNode: AudioNode, destination: AudioNode, player: Player) {
@@ -329,7 +380,52 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			console.log('error with applying effect: ', player.name, effectNode);
 		}
 	}
+	/**
+	 * The pan position the last decision applied, or null if it returned before doing so.
+	 *
+	 * Written by the decision at the point it reaches the panner, because that value
+	 * cannot be recovered afterwards: see the note there.
+	 */
+	let appliedPan: [number, number] | null = null;
+
+	/**
+	 * The voice decision, with its answer written down when recording.
+	 *
+	 * Gate G2's second criterion compares the Rust `voice_params` against this on every
+	 * recorded tuple, and the comparison needs both halves. The answer is not the return
+	 * value alone: pan position, the muffle's settings and whether reverb is in the path
+	 * are all written onto live nodes. They are read back off those nodes here rather
+	 * than captured inside the decision, which leaves the decision untouched and records
+	 * what actually reached the graph rather than what the code meant to put there.
+	 */
 	function calculateVoiceAudio(
+		state: AmongUsState,
+		settings: ISettings,
+		me: Player,
+		other: Player,
+		audio: AudioNodes
+	): number {
+		appliedPan = null;
+		const gain = calculateVoiceAudioInner(state, settings, me, other, audio);
+		if (isVoiceRecording()) {
+			noteVoice(state, settings, lobbySettings, me, other, maxDistanceRef.current, impostorRadioClientId.current, {
+				gain,
+				panX: appliedPan ? appliedPan[0] : null,
+				panY: appliedPan ? appliedPan[1] : null,
+				muffle: audio.muffleConnected
+					? {
+							type: audio.muffle.type,
+							frequency: audio.muffle.frequency.value,
+							q: audio.muffle.Q.value,
+						}
+					: null,
+				reverb: audio.reverbConnected === true,
+			});
+		}
+		return gain;
+	}
+
+	function calculateVoiceAudioInner(
 		state: AmongUsState,
 		settings: ISettings,
 		me: Player,
@@ -491,6 +587,13 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			if (!audio.muffleConnected) {
 				audio.muffleConnected = applyEffect(gain, muffle, destination, other);
 			}
+			// Set every time, because the impostor radio borrows this same node and leaves
+			// it a highpass. Nothing put it back: the only other assignment to `type` runs
+			// once, where the node is created. So one use of the radio turned every later
+			// vent and camera into a highpass at the lowpass corner frequency, stripping
+			// out everything below 2 kHz -- which is where speech lives -- for the rest of
+			// that player's session.
+			muffle.type = 'lowpass';
 			// The two distance checks that read maxdistance both run earlier, so writing it
 			// here had no effect. Left out rather than moved: shortening the hearing range
 			// for cameras is an audible change that needs testing in game to get right.
@@ -508,11 +611,28 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			panPos = [0, 0];
 		}
 
+		// Noted here rather than read back afterwards. `setValueAtTime` *schedules* a
+		// value: `positionX.value` keeps returning the previous one until the audio thread
+		// reaches the next render quantum, so reading it after the call records the frame
+		// before. Being null when this line is not reached is the other half of the
+		// signal — the three early returns leave the panner alone, and a leftover position
+		// is not an answer.
+		appliedPan = [panPos[0], panPos[1]];
 		pan.positionX.setValueAtTime(panPos[0], audioContext.currentTime);
 		pan.positionY.setValueAtTime(panPos[1], audioContext.currentTime);
 		pan.positionZ.setValueAtTime(-0.5, audioContext.currentTime);
 		return endGain;
 	}
+
+	/**
+	 * The handle for the mobile-host announcement, so it can be stopped.
+	 *
+	 * It used to reschedule itself unconditionally and nothing ever cancelled it: leaving a
+	 * lobby left it running, and coming back started a second one beside the first. Every
+	 * cycle of the voice effect added another announcer, all emitting on the same socket
+	 * five seconds apart, for as long as the app stayed open.
+	 */
+	const mobileNotifyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	function notifyMobilePlayers() {
 		if (
@@ -525,7 +645,14 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				data: { mobileHostInfo: { isHostingMobile: true, isGameHost: hostRef.current.isHost } },
 			});
 		}
-		setTimeout(() => notifyMobilePlayers(), 5000);
+		mobileNotifyTimer.current = setTimeout(() => notifyMobilePlayers(), 5000);
+	}
+
+	function stopNotifyingMobilePlayers() {
+		if (mobileNotifyTimer.current !== undefined) {
+			clearTimeout(mobileNotifyTimer.current);
+			mobileNotifyTimer.current = undefined;
+		}
 	}
 
 	function disconnectAudioHtmlElement(element: HTMLAudioElement) {
@@ -552,6 +679,12 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			audioElements.current[peer].gain.disconnect();
 			// if (audioElements.current[peer].reverbGain != null) audioElements.current[peer].reverbGain?.disconnect();
 			if (audioElements.current[peer].reverb != null) audioElements.current[peer].reverb?.disconnect();
+			// The context goes with the nodes. Closing it releases the audio thread and the
+			// buffers behind it; disconnecting the nodes alone does not, and this ran once
+			// per player who ever left.
+			audioElements.current[peer].context.close().catch((error: unknown) => {
+				console.warn('Could not close the audio context for', peer, error);
+			});
 			delete audioElements.current[peer];
 		}
 	}
@@ -573,6 +706,12 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			delete reconnectTimers.current[peer];
 		}
 		delete reconnectAttempts.current[peer];
+		// The relay choice goes with the peer, not with the attempt counter: it is cleared
+		// here because this runs when the peer has left, and kept across a successful
+		// reconnect because the relay is what made that connection work.
+		delete relayedPeers.current[peer];
+		delete relayCandidatesSeen.current[peer];
+		delete relayWasFull.current[peer];
 	}
 
 	function cancelAllReconnects() {
@@ -581,21 +720,22 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		}
 		reconnectTimers.current = {};
 		reconnectAttempts.current = {};
+		// A new lobby is a new set of paths between people, so nothing is assumed about it.
+		relayedPeers.current = {};
+		relayCandidatesSeen.current = {};
+		relayWasFull.current = {};
 	}
 
 	function disconnectPeer(peer: string) {
 		console.log('Disconnect peer: ', peer);
-		const connection = peerConnections[peer];
+		const connection = peerConnections.current[peer];
 		if (!connection) {
 			return;
 		}
 		// Drop it from the map before destroying it. destroy() emits close synchronously,
 		// and that handler treats a connection still listed here as one that broke on its
 		// own and schedules a rebuild, which is wrong for a teardown we asked for.
-		setPeerConnections((connections) => {
-			delete connections[peer];
-			return connections;
-		});
+		delete peerConnections.current[peer];
 		connection.destroy();
 		disconnectAudioElement(peer);
 		// Set when a stream arrives and never taken back, so a player whose connection
@@ -620,7 +760,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	// Emit lobby settings to connected peers
 	useEffect(() => {
 		if (hostRef.current.isHost !== true) return;
-		Object.values(peerConnections).forEach((peer) => {
+		Object.values(peerConnections.current).forEach((peer) => {
 			try {
 				console.log('sendxx > ', JSON.stringify(settings.localLobbySettings));
 				peer.send(JSON.stringify(settings.localLobbySettings));
@@ -723,6 +863,18 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		socketClientsRef.current = update(socketClientsRef.current);
 		setSocketClients(socketClientsRef.current);
 	};
+
+	// Turned on by the same ACL_RECORD that drives the memory recorder, so gate G1's
+	// frames and gate G2's tuples are captured from the same session and cannot be out of
+	// step with each other.
+	useEffect(() => {
+		ipcRenderer
+			.invoke(IpcHandlerMessages.REQUEST_VOICE_RECORDING)
+			.then((where: { userData: string; name: string } | null) => {
+				if (where) startVoiceRecording(where.userData, where.name);
+			})
+			.catch((error: unknown) => console.warn('Could not start recording voice decisions:', error));
+	}, []);
 
 	useEffect(() => {
 		if (
@@ -862,7 +1014,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		impostorRadioClientId.current = pressing ? myPlayer.clientId : -1;
 		for (const player of otherPlayers.filter((o) => o.isImpostor && !o.bugged && !o.isDead)) {
 			const peer = playerSocketIdsRef.current[player.clientId];
-			const connection = peerConnections[peer];
+			const connection = peerConnections.current[peer];
 			if (connection?.writable)
 				connection?.send(JSON.stringify({ impostorRadio: connectionStuff.current.impostorRadio }));
 		}
@@ -900,6 +1052,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			console.log('DISCONNECTED??');
 		});
 
+		stopNotifyingMobilePlayers();
 		notifyMobilePlayers();
 
 		let iceConfig: RTCConfiguration = DEFAULT_ICE_CONFIG;
@@ -912,18 +1065,25 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				return;
 			}
 
-			if (
-				clientPeerConfig.forceRelayOnly &&
-				!clientPeerConfig.iceServers.some((server) => server.urls.toString().includes('turn:'))
-			) {
+			if (clientPeerConfig.forceRelayOnly && !clientPeerConfig.iceServers.some((server) => isRelayUrl(server.urls))) {
 				alert('Server has forced relay mode enabled but provides no relay servers. Default config will be used.');
 				return;
 			}
 
-			iceConfig = {
+			// Logged once, without credentials. Two separate reports of "nobody can hear
+			// me" have now been diagnosed by guessing what the server was advertising at
+			// the time, because the log did not say. It costs one line.
+			const advertised = withTcpRelays(clientPeerConfig.iceServers);
+			console.log(
+				'ICE servers offered by the server:',
+				advertised.flatMap((server) => [].concat(server.urls as never).map(String)).join(', '),
+				clientPeerConfig.forceRelayOnly ? '(relay forced)' : ''
+			);
+
+			iceConfig = withTransportPolicy({
 				iceTransportPolicy: clientPeerConfig.forceRelayOnly ? 'relay' : 'all',
-				iceServers: clientPeerConfig.iceServers,
-			};
+				iceServers: advertised,
+			});
 		});
 
 		socket.on('VAD', (data: { activity: boolean; client: Client; socketId: string }) => {
@@ -1086,7 +1246,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					setOtherTalking({});
 					if (lobbyCode === 'MENU') {
 						cancelAllReconnects();
-						Object.keys(peerConnections).forEach((k) => {
+						Object.keys(peerConnections.current).forEach((k) => {
 							disconnectPeer(k);
 						});
 						updateSocketClients(() => ({}));
@@ -1107,21 +1267,24 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					disconnectClient(client);
 					// Replacing an entry without destroying the previous instance leaked it and
 					// left it able to fire close for a peer it no longer owns.
-					const previous = peerConnections[peer];
+					const previous = peerConnections.current[peer];
 					if (previous) {
-						delete peerConnections[peer];
+						delete peerConnections.current[peer];
 						previous.destroy();
 					}
+					// Relay when the user asked for it, or when this peer's direct path has
+					// already failed twice and there is a relay to fall back to.
+					const relay = settingsRef.current.natFix || relayedPeers.current[peer] === true;
 					const connection = new Peer({
 						stream,
 						initiator,
-						config: settingsRef.current.natFix ? forceRelay(iceConfig) : iceConfig,
+						config: relay ? forceRelay(iceConfig) : iceConfig,
 					});
+					if (relay) {
+						console.log('Connecting to', peer, 'through a relay');
+					}
 
-					setPeerConnections((connections) => {
-						connections[peer] = connection;
-						return connections;
-					});
+					peerConnections.current[peer] = connection;
 
 					connection.on('connect', () => {
 						// The connection came up, so the next failure starts its backoff from
@@ -1180,10 +1343,27 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						audio.setAttribute('autoplay', '');
 						audio.srcObject = dest.stream;
 						if (settingsRef.current.speaker.toLowerCase() !== 'default') {
-							audio.setSinkId(settingsRef.current.speaker);
+							// A saved speaker that is no longer plugged in rejects here. Left
+							// unhandled it is an unhandled rejection in the renderer and a
+							// player who cannot hear one specific person for no visible
+							// reason; caught, the element keeps the system default, which is
+							// the outcome anybody would have chosen.
+							audio.setSinkId(settingsRef.current.speaker).catch((error: unknown) => {
+								console.warn(`Could not send ${peer} to the chosen speaker, using the default instead:`, error);
+							});
 						}
+						// `autoplay` is a request, not a guarantee. A stream from a peer
+						// connection is exempt from Chromium's autoplay policy today, and if
+						// that ever stops being true the symptom is a connection that reports
+						// itself healthy and plays nothing -- which is the hardest report to
+						// act on and has now been received twice. Asking explicitly costs
+						// nothing and turns silence into a line in the log.
+						audio.play().catch((error: unknown) => {
+							console.error(`Audio for ${peer} would not start playing:`, error);
+						});
 
 						audioElements.current[peer] = {
+							context,
 							dummyAudioElement: dummyAudio,
 							audioElement: audio,
 							gain,
@@ -1225,12 +1405,18 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						// Only tear down if this is still the live connection. On offer glare a
 						// replacement is created for the same peer, and the old instance closing
 						// afterwards used to destroy that replacement, permanently muting the pair.
-						if (peerConnections[peer] === connection) {
+						if (peerConnections.current[peer] === connection) {
 							disconnectPeer(peer);
 							scheduleReconnect(peer);
 						}
 					});
 					connection.on('error', (error: Error) => {
+						// Noted before the connection is torn down, because the reconnect
+						// decision is made later and by then this object is gone. Whether it
+						// gathered a relay candidate is the one fact that separates "force
+						// the relay now" from "forcing the relay would guarantee failure".
+						relayCandidatesSeen.current[peer] = connection.relayCandidates();
+						if (connection.relayWasFull()) relayWasFull.current[peer] = true;
 						console.warn('Peer connection error for', peer, error);
 					});
 					return connection;
@@ -1249,13 +1435,76 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					if (!socketClientsRef.current[peer]) return;
 
 					const attempt = (reconnectAttempts.current[peer] ?? 0) + 1;
-					if (shouldGiveUp(attempt)) {
-						console.warn('Giving up on rebuilding the connection to', peer);
-						return;
+					// Said once, when the fast burst runs out, rather than on every slow retry
+					// afterwards. Until this existed the app went quiet here: the avatars still
+					// lit up, because voice activity travels over the socket rather than over
+					// the audio path, so a player with no audio at all in either direction saw
+					// a lobby that looked entirely healthy and had nothing to report but
+					// silence.
+					if (attempt === RECONNECT_MAX_ATTEMPTS + 1) {
+						console.error(
+							`No connection to ${peer} after ${attempt - 1} attempts.`,
+							'Still trying, slowly.',
+							relayWasFull.current[peer]
+								? 'The relay refused with 486, Allocation Quota Reached: it is reachable and has no capacity left. That is a server setting, not this network.'
+								: relayedPeers.current[peer]
+									? 'The relay was tried and did not help.'
+									: hasRelay(iceConfig)
+										? 'A relay was available but did not help.'
+										: 'This server advertises no relay, so a restrictive NAT cannot be worked around.'
+						);
 					}
 					reconnectAttempts.current[peer] = attempt;
 
-					const delay = reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
+					// A direct path that has failed will not be fixed by waiting: what is in
+					// the way is the network at one end, and it does not move. How soon to
+					// give up on it depends on what the failed attempt actually gathered --
+					// see `shouldUseRelay`, which is where the reasoning lives.
+					const relayCandidates = relayCandidatesSeen.current[peer];
+					if (
+						!relayedPeers.current[peer] &&
+						shouldUseRelay({
+							attempt,
+							relayCandidates,
+							otherPeersNeededRelay: Object.values(relayedPeers.current).some(Boolean),
+						})
+					) {
+						if (hasRelay(iceConfig)) {
+							console.log(
+								'Switching to the relay for',
+								peer,
+								relayCandidates === undefined
+									? `after ${attempt} attempts`
+									: `- it gathered ${relayCandidates} relay candidates, so the relay is reachable`
+							);
+							relayedPeers.current[peer] = true;
+						} else if (attempt === RECONNECT_RELAY_AFTER) {
+							console.warn(
+								'Direct connection to',
+								peer,
+								'keeps failing and this server advertises no relay to fall back to'
+							);
+						}
+					} else if (relayCandidates === 0 && attempt === RECONNECT_RELAY_AFTER) {
+						// The case that looks like the relay is not configured and is not.
+						// Forcing relay-only here would leave the connection with no
+						// candidates at all, so it is deliberately not done.
+						console.warn(
+							'No relay candidate could be gathered for',
+							peer,
+							'- this machine cannot reach the relay, so forcing it would make things worse.',
+							'A relay reachable over TCP or TLS is what this network needs.'
+						);
+					}
+
+					// Past the burst the interval goes flat and long. Giving up outright is
+					// what this used to do, and it was wrong: the reasons a connection cannot
+					// be made are often not permanent -- a relay whose reservations are all
+					// taken frees one when somebody leaves, and nothing was ever going to ask
+					// again.
+					const delay = shouldGiveUp(attempt)
+						? RECONNECT_SLOW_DELAY
+						: reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
 
 					reconnectTimers.current[peer] = setTimeout(() => {
 						delete reconnectTimers.current[peer];
@@ -1263,7 +1512,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						if (!client || currentLobby === '' || currentLobby === 'MENU') return;
 						// The other end got there first, or the socket is down and rejoining the
 						// lobby will produce a fresh connection anyway.
-						if (peerConnections[peer]) return;
+						if (peerConnections.current[peer]) return;
 						if (!socket.connected) return;
 						console.log('Rebuilding the connection to', peer, '- attempt', attempt);
 						createPeerConnection(peer, true, client);
@@ -1299,20 +1548,20 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						}
 						return;
 					}
-					let connection: Peer;
+
 					// Only signals carrying a `type` used to be forwarded, so trickled ICE
 					// candidates, which have no type, were dropped outright. Connections then
 					// depended on whatever candidates happened to be in the initial SDP.
-					const existing = peerConnections[from];
-					const isOffer = 'type' in data && data.type === 'offer';
-					if (isOffer) {
-						connection = createPeerConnection(from, false, client);
-					} else if (existing) {
-						connection = existing;
-					} else {
-						// An answer or candidate with no connection left to apply it to.
-						return;
-					}
+					const existing = peerConnections.current[from];
+					const route = routeSignal(
+						{
+							isOffer: 'type' in data && data.type === 'offer',
+							isRenegotiation: 'renegotiation' in data && data.renegotiation === true,
+						},
+						{ exists: existing !== undefined, hasSession: existing?.negotiated === true }
+					);
+					if (route === 'drop') return;
+					const connection = route === 'existing' && existing ? existing : createPeerConnection(from, false, client);
 					void connection.signal(data);
 				});
 			},
@@ -1328,9 +1577,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 		return () => {
 			hostRef.current.mobileRunning = false;
+			stopNotifyingMobilePlayers();
 			cancelAllReconnects();
 			socket.emit('leave');
-			Object.keys(peerConnections).forEach((k) => {
+			Object.keys(peerConnections.current).forEach((k) => {
 				disconnectPeer(k);
 			});
 			connectionStuff.current.socket?.close();
@@ -1543,7 +1793,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			// On change from a game to menu, exit from the current game properly
 			hostRef.current.mobileRunning = false; // On change from a game to menu, exit from the current game properly
 			connectionStuff.current.socket?.emit('leave');
-			Object.keys(peerConnections).forEach((k) => {
+			Object.keys(peerConnections.current).forEach((k) => {
 				disconnectPeer(k);
 			});
 			setOtherDead({});

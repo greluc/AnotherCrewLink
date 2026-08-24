@@ -12,7 +12,7 @@ AnotherCrewLink/
 ├── deny.toml                   # cargo-deny: licences, advisories, bans
 ├── crates/
 │   ├── acl-types/             # AmongUsState, Player, settings, map data, mods
-│   ├── acl-game/              # process memory, pattern scan, offsets, injection
+│   ├── acl-game/              # process memory, pattern scan, offsets, mods
 │   ├── acl-audio/             # capture, APM, codec, jitter buffer, DSP graph, mix
 │   ├── acl-net/               # socket.io client, WebRTC peers, signalling
 │   ├── acl-platform/          # keyboard poll, overlay window, autostart, paths
@@ -20,8 +20,8 @@ AnotherCrewLink/
 │   ├── acl-ipc/               # helper ↔ core: postcard message types, framing
 │   ├── acl-app/               # orchestration: state machine wiring the above
 │   ├── acl-ui/                # egui views: main, settings, lobby browser, overlay
-│   ├── acl-helper/            # elevated binary: game reader, injection,
-│   │                           #   key poll, overlay window
+│   ├── acl-helper/            # elevated binary: game reader, key poll,
+│   │                           #   overlay window
 │   └── acl-core/              # unelevated binary: tokio, audio, net, GUI
 ├── server/                     # separate crate (may stay its own repository)
 │   └── src/                    # socketioxide + axum
@@ -49,8 +49,8 @@ depend on, and it exists so that the boundary is a written type, defined in
 Electron's process split (main = privileged, renderer = UI) is replaced by a
 smaller split, not by a thread split. Two processes:
 
-- **`acl-helper`**: process memory reading, injection, the keyboard poll, and the
-  overlay window. **Unelevated by default** — see below.
+- **`acl-helper`**: process memory reading, the keyboard poll, and the overlay
+  window. **Unelevated by default** — see below.
 - **`acl-core`**, never elevated: tokio, signalling, WebRTC, audio, and the GUI.
 
 > **The split is not about administrator rights, and calling the helper "the
@@ -133,7 +133,6 @@ the elevated process.
 │  game thread (5 Hz, blocking)                                 │
 │    acl-game: read process memory → AmongUsState              │
 │  key thread (60 ms poll): GetAsyncKeyState / XQueryKeymap     │
-│  injection (32-bit Windows only, --features injection)        │
 │  overlay window (winit: transparent, click-through, topmost)  │
 └──────────────┬────────────────────────────────▲───────────────┘
  AmongUsState  │  length-prefixed postcard over │  overlay geometry
@@ -221,21 +220,21 @@ bytes so the state parsing is fuzzable without a game. See
 [05-regression-strategy.md](05-regression-strategy.md) §5.2.
 
 `OpenProcess` requests `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION`
-and nothing more; `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` are asked for only
-under `--features injection`, and `PROCESS_CREATE_THREAD` never. Today's
-`PROCESS_ALL_ACCESS` is not carried over. Finding the process is ~25 lines of
+and nothing more. `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` and
+`PROCESS_CREATE_THREAD` are never asked for: the injection path they served was
+removed on 2026-08-24. `PROCESS_ALL_ACCESS` is not carried over — and is gone
+from `native/memoryjs` as well, so the 1.x client already opens the game with
+exactly the two rights named above. Finding the process is ~25 lines of
 `CreateToolhelp32Snapshot` on Windows and a `/proc` scan on Linux, done once
 with the handle kept, rather than a crate and a rescan on every poll.
 
 Above the trait: pattern scanning, pointer-chain resolution, .NET dictionary and
-array walking, offset fetching and caching, mod detection, and the injection
-module. The x86 shellcode byte arrays transfer verbatim — they are already
-literal `u8` values in `GameReader.ts`, and Rust's `const` arrays express them
-more clearly than the current JavaScript does.
+array walking, offset fetching and caching, and mod detection. An injection
+module was to sit alongside them, transliterating the x86 shellcode byte arrays
+from `GameReader.ts`; §4.4 item 6 records why it was dropped instead, and the
+`i686` target and NASM went with it.
 
-Injection is feature-gated (`--features injection`, on by default on Windows)
-and stays 32-bit-only, matching today's behaviour. Both it and the reader live
-in `acl-helper`; none of this crate is linked into `acl-core`.
+The reader lives in `acl-helper`; none of this crate is linked into `acl-core`.
 
 The parsing above the trait is fuzzed through `FuzzProcess`, which is worth
 almost nothing to build once `ProcessMemory` is a trait and is the only way to
@@ -254,8 +253,15 @@ tree, and what creates the alignment hazard for exactly the struct parsing this
 crate is full of: MSVC on `i686` may align >4-byte types to only 4 bytes, so
 `zerocopy`'s reference APIs (`ref_from_bytes`, `try_ref_from_bytes`) must never
 be used on a struct containing `u64`/`i64`/`f64` — `read_from_bytes`, which
-copies, costs tens of bytes at 30 Hz. Confining injection to its own 32-bit
-process would move the two highest injection-related risk rows from High to Low.
+copies, costs tens of bytes at 30 Hz.
+>
+> **Superseded 2026-08-24.** Confining injection to its own 32-bit process would
+> have moved the two highest injection-related risk rows from High to Low.
+> Removing the injection path removes those rows instead, and with them the
+> `i686` target, the NASM requirement, the alignment hazard above and the
+> foreclosure of `libwebrtc`. The paragraph is kept because the alignment rule it
+> states is the reason a 32-bit target would still be expensive if anyone
+> proposes one again.
 
 ### `acl-audio`
 
@@ -437,9 +443,10 @@ and Chromium interop is the whole constraint; the `P4+` spike against a real
 | Single instance | named mutex | abstract socket |
 | Helper launch | spawned unelevated on demand; `ShellExecuteW` `runas` only after `OpenProcess` is denied, one UAC prompt per session (§3.2) | ordinary `Command::spawn`; no elevation, `setcap cap_sys_ptrace+ep` documented instead |
 
-The Windows key path stays the 60 ms `GetAsyncKeyState` poll that
-`native/node-keyboard-watcher` already runs. A `SetWindowsHookEx(WH_KEYBOARD_LL)`
-hook would not be a port — nothing in `native/` or `src/` installs one today — and
+The Windows key path stays a 60 ms `GetAsyncKeyState` poll. The Electron client
+no longer polls: `native/node-keyboard-watcher` carried no licence and was
+replaced by `native/uiohook-napi`, which does install
+`SetWindowsHookEx(WH_KEYBOARD_LL)`. The port has no such licensing pressure and
 it is worse: the callback runs on the installing thread's message pump, every
 keystroke on the desktop is blocked until it returns, and exceeding
 `LowLevelHooksTimeout` (300 ms by default) gets it silently unhooked. That is a

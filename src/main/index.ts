@@ -1,5 +1,5 @@
 import { autoUpdater } from 'electron-updater';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
 import { windowStateKeeper } from './windowState';
 import { platform } from 'node:os';
 import { join as joinPath, dirname, resolve as resolvePath, sep } from 'node:path';
@@ -15,7 +15,7 @@ import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import { resetOffsetsToEmbedded } from './offsetStore';
-import { startRecordingIfAsked } from './recorder';
+import { isRecording, startRecordingIfAsked, stopRecording } from './recorder';
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
 import Store from 'electron-store';
@@ -277,6 +277,37 @@ if (!gotTheLock) {
 	);
 	console.log('Logging to', logDirectory());
 
+	// Without these, a failure before the window opens is whatever the platform decides to
+	// show -- on Windows a dialog that names no cause -- and nothing reaches the log,
+	// because the process is gone before anything writes to it. Two users have reported
+	// exactly that after installing: several errors on first launch, then it started.
+	//
+	// Node terminates the process on an unhandled rejection, so both are caught. Neither
+	// handler tries to carry on: the app is in a state it did not plan for, and the
+	// honest thing is to say what happened and stop rather than to limp.
+	const reportFatal = (kind: string, error: unknown) => {
+		const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+		console.error(`${kind}:`, detail);
+		try {
+			// After the log, and in a try of its own: showing a dialog can itself fail
+			// while the app is starting, and losing the log to that would be the worse
+			// half of the trade.
+			dialog.showErrorBox(
+				'AnotherCrewLink could not start',
+				`${detail}
+
+This has been written to:
+${logDirectory()}`
+			);
+		} catch {
+			/* The log already has it. */
+		}
+		app.exit(1);
+	};
+
+	process.on('uncaughtException', (error) => reportFatal('Uncaught exception', error));
+	process.on('unhandledRejection', (reason) => reportFatal('Unhandled rejection', reason));
+
 	autoUpdater.autoDownload = false;
 	// The returned promise rejects alongside the error event, and nothing was waiting on
 	// it, so every failed check also produced an unhandled rejection warning. The error
@@ -318,6 +349,21 @@ if (!gotTheLock) {
 	});
 	autoUpdater.on('update-downloaded', () => {
 		autoUpdater.quitAndInstall();
+	});
+
+	// A recording is only worth having if its end reached the disk. `will-quit` is the
+	// last point at which the loop can still be held open, and `preventDefault` here is
+	// what keeps Electron from tearing the process down mid-flush.
+	let flushed = false;
+	app.on('will-quit', (event) => {
+		if (flushed || !isRecording()) {
+			return;
+		}
+		event.preventDefault();
+		void stopRecording().finally(() => {
+			flushed = true;
+			app.quit();
+		});
 	});
 
 	// quit application when all windows are closed

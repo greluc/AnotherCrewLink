@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/acl-types", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "experiments/overlay-probe", "experiments/apm-probe"]
+members = ["crates/acl-types", "crates/acl-audio", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "experiments/overlay-probe", "experiments/apm-probe"]
 
 # CI checks the server repository out into `server/` to run the conformance test against
 # it. Without this, cargo folds that crate into this workspace and refuses to build it —
@@ -44,11 +44,45 @@ indexing_slicing = "warn"
 # `allow-wildcard-paths = false`, which is the setting that would otherwise let an
 # unversioned path dependency through unnoticed.
 acl-types = { path = "crates/acl-types", version = "0.0.0" }
+acl-audio = { path = "crates/acl-audio", version = "0.0.0" }
 kurbo = "0.13.1"
 serde = { version = "1.0", features = ["derive"] }
 # platform-verifier reads the operating system's certificate store, which is what
 # Chromium supplied for free and what the WebSocket transport still lacks. The three
 # plain GETs this client makes get it now; P4 closes the same gap for the socket.
+# Recordings are committed compressed. A frame's regions barely change between frames --
+# 99.8% of them are byte-identical to the one before -- so a session gzips by a factor
+# of 130. The alternative was a delta format in the recorder: more code, for less.
+flate2 = "1.1"
+# Pinned exactly, as the plan asks: the codec is the one thing on the wire that both ends
+# have to agree about byte for byte, and a patch release that changes a default would be
+# audible before it was noticed.
+#
+# 0.4.0 rather than the plan's =0.3.1. That pin was written before this release existed and
+# now points at an unmaintained transitive dependency: 0.3.1 binds libopus through
+# `audiopus_sys`, whose last commit is five years old and which carries RUSTSEC-2026-0150 —
+# it pins a CMake version that CMake 4.0 refuses, so the build breaks for anyone who has a
+# current one. 0.4.0 binds through `opusic-sys` instead.
+opus = "=0.4.0"
+# The same libopus the `opus` crate is already binding, taken directly for one function it
+# does not re-export: `opus_packet_has_lbrr`, which answers whether a packet actually
+# carries a redundant copy of its predecessor. Without it a decode-with-FEC call cannot be
+# distinguished from concealment -- libopus succeeds either way -- and every measurement
+# that separates the two is guesswork. Nothing new enters the build; this is already in the
+# graph beneath `opus`, and the version tracks what `=0.4.0` resolves to.
+opusic-sys = "=0.7.5"
+# Pinned exactly for the same reason as the codec: a resampler that changes its filter
+# between patch releases changes what every microphone sounds like, and it would be heard
+# before it was noticed. Used through `process_into_buffer` only — see `resample.rs`.
+rubato = "=5.0.0"
+# Not pinned exactly, unlike the codec and the resampler: this one is behind a trait
+# precisely so it can be replaced, and `cubeb` is the documented fallback. See
+# `acl-audio::device` for the trigger conditions.
+cpal = "0.18"
+# `default-features = false` is not a preference, it is the whole reason this is usable:
+# the defaults pull in axum, clap, a second cpal three majors behind the pinned one, and
+# `ropus` — a second Opus implementation, in a binary that already carries libopus.
+neteq = { version = "0.9.1", default-features = false }
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 serde_json = "1.0"
 thiserror = "2.0"

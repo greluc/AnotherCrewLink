@@ -49,6 +49,11 @@ packet loss concealment, device handling and resampling. None of that is in this
 repository, and all of it would have to be assembled from Rust crates that are
 younger and less exercised than the code they replace.
 
+> **Read as of its date.** The injection path described below was removed on
+> 2026-08-24, taking the `i686-pc-windows-msvc` target with it. The assessment is
+> left as written; §4.4 item 6 of
+> [04-implementation-plan.md](04-implementation-plan.md) records the decision.
+
 Everything else — the memory reader, the shellcode injection, the keyboard hook,
 the overlay, the server, the GUI, the build pipeline — is ordinary work, and the
 4,390 lines of hand-written C and C++ it replaces end up *safer* in Rust. The
@@ -177,7 +182,7 @@ arithmetic and this page is the summary of it.
 | --- | --- | --- | --- |
 | **G0** | 1.x offsets trust chain (H2) | A malicious-bundle corpus is rejected with a distinct error each; on-disk tampering with the cached bundle is rejected as far as the validator can catch it, proving validation at load and not only at download; the validator accepts all 81 real upstream files unchanged; the embedded floor holds with the mirror unreachable, and the client says which bundle it is using; a bundle is published within 6 hours of a real Among Us update | P2+ does not start its offsets work |
 | **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame | Bug; fix and retry |
-| **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss; and a green build of the chosen APM on `i686-pc-windows-msvc` | **Stop the port** |
+| **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss (the `i686-pc-windows-msvc` build criterion was struck on 2026-08-24 with the target) | **Stop the port** |
 | **G3** | Transport | A 1.0.2 Electron client and a Rust client hear each other in the same lobby, direct and via TURN; the same call repeated under each impairment profile; and a three-client mixed-generation lobby with one client leaving and rejoining | No staged rollout; reconsider scope |
 | **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64, Windows ia32 and Linux each update from a staging feed to the bridge, silently, with the correct architecture selected | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |
 

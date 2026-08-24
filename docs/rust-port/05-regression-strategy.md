@@ -218,6 +218,78 @@ noise. Each becomes a named test, and the test name says what it guards.
 | `arrow_and_capslock_keycodes_are_correct` | left arrow mapped to Home; CapsLock missing |
 | plus the four connection tests in §4.6 | the paired audio dropouts |
 
+### The 1.0.4 set
+
+Everything above was found before the port started. This set was found while the port was
+being written, in the Electron client, by chasing a single report: one player who could
+hear nobody and whom nobody could hear, in a lobby where everyone else was fine.
+
+They belong here rather than in a changelog because **every one of them is a mistake the
+port can make again from scratch.** None is a quirk of TypeScript or of Electron; each is a
+decision about relays, retries or measurement that has to be made the same way a second
+time, in a language that will not carry the fix across for you.
+
+| Test name | Guards | Lands in |
+| --- | --- | --- |
+| `relay_is_asked_for_one_allocation_per_connection` | asking a relay for three reservations where one would do | P4 |
+| `quota_refusal_is_told_apart_from_an_unreachable_relay` | reading "the relay is full" as "this network blocks relays" | P4 |
+| `relay_only_is_never_forced_without_a_relay_candidate` | escalating to relay-only when nothing was gathered, which leaves a connection with no candidates at all | P4 |
+| `a_relay_without_a_transport_is_also_tried_over_tcp` | a bare `turn:` URL being UDP-only on a network that blocks UDP | P4 |
+| `a_tls_relay_counts_as_a_relay` | `turns:` not matching a check for `turn:` | P4 |
+| `a_peer_is_retried_for_as_long_as_the_lobby_lasts` | giving up permanently on a peer whose obstacle was temporary | P4 |
+| `a_stalled_connection_is_restarted_before_it_fails` | sitting in `disconnected` for half a minute doing nothing | P4 |
+| `one_transport_per_peer` | negotiating a separate transport for voice and data, doubling allocations and handshakes | P4 |
+| `a_failed_connection_reports_what_it_gathered` | a log that says a connection failed and nothing about why | P4 |
+| `recovery_is_counted_only_when_the_packet_carries_redundancy` | counting concealment as error correction, so the measurement reports the same number whether the loop works or not | P3 ✅ |
+| `the_encoder_is_told_about_loss_or_the_flag_is_useless` | setting the FEC flag and never calling `OPUS_SET_PACKET_LOSS_PERC` | P3 ✅ |
+| `bitrate_stays_above_the_floor_where_redundancy_exists` | a bitrate change silently switching error correction off | P3 ✅ |
+| `a_missing_output_device_falls_back_to_the_default` | one player inaudible because the saved speaker was unplugged | P5 |
+| `a_renegotiation_offer_continues_the_session_it_names` | rebuilding for a mid-session offer, which destroys the connection the offer was repairing | P4 |
+| `a_shortcut_fires_only_on_a_press_this_end_saw` | releasing the key you just bound firing the thing you just bound it to | P5/P6 |
+| `every_binding_the_settings_panel_offers_resolves` | a shortcut that saves, looks set, and maps to nothing | P5/P6 |
+| `an_effect_that_is_already_bypassed_can_be_bypassed_again` | a redundant disconnect read as a failure, leaving two effects live and the flag saying neither is | P3 |
+| `a_filter_borrowed_by_two_features_is_reset_by_both` | one feature leaving a shared DSP node in a state the other does not expect | P3 |
+| `a_peer_releases_its_audio_resources_when_it_leaves` | a per-peer engine or thread kept for the life of the process | P3/P5 |
+| `a_start_that_fails_can_be_started_again` | a flag latched before the work that can fail, leaving the app half-started with no way back | P2/P5 |
+| `a_repeating_task_stops_when_its_owner_does` | a self-rescheduling timer nothing cancels, multiplying on every restart | P4/P6 |
+
+✅ marks the ones that already exist in `crates/acl-audio`.
+
+### Three of them are worth more than a test name
+
+**The relay is a finite resource and the client must treat it as one.** The relay in
+production was granting twelve reservations in total, shared by every player, and refusing
+the rest with 486. The Electron client was asking for three per connection, so one player
+in a nine-peer lobby could exhaust the whole server by themselves. A mesh client is the
+worst possible shape for careless allocation -- the demand is quadratic in the lobby -- and
+the Rust port will have exactly the same shape. Ask for one, count them, and treat a
+refusal as temporary, because it is: the reservations come back the moment somebody leaves.
+
+**A measurement that cannot fail is not a measurement.** `opus_decode` with `decode_fec=1`
+succeeds whether or not the packet carries a redundant copy: given none it produces
+concealment and returns the same frame size. The receive path counted those successes as
+recoveries and therefore reported *identical* numbers for a sender that had been told about
+loss and one that never had. The number looked healthy for as long as it was wrong. Before
+trusting any parity figure, ask what it reads when the thing it measures is switched off --
+and if the answer is "the same", the figure is not evidence.
+
+**Most of these are not WebRTC bugs or audio bugs. They are two shapes.** One is a piece
+of state that two features share and only one of them resets -- the filter the impostor
+radio left as a highpass, the effect flag left saying "off" while the effect was on, the
+`readingGame` latch set before the thing that could fail. The other is a resource created
+per peer and released by nobody -- an audio context, a timer, a relay reservation. Both
+shapes survive a rewrite intact, because both come from how the code is organised rather
+than from the language it is in. A port that gives each peer an owner with a destructor,
+and each shared node a single writer, gets most of this for free; one that does not will
+find them again one at a time.
+
+**A repair that silently does nothing looks exactly like the fault.** The ICE restart added
+for a stalled connection depends on `restartIce()` causing a renegotiation. If it did not,
+the connection would stay broken and the log would show a repair being attempted. That was
+measured against two real peer connections rather than assumed, and the port should measure
+it again on whatever stack it lands on: the assumption is about the library, not about the
+code that calls it.
+
 ## 5.4 CI
 
 | Job | Runs on | Blocking |

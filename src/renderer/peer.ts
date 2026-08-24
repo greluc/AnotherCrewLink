@@ -9,7 +9,14 @@
  */
 
 export type SignalData =
-	| { type: 'offer'; sdp: string }
+	// `renegotiation` marks an offer that continues an existing session rather than
+	// starting one. The far end has to tell the two apart: a first offer means build a
+	// connection, and a renegotiation offer means apply it to the one already running --
+	// rebuilding for it would destroy exactly what the renegotiation was protecting.
+	//
+	// Added alongside rather than replacing anything, so a client that predates it simply
+	// does not see the field and behaves as it did before.
+	| { type: 'offer'; sdp: string; renegotiation?: true }
 	| { type: 'answer'; sdp: string }
 	| { candidate: RTCIceCandidateInit }
 	| { renegotiate: true };
@@ -34,6 +41,29 @@ export interface PeerOptions {
  */
 export const PEER_CONNECT_TIMEOUT = 20000;
 
+/**
+ * How long a connection may sit in `disconnected` before ICE is restarted.
+ *
+ * `disconnected` means connectivity checks have stopped succeeding but ICE has not given
+ * up. Sometimes it heals on its own -- a wifi roam, a moment of congestion -- and tearing
+ * anything down for it would be worse than waiting. Sometimes it does not, and Chromium
+ * then takes fifteen to thirty seconds to admit it by moving to `failed`. For all of that
+ * time the player is silent and this app was doing nothing about it, because nothing here
+ * watched the state at all.
+ *
+ * Four seconds is longer than the transient cases take to recover and much shorter than
+ * the wait for `failed`. An ICE restart re-gathers -- including a fresh relay allocation --
+ * and keeps the connection, its tracks and its DTLS session in place, which is a far
+ * cheaper repair than the rebuild that a `failed` triggers.
+ *
+ * That it renegotiates at all was measured rather than assumed, against two real peer
+ * connections wired the way this class wires them: `onnegotiationneeded` fires a second
+ * time, the ICE credentials in the local description change, and the connection stays
+ * `connected` throughout. A repair that quietly did nothing would look exactly like the
+ * fault it is meant to fix, which is the worst way for an assumption to be wrong.
+ */
+export const ICE_RESTART_AFTER_DISCONNECTED = 4000;
+
 type Handler = (...args: never[]) => void;
 
 const DATA_CHANNEL_LABEL = 'anothercrewlink';
@@ -47,8 +77,24 @@ export default class Peer {
 	private pendingCandidates: RTCIceCandidateInit[] = [];
 	private remoteDescriptionSet = false;
 	private connectEmitted = false;
+	private disconnectedTimer?: ReturnType<typeof setTimeout>;
+	/**
+	 * One restart per connection.
+	 *
+	 * A path that is genuinely gone will go straight back to `disconnected` afterwards,
+	 * and restarting on a loop would keep re-gathering -- allocating a relay port each
+	 * time -- instead of letting it fail and be rebuilt.
+	 */
+	private restartedIce = false;
 
 	private connectTimer?: ReturnType<typeof setTimeout>;
+	/// How many candidates of each type this connection managed to gather.
+	private gathered: Record<string, number> = {};
+	/// What went wrong while gathering, deduplicated: the same relay fails identically
+	/// once per local interface, so the raw list is four copies of one fact.
+	private gatheringErrors = new Set<string>();
+	/** The STUN/TURN error codes seen while gathering, for the questions below. */
+	private gatheringErrorCodes = new Set<number>();
 
 	constructor(private options: PeerOptions = {}) {
 		this.pc = new RTCPeerConnection(options.config);
@@ -68,8 +114,23 @@ export default class Peer {
 
 		this.pc.onicecandidate = (event) => {
 			if (event.candidate) {
+				// Counted by type rather than logged one by one: a fourteen-peer lobby
+				// gathers hundreds, and the only question anybody ever asks of them is
+				// whether there were any relay ones.
+				const type = event.candidate.type ?? 'unknown';
+				this.gathered[type] = (this.gathered[type] ?? 0) + 1;
 				this.emit('signal', { candidate: event.candidate.toJSON() });
 			}
+		};
+
+		// Why a relay was not reachable, when it was not. A failed allocation is silent
+		// otherwise -- the connection simply has no relay candidate and fails later for
+		// what looks like an unrelated reason, which is exactly the report that cannot be
+		// diagnosed from a log.
+		this.pc.onicecandidateerror = (event) => {
+			const error = event as RTCPeerConnectionIceErrorEvent;
+			this.gatheringErrors.add(`${error.url} ${error.errorCode} ${error.errorText}`);
+			this.gatheringErrorCodes.add(error.errorCode);
 		};
 
 		this.pc.ontrack = (event) => {
@@ -85,8 +146,33 @@ export default class Peer {
 				// torn down for being slow to finish that.
 				this.clearConnectTimer();
 			}
+			// Cleared on every transition: the timer is only meaningful while the state it
+			// was started for still holds, and `disconnected` most often resolves itself.
+			this.clearDisconnectedTimer();
+
+			if (state === 'disconnected' && this.options.initiator && !this.restartedIce) {
+				// Only the initiator. `restartIce` works by making the next offer carry new
+				// ICE credentials, and the initiator is the only end here that offers.
+				this.disconnectedTimer = setTimeout(() => {
+					this.disconnectedTimer = undefined;
+					if (this.destroyed || this.pc.connectionState !== 'disconnected') return;
+					this.restartedIce = true;
+					try {
+						this.pc.restartIce();
+					} catch (error) {
+						// Nothing to fall back to, and nothing is worse than before: the
+						// connection stays in `disconnected` and reaches `failed` on its own.
+						console.warn('ICE restart refused:', error);
+					}
+				}, ICE_RESTART_AFTER_DISCONNECTED);
+			}
+
 			if (state === 'failed') {
-				this.emit('error', new Error(`peer connection ${state}`));
+				// The candidate tally goes in the message. Whether this peer gathered a
+				// relay candidate is the single fact that separates "the relay is not
+				// reachable from here" from "the relay is reachable and ICE did not use
+				// it", and without it a bug report is a guess.
+				this.emit('error', new Error(`peer connection ${state} (${this.describeGathering()})`));
 				this.destroy();
 			} else if (state === 'closed') {
 				this.destroy();
@@ -168,6 +254,66 @@ export default class Peer {
 		}
 	}
 
+	/**
+	 * How many relay candidates this connection managed to gather.
+	 *
+	 * The single number that decides what to do about a failure. Above zero the relay is
+	 * reachable from this machine and a direct path lost anyway, so relay-only is worth
+	 * forcing. At zero the allocation itself failed, and relay-only would gather nothing
+	 * at all -- it would turn a connection that sometimes works into one that cannot.
+	 */
+	/**
+	 * Whether a remote description has been applied, so this is a running session.
+	 *
+	 * Read by the signalling layer to decide whether an incoming offer continues this
+	 * connection or replaces it.
+	 */
+	public get negotiated(): boolean {
+		return this.remoteDescriptionSet;
+	}
+
+	public relayCandidates(): number {
+		return this.gathered.relay ?? 0;
+	}
+
+	/**
+	 * Whether the relay answered but had no capacity left.
+	 *
+	 * RFC 5766's 486, "Allocation Quota Reached". It matters because it is the one reason
+	 * for having no relay candidate that is nobody's fault at this end and that goes away
+	 * on its own: a relay grants a fixed number of reservations and somebody leaving frees
+	 * one. Told apart from a relay that cannot be reached, it is the difference between
+	 * "your network blocks this" and "the server needs a bigger allowance", which are
+	 * addressed by completely different people.
+	 */
+	public relayWasFull(): boolean {
+		return this.gatheringErrorCodes.has(486);
+	}
+
+	/**
+	 * A one-line summary of what this connection had to work with.
+	 *
+	 * `relay=0` is the answer to the question that has taken two rounds of guessing to
+	 * ask: the player's network could not reach the relay, whatever the server advertised.
+	 * `relay=2` with a failure means it could, and something else is wrong.
+	 */
+	private describeGathering(): string {
+		const counts = Object.entries(this.gathered)
+			.map(([type, count]) => `${type}=${count}`)
+			.sort()
+			.join(' ');
+		const errors = [...this.gatheringErrors];
+		const summary = counts || 'no candidates at all';
+		return errors.length > 0 ? `${summary}; gathering errors: ${errors.join(', ')}` : summary;
+	}
+
+	private clearDisconnectedTimer(): void {
+		if (this.disconnectedTimer !== undefined) {
+			clearTimeout(this.disconnectedTimer);
+			this.disconnectedTimer = undefined;
+		}
+	}
+
 	private clearConnectTimer(): void {
 		if (this.connectTimer !== undefined) {
 			clearTimeout(this.connectTimer);
@@ -179,6 +325,7 @@ export default class Peer {
 		if (this.destroyed) return;
 		this.destroyed = true;
 		this.clearConnectTimer();
+		this.clearDisconnectedTimer();
 		try {
 			this.channel?.close();
 		} catch {
@@ -190,6 +337,7 @@ export default class Peer {
 			this.pc.onconnectionstatechange = null;
 			this.pc.onnegotiationneeded = null;
 			this.pc.ondatachannel = null;
+			this.pc.onicecandidateerror = null;
 			this.pc.close();
 		} catch {
 			/* already gone */
@@ -217,9 +365,18 @@ export default class Peer {
 	private async negotiate(): Promise<void> {
 		if (this.destroyed) return;
 		try {
+			// A remote description already applied means this is not the opening offer, so
+			// the other end must not treat it as one. The ICE restart is the only thing
+			// that renegotiates today, and it exists to keep a connection alive.
+			const renegotiation = this.remoteDescriptionSet;
 			const offer = await this.pc.createOffer();
 			await this.pc.setLocalDescription(offer);
-			this.emit('signal', { type: 'offer', sdp: this.pc.localDescription!.sdp });
+			this.emit(
+				'signal',
+				renegotiation
+					? { type: 'offer', sdp: this.pc.localDescription!.sdp, renegotiation: true }
+					: { type: 'offer', sdp: this.pc.localDescription!.sdp }
+			);
 		} catch (error) {
 			this.emit('error', error instanceof Error ? error : new Error(String(error)));
 		}

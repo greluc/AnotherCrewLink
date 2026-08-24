@@ -24,7 +24,8 @@ npm run audit         # npm audit --audit-level=high
 
 Building needs Node 22+ and a C++ toolchain. On Windows: Visual Studio with the
 "Desktop development with C++" workload and Python 3. On Linux:
-`build-essential`, `libxcb1-dev`, `libx11-dev`.
+`build-essential`, `libxcb1-dev`, `libx11-dev`, `libasound2-dev`, `libxtst-dev`,
+`libxrandr-dev`, `libxt-dev`.
 
 ## Layout
 

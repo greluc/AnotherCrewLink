@@ -1,5 +1,132 @@
 # AnotherCrewLink Changelog
 
+## v1.0.4
+
+Connections that used to fail quietly now recover, say why when they cannot, and stop
+asking for permissions this app has no use for.
+
+### Fixed
+
+- **Some players could not hear anyone, and nobody could hear them, while everything
+  else looked fine.** The avatars still lit up when people spoke, because that travels
+  over a different connection than the voice does — so from the inside the lobby looked
+  perfectly healthy and there was nothing to report but silence. Several things
+  contributed and all of them are addressed below.
+
+- **A connection that stalled was left to rot for half a minute.** When the network
+  path between two players goes bad, the connection enters a state that often heals by
+  itself within a second or two — and when it does not, it takes fifteen to thirty
+  seconds before anything notices. This app was not watching that state at all. It now
+  waits four seconds and then rebuilds the network path in place, keeping the call
+  rather than starting over.
+
+- **The fallback relay was only offered over UDP.** Some networks — school and office
+  networks especially, and some mobile providers — block outgoing UDP entirely, and
+  those are exactly the networks that need a relay in the first place. Relays are now
+  also tried over TCP, and a relay offered over TLS is recognised as one, which it was
+  not before.
+
+- **When a direct connection failed, it took a minute per player to try the relay.**
+  In a ten-person lobby, a player whose network needs the relay used to rediscover that
+  nine more times over. The client now decides from what the failed attempt actually
+  found: if the relay answered, it switches at once; if the relay could not be reached
+  at all, it says so plainly instead of forcing a setting that would leave the
+  connection with nothing to try.
+
+- **Every player was asking the relay for three times what they needed.** Two entries
+  in the server's list named the same relay and the client added a third, so every
+  connection took three reservations where one would do. With nine other players in the
+  lobby that is twenty-seven reservations from a single person — and a relay grants a
+  limited number. One player could use up the whole server's supply by themselves, and
+  the next person who needed the relay simply got nothing, in a lobby that had worked
+  ten minutes earlier. That is exactly what was reported.
+
+- **Writing to the game could fail silently.** The library the app used to read Among
+  Us never checked whether a write succeeded — it reported success either way. Nothing
+  depends on it any more, and those functions have been removed so nothing can start.
+
+- **A crash on startup left nothing behind to look at.** Two players reported the app
+  showing a critical error and closing, with no way to say what it was. It now writes
+  the fault to the log and tells you which folder to find it in before it exits.
+
+- **After about ninety seconds of trying, the app gave up on a player for good.** Six
+  attempts and then silence for the rest of the round, whatever changed in the meantime.
+  The reasons a connection cannot be made are often temporary — a relay with no capacity
+  left frees some the moment anybody leaves — and nothing was ever going to ask again.
+  It now keeps trying every forty-five seconds, quietly, and says so once rather than
+  filling the log.
+
+- **A relay that is simply full now says so.** It is refused with a specific code, and
+  told apart from a relay that cannot be reached it is the difference between a network
+  problem at your end and a setting on the server. Those are fixed by different people,
+  and the log used to give no way to tell which one you had.
+
+- **Assigning the mute or deafen shortcut switched it on immediately.** Both act when
+  the key is released, and the setting was saved while it was still held down — so
+  letting go of the key you had just pressed to assign mute muted you. There was no
+  sound to say so, and the natural conclusion was that the microphone had broken.
+
+- **One use of the impostor radio spoiled every muffled voice afterwards.** The radio
+  and the muffling for vents and cameras share one filter, and the radio left it set to
+  the wrong kind. From then on a player in a vent, or seen on a camera, had everything
+  below 2 kHz stripped out — which is where speech is — so they were thin and hard to
+  make out instead of muffled. It lasted until you restarted.
+
+- **Two effects at once made a player far too loud and stuck that way.** A ghost within
+  reverb range who then climbed into a vent ended up routed through three paths at once
+  and roughly three times as loud, and the app then believed no effect was applied, so
+  it never took them out again.
+
+- **The numpad's `+`, `-`, `*`, `/` and `Enter` could be set as shortcuts and did
+  nothing.** The settings panel accepted them and the key handler had never heard of
+  them.
+
+- **Every player you met left an audio engine behind.** One is created for each person
+  and none were ever shut down, so an evening of people coming and going accumulated
+  them for as long as the app stayed open.
+
+- **A missing speaker could silence one player and nothing else.** If the speaker you
+  had chosen was no longer plugged in, sending a player's voice to it failed and the
+  failure went nowhere — no message, no fallback, just one person you could not hear.
+  It now falls back to the system default and says so in the log.
+
+- **A failed connection now says why.** It reports what it managed to find — including
+  whether the relay could be reached at all — and the app writes down which relays the
+  server offered. Two reports of this problem had to be diagnosed by guessing, because
+  the log recorded that a connection failed and nothing whatsoever about the reason.
+
+### Changed
+
+
+- **AnotherCrewLink no longer writes anything into Among Us, and no longer asks for
+  permission to.** Until now it opened the game with full access — the right to
+  change its memory, allocate executable memory inside it, and start threads in it —
+  and held that for as long as the game was running. It used a little of it: it
+  patched two of the game's functions so its name and address showed in the corner of
+  the main menu. That stamp is what you will notice missing. Nothing else about the
+  app changes; the whole point of reading the game is to know where everyone is, and
+  reading is all it does now. It asks the operating system for permission to read,
+  and nothing more.
+
+  If you have ever wondered whether a proximity chat mod could be mistaken for a
+  cheat, this is the honest answer to it: there is now no code in this app that can
+  change the game, and no permission held that would let it.
+
+- **A second feature went with it.** Clicking a lobby in the browser was once meant to
+  make the game join by itself, by writing the code into it. That was switched off
+  long before this fork existed and never worked. The code is now shown to you to
+  type or paste, which is what already happened in practice.
+
+- **The library that watches for your push-to-talk key was replaced.** The old one
+  carried no licence at all — not a restrictive one, none — which is not something to
+  ship inside an installer other people are asked to trust. Your shortcuts are stored
+  by name and did not need changing, and two things got slightly better on the way:
+  a shortcut typed in lower case now works, where before it silently did nothing, and
+  binding plain Shift, Ctrl or Alt again matches either the left or the right key.
+
+  The new one is also told not to report mouse movement at all, so the app never
+  receives your cursor position.
+
 ## v1.0.3
 
 A security release. Update it.
