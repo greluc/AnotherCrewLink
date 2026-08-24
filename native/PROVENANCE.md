@@ -5,37 +5,58 @@ unpinned branch HEADs, which meant an install could produce a different binary f
 day to the next; vendoring them fixes that. It also makes their licensing this project's
 problem to state, which is what this file is for.
 
-| Component | Upstream | Declared licence | Licence text present |
+| Component | Upstream | Licence | Licence text present |
 | --- | --- | --- | --- |
 | `native/electron-overlay-window` | [SnosMe/electron-overlay-window](https://github.com/SnosMe/electron-overlay-window) | MIT | Yes, `LICENSE` |
 | `native/memoryjs` | [Rob--/memoryjs](https://github.com/Rob--/memoryjs) | MIT | Yes, `LICENSE.md` |
-| `native/node-keyboard-watcher` | [OhMyGuus/node-keyboard-watcher](https://github.com/OhMyGuus/node-keyboard-watcher) | **None** | No |
+| `native/uiohook-napi` | [SnosMe/uiohook-napi](https://github.com/SnosMe/uiohook-napi) 1.5.5 | MIT wrapper around [libuiohook](https://github.com/kwhat/libuiohook) under LGPL-3.0-or-later | Yes for the wrapper, `LICENSE`; libuiohook carries its notice in each source file |
 | `vendor/structron` | [LordVonAdel/structron](https://github.com/LordVonAdel/structron) | ISC, in `package.json` only | No, and upstream has none either |
 
-## The one that is a problem
+LGPL-3.0-or-later combines with this project's GPL-3.0-or-later. Both halves are OSI
+approved, which the free code-signing programmes for open source require of every
+component.
 
-`node-keyboard-watcher` carries no licence at all: no `license` field in its
-`package.json`, no licence file, and none upstream either, where the last commit is from
-July 2023. Without a grant the default is that no permission is given, which sits badly in
-a GPL-3.0-or-later project that redistributes it, and it disqualifies the project from the
-free code-signing programmes for open source, which require every component to be open
-source.
+## The prebuilt binaries were removed
 
-It is 313 lines: a polled `GetAsyncKeyState` loop on Windows, the same loop over
-`XQueryKeymap` on X11, and a keycode table between them. `src/main/hook.ts` is its only
-caller, for push-to-talk and push-to-mute.
+`uiohook-napi` ships seven compiled `.node` files for platforms it supports. They are not
+vendored: `node-gyp-build` prefers a prebuild over compiling, so keeping them would mean
+shipping a binary nobody here built, from a tarball, inside an installer we are asking
+people to trust. Without them it compiles `libuiohook` from the C sources in this tree,
+and `electron-builder install-app-deps` then rebuilds it against Electron's ABI.
 
-Three ways out, none of them written yet:
+If an `npm ci` starts failing on a machine without a C++ toolchain, this is why. The
+toolchain requirement is in `CLAUDE.md`, and it already applied to the other three.
 
-1. **Ask upstream for a licence.** One line in a `package.json` settles it. The author
-   wrote BetterCrewLink, which this is a fork of, so the request is not a cold one --
-   but the repository has not moved in two years.
-2. **Swap in a licensed module.** `uiohook-napi` and `node-global-key-listener` are both
-   MIT. Push-to-talk is the feature players notice most when it misbehaves, so this is a
-   change that has to be tested by playing rather than by a test suite.
-3. **Reimplement it.** Small enough to be realistic, and it must be written from the
-   documented Win32 and X11 APIs rather than from the unlicensed source, or the problem
-   comes along with the copy.
+## The local patch
+
+`src/lib/addon.c` drops mouse motion, drags and the wheel on the hook thread, before
+anything is allocated or handed to JavaScript. `WH_MOUSE_LL` reports every movement, and a
+probe against a real session measured about 126 of them a second arriving in the main
+process -- the same process that reads the game's memory -- for events this client never
+reads. It binds keys and the two extra mouse buttons.
+
+A consequence worth having on purpose: the process never receives a cursor position at
+all, which is a better thing to be able to say about something holding a global input
+hook.
+
+**Re-apply it when upgrading.** It is fifteen lines in `dispatch_proc`, marked `LOCAL
+PATCH`. If mouse motion starts arriving again, that is what was lost. Note that a rebuild
+does not always recompile: `node-gyp-build` will reuse `build/Release/*.node` if it is
+there, so `rm -rf native/uiohook-napi/build` first and verify by counting `mousemove`
+events, not by reading the source.
+
+## What was here before
+
+`node-keyboard-watcher` polled `GetAsyncKeyState` for the shortcut keys, and was removed
+in favour of `uiohook-napi` because it carried no licence at all -- no field in its
+`package.json`, no licence file, and none upstream, where the last commit is from July
+2023. Without a grant the default is that no permission is given, which is an odd thing
+for a GPL-3.0-or-later project to redistribute.
+
+`src/main/keyBindings.ts` is what the swap cost: the shortcuts players have saved are
+names, not codes, so nobody's settings needed migrating, but the two libraries number keys
+differently and the extra mouse buttons moved to a different event. That file is the only
+place that knows.
 
 ## structron
 

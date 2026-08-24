@@ -443,9 +443,10 @@ and Chromium interop is the whole constraint; the `P4+` spike against a real
 | Single instance | named mutex | abstract socket |
 | Helper launch | spawned unelevated on demand; `ShellExecuteW` `runas` only after `OpenProcess` is denied, one UAC prompt per session (§3.2) | ordinary `Command::spawn`; no elevation, `setcap cap_sys_ptrace+ep` documented instead |
 
-The Windows key path stays the 60 ms `GetAsyncKeyState` poll that
-`native/node-keyboard-watcher` already runs. A `SetWindowsHookEx(WH_KEYBOARD_LL)`
-hook would not be a port — nothing in `native/` or `src/` installs one today — and
+The Windows key path stays a 60 ms `GetAsyncKeyState` poll. The Electron client
+no longer polls: `native/node-keyboard-watcher` carried no licence and was
+replaced by `native/uiohook-napi`, which does install
+`SetWindowsHookEx(WH_KEYBOARD_LL)`. The port has no such licensing pressure and
 it is worse: the callback runs on the installing thread's message pump, every
 keystroke on the desktop is blocked until it returns, and exceeding
 `LowLevelHooksTimeout` (300 ms by default) gets it silently unhooked. That is a

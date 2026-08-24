@@ -100,7 +100,7 @@ A big thanks to all those who translated and are still translating to keep this 
 * [CrewLink](https://github.com/ottomated) - The Official CrewLink App.
 * [Electron](https://www.electronjs.org/) - For making the app BetterCrewLink.
 * [memoryjs](https://github.com/TheGreatMcPain/memoryjs) - For making BetterCrewLink work with Linux.
-* [node-keyboard-watcher](https://github.com/OhMyGuus/node-keyboard-watcher) - For making it easy to make a Push To Talk, Push To Mute and Impostor Radio.
+* [uiohook-napi](https://github.com/SnosMe/uiohook-napi) and [libuiohook](https://github.com/kwhat/libuiohook) - For making it easy to make a Push To Talk, Push To Mute and Impostor Radio.
 * [electron-overlay-window](https://github.com/OhMyGuus/electron-overlay-window) - For making it easy to make Overlays.
 * [simple-peer](https://github.com/vrnagy/simple-peer) - For making it easy to make [WebRTC](https://webrtc.org/) for [Voice Servers](https://github.com/OhMyGuus/BetterCrewLink-server).
 

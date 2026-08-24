@@ -981,15 +981,19 @@ over the IPC and never fetches or decodes an image, so no image decoder enters
 the elevated process. Port the UIPI access check too; it is the difference
 between "the overlay is broken" and an accurate message about elevation.
 
-**The keyboard hook stays a poll.** `native/node-keyboard-watcher` is a 60 ms
-`GetAsyncKeyState` loop on Windows, aliased to `XQueryKeymap` on Linux. There is
-no `SetWindowsHookEx` anywhere in the current tree, so a `WH_KEYBOARD_LL` hook is
-not a port of anything: it is new code that puts a desktop-wide latency
-dependency in front of every keystroke, gets silently unhooked if a callback
-exceeds `LowLevelHooksTimeout`, and buys nothing over a poll that already works
-and intercepts nothing. One free Linux improvement while porting it: the current
-code opens and closes the X11 display on every key check — open one connection at
-startup.
+**The keyboard hook stays a poll**, though the reason has changed. The Electron
+client used to poll `GetAsyncKeyState` every 60 ms through
+`native/node-keyboard-watcher`; that module carried no licence and was replaced by
+`native/uiohook-napi`, which installs `SetWindowsHookEx(WH_KEYBOARD_LL)` and
+`WH_MOUSE_LL`. So `SetWindowsHookEx` is now in the tree, and a port that used one
+would be porting something real.
+
+It should not. A desktop-wide hook is a latency dependency in front of every
+keystroke on the machine and is silently unhooked if a callback exceeds
+`LowLevelHooksTimeout`; the Electron client accepted that to escape an unlicensed
+dependency, which is not a constraint the port has. `GetAsyncKeyState` is a direct
+call and needs no crate. See §6.1 for what libuiohook does to make its hook
+tolerable, and for the mouse-motion patch the client carries.
 
 Also here: exclusive-fullscreen detection, because with Fullscreen Optimizations
 off a layered window will not appear at all and the alternative is a swapchain

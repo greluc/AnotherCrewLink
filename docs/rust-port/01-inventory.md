@@ -21,7 +21,7 @@ from the `fix/bugs-and-deps-224r05` branch at version 1.0.2 and from
 | `src/common` | TS | 666 | Shared types, map colliders, mods |
 | `native/memoryjs` | C++ | 2,905 | Process memory, both platforms |
 | `native/electron-overlay-window` | C | 1,205 | Overlay attach, Win32 + X11 |
-| `native/node-keyboard-watcher` | C++ | 280 | Polled key watcher, Win32 + X11 |
+| `native/uiohook-napi` | C | ~11,000 | Input hook, Win32 + X11 + darwin (libuiohook) |
 | `vendor/structron` | JS | 802 | Binary struct parsing |
 | Server `src` | TS | 476 | Signalling relay, lobby browser |
 | **Total hand-written** | | **~16,300** | excluding tests, locales, assets |
@@ -118,7 +118,7 @@ repository.
 | Module | What it actually calls |
 | --- | --- |
 | `memoryjs` | `CreateToolhelp32Snapshot`, `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAllocEx`, `EnumProcessModules`, `QueryFullProcessImageName`; on Linux `process_vm_readv` and `/proc/<pid>/maps` |
-| `node-keyboard-watcher` | `GetAsyncKeyState` on a dedicated thread, polled every 60 ms; on X11 the same loop with `GetAsyncKeyState` aliased to `XQueryKeymap`, opening and closing the display on every check |
+| `uiohook-napi` | `SetWindowsHookEx(WH_KEYBOARD_LL)` and `WH_MOUSE_LL` on a dedicated thread with its own message pump; on X11 `XRecord`. Replaced `node-keyboard-watcher`, a 60 ms `GetAsyncKeyState` poll, which carried no licence at all |
 | `electron-overlay-window` | `SetWinEventHook` to follow the game window, `SetWindowLong` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT`, `SetWindowPos` for z-order, and a `PostMessage` probe for UIPI access; on X11 plain `xcb` only, tracking `_NET_ACTIVE_WINDOW`, `_NET_WM_NAME` and `_NET_WM_STATE` |
 
 There is no low-level keyboard hook anywhere in the tree: `SetWindowsHookEx`,

@@ -57,14 +57,30 @@ comment and `unsafe_op_in_unsafe_fn = "deny"` forces them to be explicit. On
 Linux the reader can hold none of it, because `nix::sys::uio::process_vm_readv`
 is a safe function whose lengths derive from the slices passed in.
 
-There is no low-level keyboard hook among those lines, and the port must not
-introduce one. `native/node-keyboard-watcher/src/lib/keyhandler.cpp` is a 60 ms
-`GetAsyncKeyState` poll, aliased to `XQueryKeymap` on Linux; the port keeps the
-poll. `SetWindowsHookEx(WH_KEYBOARD_LL)` would be new code described as a port,
-and its callback runs on the installing thread's message pump — a desktop-wide
-latency dependency in front of every keystroke on the machine, silently unhooked
-if it ever exceeds `LowLevelHooksTimeout`, for no gain over a poll that
-intercepts nothing.
+**This section described a poll, and the client no longer has one.**
+`native/node-keyboard-watcher` was removed because it carried no licence at all,
+and `native/uiohook-napi` replaced it. libuiohook installs
+`SetWindowsHookEx(WH_KEYBOARD_LL)` and `WH_MOUSE_LL`.
+
+The objection recorded here was aimed at a naive hook, and libuiohook is not one:
+the hook runs on its own thread with its own message pump, so it is not in front
+of the client's work, and events reach JavaScript through a non-blocking
+thread-safe call on a copied event, so the callback returns without waiting for
+anything the app does. What the callback still costs is libuiohook's own decoding,
+which is bounded, and it is the same cost every application using this library
+imposes.
+
+The client also carries a local patch dropping mouse motion, drags and the wheel
+on the hook thread before anything is allocated: it binds keys and two mouse
+buttons, and `WH_MOUSE_LL` otherwise reported about 126 motion events a second,
+measured. A consequence worth having on purpose is that the process never
+receives a cursor position at all.
+
+**The port should still prefer the poll.** Nothing above makes a desktop-wide hook
+free, and the port has no licensing reason to take one: it can call
+`GetAsyncKeyState` itself. This paragraph exists so that the next person to read
+it does not grep for `SetWindowsHookEx`, find it, and conclude the document was
+lying.
 
 The net C and C++ also runs the wrong way. The port deletes 4,390 lines and adds
 libopus, the C and assembly of whichever crypto backend TLS resolves to, and —

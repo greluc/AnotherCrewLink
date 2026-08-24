@@ -1,10 +1,10 @@
 import { app, ipcMain } from 'electron';
 import GameReader from './GameReader';
-import keyboardWatcherModule from 'node-keyboard-watcher';
-const { keyboardWatcher } = keyboardWatcherModule;
+import { uIOhook } from 'uiohook-napi';
 import Store from 'electron-store';
 import type { ISettings, playerConfigMap } from '../common/ISettings';
 import { IpcHandlerMessages, IpcMessages, IpcRendererMessages, IpcSyncMessages } from '../common/ipc-messages';
+import { type Binding, bindingFor, matchesKey, matchesMouse } from './keyBindings';
 
 const store = new Store<ISettings>();
 
@@ -30,20 +30,19 @@ if (playerConfigEntries.length > PLAYER_CONFIG_LIMIT) {
 let readingGame = false;
 export let gameReader: GameReader;
 
-let pushToTalkShortcut: K | undefined;
-let deafenShortcut: K | undefined;
-let muteShortcut: K | undefined;
-let impostorRadioShortcut: K | undefined;
+let pushToTalkShortcut: Binding = { kind: 'none' };
+let deafenShortcut: Binding = { kind: 'none' };
+let muteShortcut: Binding = { kind: 'none' };
+let impostorRadioShortcut: Binding = { kind: 'none' };
+
+// Nothing is registered with the hook: libuiohook reports every key and the filtering
+// happens here. The previous watcher had to be told which keys to poll for, which is why
+// this used to clear and re-add hooks on every settings change.
 function resetKeyHooks(): void {
-	pushToTalkShortcut = store.get('pushToTalkShortcut', 'V') as K;
-	deafenShortcut = store.get('deafenShortcut', 'RControl') as K;
-	muteShortcut = store.get('muteShortcut', 'RAlt') as K;
-	impostorRadioShortcut = store.get('impostorRadioShortcut', 'F') as K;
-	keyboardWatcher.clearKeyHooks();
-	addKeyHandler(pushToTalkShortcut);
-	addKeyHandler(deafenShortcut);
-	addKeyHandler(muteShortcut);
-	addKeyHandler(impostorRadioShortcut);
+	pushToTalkShortcut = bindingFor(store.get('pushToTalkShortcut', 'V') as string);
+	deafenShortcut = bindingFor(store.get('deafenShortcut', 'RControl') as string);
+	muteShortcut = bindingFor(store.get('muteShortcut', 'RAlt') as string);
+	impostorRadioShortcut = bindingFor(store.get('impostorRadioShortcut', 'F') as string);
 }
 
 ipcMain.on(IpcHandlerMessages.RESET_KEYHOOKS, () => {
@@ -74,42 +73,68 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 		const isLocalImpostor = (): boolean =>
 			gameReader?.lastState.players?.find((value) => value.clientId === gameReader.lastState.clientId)?.isImpostor ===
 			true;
+		// Only on a change. A held key repeats at the operating system's repeat rate, and
+		// the previous watcher polled for transitions, so sending on every event would put
+		// about thirty identical messages a second across the IPC boundary for as long as
+		// somebody holds push-to-talk.
+		let lastSent: boolean | undefined;
 		const sendPushToTalk = () => {
-			event.sender.send(IpcRendererMessages.PUSH_TO_TALK, speakingKeys.size > 0);
+			const speaking = speakingKeys.size > 0;
+			if (speaking === lastSent) return;
+			lastSent = speaking;
+			event.sender.send(IpcRendererMessages.PUSH_TO_TALK, speaking);
 		};
 		resetKeyHooks();
 
-		keyboardWatcher.on('keydown', (keyId: number) => {
-			if (keyCodeMatches(pushToTalkShortcut!, keyId)) {
+		// One implementation for both, because the extra mouse buttons are shortcuts like
+		// any other and arrive on a different event only because libuiohook separates
+		// them. `GetAsyncKeyState` did not, which is why they used to sit in a key table.
+		const pressed = (isBound: (binding: Binding) => boolean) => {
+			if (isBound(pushToTalkShortcut)) {
 				speakingKeys.add('pushToTalk');
 			}
-			if (keyCodeMatches(impostorRadioShortcut!, keyId) && isLocalImpostor()) {
+			// `has` first: the repeat would otherwise announce the radio again on every
+			// repeated event for as long as the key is down.
+			if (isBound(impostorRadioShortcut) && isLocalImpostor() && !speakingKeys.has('impostorRadio')) {
 				speakingKeys.add('impostorRadio');
 				event.sender.send(IpcRendererMessages.IMPOSTOR_RADIO, true);
 			}
 
 			sendPushToTalk();
-		});
+		};
 
-		keyboardWatcher.on('keyup', (keyId: number) => {
-			if (keyCodeMatches(pushToTalkShortcut!, keyId)) {
+		const released = (isBound: (binding: Binding) => boolean) => {
+			if (isBound(pushToTalkShortcut)) {
 				speakingKeys.delete('pushToTalk');
 			}
-			if (keyCodeMatches(deafenShortcut!, keyId)) {
+			if (isBound(deafenShortcut)) {
 				event.sender.send(IpcRendererMessages.TOGGLE_DEAFEN);
 			}
-			if (keyCodeMatches(muteShortcut!, keyId)) {
+			if (isBound(muteShortcut)) {
 				event.sender.send(IpcRendererMessages.TOGGLE_MUTE);
 			}
 			// Released unconditionally: the impostor state may have changed while held.
-			if (keyCodeMatches(impostorRadioShortcut!, keyId) && speakingKeys.delete('impostorRadio')) {
+			if (isBound(impostorRadioShortcut) && speakingKeys.delete('impostorRadio')) {
 				event.sender.send(IpcRendererMessages.IMPOSTOR_RADIO, false);
 			}
 
 			sendPushToTalk();
-		});
+		};
 
-		keyboardWatcher.start();
+		uIOhook.on('keydown', (e) => pressed((binding) => matchesKey(binding, e.keycode)));
+		uIOhook.on('keyup', (e) => released((binding) => matchesKey(binding, e.keycode)));
+		uIOhook.on('mousedown', (e) => pressed((binding) => matchesMouse(binding, Number(e.button))));
+		uIOhook.on('mouseup', (e) => released((binding) => matchesMouse(binding, Number(e.button))));
+
+		uIOhook.start();
+		// A low-level hook that is still installed can hold up shutdown.
+		app.once('will-quit', () => {
+			try {
+				uIOhook.stop();
+			} catch (error) {
+				console.error('Could not stop the input hook:', error);
+			}
+		});
 
 		// Read game memory
 		gameReader = new GameReader(event.sender.send.bind(event.sender));
@@ -159,72 +184,3 @@ ipcMain.on('relaunch', async () => {
 	app.relaunch();
 	app.exit();
 });
-
-const keycodeMap = {
-	Space: 0x20,
-	Backspace: 0x08,
-	Delete: 0x2e,
-	Enter: 0x0d,
-	Up: 0x26,
-	Down: 0x28,
-	Left: 0x25,
-	Right: 0x27,
-	Home: 0x24,
-	CapsLock: 0x14,
-	End: 0x23,
-	PageUp: 0x21,
-	PageDown: 0x22,
-	Escape: 0x1b,
-	Control: 0x11,
-	LShift: 0xa0,
-	RShift: 0xa1,
-	RAlt: 0xa5,
-	LAlt: 0xa4,
-	RControl: 0xa3,
-	LControl: 0xa2,
-	Shift: 0x10,
-	Alt: 0x12,
-	F1: 0x70,
-	F2: 0x71,
-	F3: 0x72,
-	F4: 0x73,
-	F5: 0x74,
-	F6: 0x75,
-	F7: 0x76,
-	F8: 0x77,
-	F9: 0x78,
-	F10: 0x79,
-	F11: 0x7a,
-	F12: 0x7b,
-	MouseButton4: 0x05,
-	MouseButton5: 0x06,
-	Numpad0: 0x60,
-	Numpad1: 0x61,
-	Numpad2: 0x62,
-	Numpad3: 0x63,
-	Numpad4: 0x64,
-	Numpad5: 0x65,
-	Numpad6: 0x66,
-	Numpad7: 0x67,
-	Numpad8: 0x68,
-	Numpad9: 0x69,
-	Disabled: -1,
-};
-type K = keyof typeof keycodeMap;
-
-function keyCodeMatches(key: K, keyId: number): boolean {
-	if (keycodeMap[key]) return keycodeMap[key] === keyId;
-	else if (key && key.length === 1) return key.charCodeAt(0) === keyId;
-	else {
-		console.error('Invalid key', key);
-		return false;
-	}
-}
-
-function addKeyHandler(key: K) {
-	if (keycodeMap[key] && keycodeMap[key] !== -1) {
-		keyboardWatcher.addKeyHook(keycodeMap[key]);
-	} else if (key && key.length === 1) {
-		keyboardWatcher.addKeyHook(key.charCodeAt(0));
-	}
-}
