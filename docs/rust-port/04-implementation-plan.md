@@ -268,9 +268,10 @@ exposure is a client forcing a 64 MiB allocation where the configured cap says
 runs after the frame is decoded, so it refuses the payload but does not prevent
 the allocation. This cannot be fixed at a reverse proxy, because neither nginx
 nor Caddy has a post-upgrade frame directive; the routes are an upstream change
-exposing `WebSocketConfig::max_message_size`, or a fork. File the upstream issue
-in this phase and note the exposure; do not write it down as a configuration
-line.
+exposing `WebSocketConfig::max_message_size`, or a fork. That upstream change is
+already open as [socketioxide#762](https://github.com/Totodore/socketioxide/pull/762),
+so note the exposure here and do not file a duplicate; do not write it down as a
+configuration line either.
 
 **Done when:** the existing 1.0.2 Electron client connects to the Rust server,
 joins a lobby, exchanges signalling, and the lobby browser populates — with no
@@ -305,11 +306,15 @@ What the code does that this section did not anticipate:
   and `.github/workflows/rust.yml` with a path filter mirrored into `build.yml`
   so neither server's workflow runs for the other's changes.
 
-**The one item this phase leaves open is not ours to close.** The accepted risk
-above asks for an upstream issue against socketioxide about the missing inbound
-frame cap. It needs an account that is not the agent's, so the report is drafted
-at `docs/rust-port/socketioxide-frame-cap-issue.md` and filing it is a maintainer
-action. Everything else in P0+ is done and verified.
+**The upstream issue this phase asks for should not be filed.** Searching before
+writing it found the fix already open as
+[socketioxide#762](https://github.com/Totodore/socketioxide/pull/762) — the same
+diagnosis, the same three lines, with tests, blocked since 2026-07-18 on a
+maintainer asking for separate frame-size and message-size options rather than
+reusing `max_payload`. A duplicate issue would cost the maintainer time and add
+nothing. `socketioxide-frame-cap-upstream.md` records what was checked and puts
+the real choice — wait, or finish #762's requested changes — where it can be
+decided instead of drifting. Everything else in P0+ is done and verified.
 
 > **Decision point — does the rest of the port proceed?**
 > P0+ is the last committed phase. It is deliberately the smallest useful piece
