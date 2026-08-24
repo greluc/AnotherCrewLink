@@ -675,6 +675,16 @@ per map (Skeld, Mira, Polus, Airship, Fungle) covering lobby, tasks, meeting,
 vents, cameras, sabotage, and deaths. Those recordings become `ReplayProcess`
 fixtures.
 
+> **Status: the harness is built and the corpus is empty.**
+> `src/main/recorder.ts` and `crates/acl-game/tests/parity.rs` both exist and the
+> replay works; `test/recordings/` has nothing in it, so the test skips loudly
+> rather than passing. Tracked as
+> [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10), because the
+> input cannot be produced at a keyboard — a fixture written by hand would only
+> prove the two implementations share an author's assumptions, which is the one
+> thing this gate is not for. It needs somebody to play the game with
+> `ACL_RECORD` set.
+
 > **Gate G1 — parity of the reader.**
 > For every recorded frame, the Rust reader's `AmongUsState` must equal the
 > Electron reader's, field for field, with float positions within 1e-6.

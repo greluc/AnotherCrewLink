@@ -13,7 +13,9 @@
 //! # Running it
 //!
 //! Put `.ndjson` files in `test/recordings/` and run `cargo test -p acl-game`. Without
-//! any it skips, loudly. A test that quietly passes having compared nothing would be the
+//! any it skips, loudly. The empty corpus is tracked as
+//! <https://github.com/greluc/AnotherCrewLink/issues/10>, because it needs frames from a
+//! real game and nobody can write those at a keyboard. A test that quietly passes having compared nothing would be the
 //! worst possible outcome here: it would report that the gate is met.
 
 use std::collections::BTreeMap;
@@ -231,7 +233,8 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             "skipping gate G1: no recordings in {}.\n\
              Record with `set ACL_RECORD=<name>` before starting the Electron client, then \
              copy userData/recordings/*.ndjson there. One session per map, covering lobby, \
-             tasks, meeting, vents, cameras, sabotage and deaths.",
+             tasks, meeting, vents, cameras, sabotage and deaths.
+\n             Tracked as https://github.com/greluc/AnotherCrewLink/issues/10.",
             recordings_directory().display()
         );
         return;
