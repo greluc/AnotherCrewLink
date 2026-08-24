@@ -352,6 +352,50 @@ mod tests {
     }
 
     #[test]
+    fn reads_another_process_without_any_elevation() {
+        // The question this answers is "what actually needs administrator rights", and the
+        // answer is: for a game running as the same user at the same integrity level,
+        // nothing does. Windows grants PROCESS_VM_READ over a same-user process to an
+        // ordinary token, and under the `injection` feature it grants PROCESS_VM_WRITE
+        // too. Elevation is only ever needed when the *game* is elevated, because a
+        // medium-integrity process cannot open a high-integrity one at all.
+        //
+        // This spawns a child, opens it with whatever rights the build asks for, and reads
+        // the PE signature out of a module it did not load itself. If this test ever needs
+        // administrator rights to pass, the premise of the two-process split has changed.
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawning a child process");
+
+        let result = (|| {
+            // The child needs a moment before its modules are mapped.
+            for _ in 0..50 {
+                if let Ok(process) = WindowsProcess::open(child.id())
+                    && let Some(module) = process.module("ntdll.dll")
+                {
+                    let mut magic = [0u8; 2];
+                    process.read_exact(module.base, &mut magic).ok()?;
+                    return Some(magic);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            None
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(
+            result,
+            Some(*b"MZ"),
+            "could not read a same-user child process;              the rights this build asks for are {:#x}",
+            requested_rights()
+        );
+    }
+
+    #[test]
     fn enumerates_this_process_modules() {
         let process = WindowsProcess::open(std::process::id()).expect("opening this process");
         // Every Windows process has ntdll loaded, whatever else it does.
