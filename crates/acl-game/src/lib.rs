@@ -6,6 +6,7 @@
 //! recorded frames and a fuzzer explore the same code without a game running.
 
 pub mod memory;
+pub mod offsets;
 pub mod scan;
 pub mod sparse;
 

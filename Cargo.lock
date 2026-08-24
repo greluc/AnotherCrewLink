@@ -17,6 +17,8 @@ version = "0.0.0"
 dependencies = [
  "acl-types",
  "nix",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
  "windows-sys 0.61.2",
