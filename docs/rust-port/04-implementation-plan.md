@@ -953,6 +953,32 @@ mapping — and the Socket.IO client that used to be item 1 has moved to P1+.
    pattern becomes a generation counter or an atomic detached flag inside the
    handler. That is where offer glare and stuck-in-`new` come back.
 3. The peer mesh: join, leave, offer glare, orphan cleanup, rebuild-on-failure.
+
+   **Relay discipline, learned the expensive way in 1.0.4** (§5.3). A mesh's demand
+   for relay reservations is quadratic in the lobby, and a relay grants a finite
+   number of them: the production one was granting twelve, shared across every
+   player, and the Electron client was asking for three per connection. One player
+   exhausted the server. Four rules follow, and none of them is obvious from the
+   `webrtc` crate's API:
+
+   - **One allocation per connection.** A server that advertises the same relay
+     twice must not produce two.
+   - **A refusal is temporary.** RFC 5766's 486 means the relay is reachable and
+     full; the reservations come back when somebody leaves. Retry, and never
+     report it as a network problem at this end.
+   - **Never force relay-only without a relay candidate in hand.** It leaves the
+     connection with no candidates at all, so a peer that sometimes connected
+     directly stops connecting ever. This is the escalation that makes things
+     worse, and it is the one a counter-based rule reaches for.
+   - **Do not give up.** Six attempts and then silence for the rest of the round
+     was the old behaviour, and the obstacle is frequently not permanent.
+
+   Rebuild-on-failure is also not the first response to trouble. A connection that
+   goes `disconnected` should get an ICE restart after a few seconds -- it keeps
+   the connection, its tracks and its DTLS session -- and only a `failed` should
+   cost a full rebuild. Measure that the restart really renegotiates on whatever
+   stack this lands on; a repair that quietly does nothing is indistinguishable
+   from the fault.
 4. `validateClientPeerConfig` port — its tests come across unchanged.
 
 **The four 1.0.0 connection bugs become named regression tests**, because a port
