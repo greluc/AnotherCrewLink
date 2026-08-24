@@ -13,11 +13,11 @@ and mixes every other player's voice by distance, walls, role and game state.
 cargo build --workspace                  # debug
 cargo build --workspace --release
 cargo nextest run --workspace            # all tests
-cargo nextest run -p aucl-audio          # one crate
+cargo nextest run -p acl-audio          # one crate
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo deny check                         # advisories, licences, bans, sources
-cargo run -p aucl-core                   # the app (spawns aucl-helper)
+cargo run -p acl-core                   # the app (spawns acl-helper)
 cargo xtask golden --verify              # DSP golden vectors
 cargo xtask netemu                       # receive path under emulated loss
 ```
@@ -32,34 +32,34 @@ Targets: `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc` (the injection path is
 
 | Crate | Responsibility |
 | --- | --- |
-| `aucl-types` | `AmongUsState`, `Player`, map colliders, settings schema. No I/O. |
-| `aucl-game` | Process memory, pattern scanning, offsets, shellcode injection |
-| `aucl-audio` | Capture, APM, Opus, jitter buffer, the DSP graph, the mixer |
-| `aucl-net` | Socket.IO signalling, WebRTC peer mesh |
-| `aucl-platform` | Keyboard poll, overlay window, paths, single instance |
-| `aucl-ipc` | Helper ↔ core: `postcard` message types and framing |
-| `aucl-app` | The state machine wiring the above together |
-| `aucl-ui` | egui views: main, settings, lobby browser, overlay |
-| `aucl-helper` | Elevated binary: game reader, injection, key poll, overlay window |
-| `aucl-core` | Unelevated binary: tokio, signalling, WebRTC, audio, GUI |
+| `acl-types` | `AmongUsState`, `Player`, map colliders, settings schema. No I/O. |
+| `acl-game` | Process memory, pattern scanning, offsets, shellcode injection |
+| `acl-audio` | Capture, APM, Opus, jitter buffer, the DSP graph, the mixer |
+| `acl-net` | Socket.IO signalling, WebRTC peer mesh |
+| `acl-platform` | Keyboard poll, overlay window, paths, single instance |
+| `acl-ipc` | Helper ↔ core: `postcard` message types and framing |
+| `acl-app` | The state machine wiring the above together |
+| `acl-ui` | egui views: main, settings, lobby browser, overlay |
+| `acl-helper` | Elevated binary: game reader, injection, key poll, overlay window |
+| `acl-core` | Unelevated binary: tokio, signalling, WebRTC, audio, GUI |
 | `server/` | `axum` + `socketioxide` signalling relay |
 | `xtask/` | Build and release automation, in Rust rather than shell |
 
-`aucl-types`, `aucl-game`, `aucl-audio` and `aucl-net` must build and test with
+`acl-types`, `acl-game`, `acl-audio` and `acl-net` must build and test with
 **no GUI dependency**. Do not add one.
 
-**Two binaries, not one.** `aucl-helper` is the only elevated process and holds
-memory reading, injection, the key poll and the overlay window; `aucl-core`
+**Two binaries, not one.** `acl-helper` is the only elevated process and holds
+memory reading, injection, the key poll and the overlay window; `acl-core`
 never elevates and holds tokio, signalling, WebRTC, audio and the GUI. They talk
 length-prefixed `postcard` over a named pipe (Windows) or a Unix socket (Linux).
-`aucl-core` starts the helper **on demand, with a per-launch UAC prompt**. There
+`acl-core` starts the helper **on demand, with a per-launch UAC prompt**. There
 is no Windows service, nothing auto-starts and nothing elevated is resident
 between sessions; the prompt is accepted friction, so do not "improve" it away
 with a scheduled task, an installed service or a cached elevation token.
 The overlay is in the helper because UIPI blocks window manipulation across
 integrity levels; it receives **pre-rasterised sprites** and never decodes an
-image, so no image decoder enters the elevated process. `aucl-game` is never
-linked into `aucl-core`. See
+image, so no image decoder enters the elevated process. `acl-game` is never
+linked into `acl-core`. See
 [docs/rust-port/03-target-architecture.md](docs/rust-port/03-target-architecture.md) §3.2.
 
 ## Rules that are not negotiable
@@ -74,7 +74,7 @@ the fix is in your change, not in the job.
 ### Parity is measured, not asserted
 
 The Electron implementation is the specification. Before changing anything in
-`aucl-audio::graph` or `voice_params`, read
+`acl-audio::graph` or `voice_params`, read
 [docs/rust-port/05-regression-strategy.md](docs/rust-port/05-regression-strategy.md).
 Golden vectors under `tests/golden/` were captured from Chromium's own output
 and are the contract. If a change moves a golden vector, that is a regression
@@ -82,21 +82,21 @@ until proven otherwise — do not regenerate the vector to make the test pass.
 
 ### `AmongUsState` has exactly one producer
 
-`aucl-game`, on the helper's game thread, produces it; it crosses the IPC once
-and everything inside `aucl-core` reads it through `tokio::sync::watch`. Nothing
-outside `aucl-game` constructs or mutates it.
+`acl-game`, on the helper's game thread, produces it; it crosses the IPC once
+and everything inside `acl-core` reads it through `tokio::sync::watch`. Nothing
+outside `acl-game` constructs or mutates it.
 
 ### `unsafe`
 
 `unsafe_op_in_unsafe_fn` is denied workspace-wide. Every `unsafe` block carries a
 `// SAFETY:` comment saying what invariant makes it sound. All remote memory
-reads go through the one checked helper in `aucl-game::mem`; no call site
+reads go through the one checked helper in `acl-game::mem`; no call site
 computes a buffer length itself.
 
 ### Panic isolation
 
 A panic in the receive path for one peer drops that peer. It must not reach the
-process. The boundary is in `aucl-net::peer`.
+process. The boundary is in `acl-net::peer`.
 
 ### The offsets bundle is validated, never trusted
 
@@ -109,7 +109,7 @@ The bundle carries **no signature**, by decision: an Among Us update is a burst,
 and a human with an offline key between that burst and the users is what keeps
 players out of the game. Everything therefore rests on the structural validator.
 Run it on **every** load, including from the `userData` cache and including the
-`include_bytes!` embedded floor, before a single number reaches `aucl-game`.
+`include_bytes!` embedded floor, before a single number reaches `acl-game`.
 Every offset is range-checked against the module before use; `bufferLength` is a
 bound, not a hint; the full replayed prologue is compared before any patch, with
 an explicit "already patched by us" state. A validator that rejects real data is
@@ -196,7 +196,7 @@ the standard library, and its maintenance status.
   build, an ordering that matters. Do not narrate what the line does.
 - Errors: `thiserror` in libraries, `anyhow` in binaries.
 - Logging: `tracing`. No `println!` outside `xtask`.
-- Public items in `aucl-*` crates are documented; `missing_docs` is warned.
+- Public items in `acl-*` crates are documented; `missing_docs` is warned.
 
 ## Where the design lives
 

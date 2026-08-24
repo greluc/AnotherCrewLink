@@ -13,13 +13,33 @@ twice the effort first estimated here — but what is actually being built today
 is the hardening track and the Rust server, and nothing beyond them is
 committed.**
 
+> **Update, 2026-08-24, after `P0+` shipped.** The Rust server is written, tested
+> and merged, and the Node implementation has been **deleted** from the server
+> repository — that repository is now the Rust server, with the crate at its root.
+> The Node server is still the process running in production; what changed is that
+> nobody will fix it there any more, so deploying the Rust one is now the thing that
+> closes the gap rather than a thing to schedule later.
+>
+> One consequence for what follows. `H3`'s server half is already done: the envelope
+> rules and first-claimer host are enforced in the Rust server from its first commit,
+> so there is no Node change to make and no dual-stack window to manage.
+>
+> The OBS overlay and the mobile relay **stay in the Electron client** as they are.
+> They are not carried into the Rust client, and the Rust server refuses the shape
+> they use — a signal addressed to a room name — so both stop working the day it is
+> deployed. That is the cost recorded in §4.2, paid once, and it takes no client
+> release to pay: voice is unaffected either way.
+>
+> The abbreviation for the client and the server is `acl`. Crate names below follow.
+> The deployment hostname is unrelated and unchanged.
+
 **Scope, as of 2026-08-24.** `H1`–`H3` and `P0+` are funded. When the Rust
 server ships there is an explicit decision point on whether the rest of the port
 proceeds, taken on what building it actually cost rather than on this document.
 Everything below is the plan for that port and is written as such; read it as a
 route that has been surveyed, not a journey under way. The hardening track is
-unaffected either way — it runs on the shipped Electron client and the shipped
-Node server, and protects the fleet that will never see 2.x.
+unaffected either way — it runs on the shipped Electron client and protects the
+fleet that will never see 2.x.
 
 Every component has a working Rust answer. The difficulty is concentrated almost
 entirely in one place: Chromium currently supplies the whole real-time voice
@@ -114,7 +134,7 @@ per-launch UAC prompt, no Windows service. One decision below it is still open,
 and it would move two rows of the risk table from High to Low. The
 `i686-pc-windows-msvc` target exists only for the injection path, and it is what
 forecloses LiveKit's libwebrtc binding, puts NASM in the build, and creates the
-alignment hazard MSVC brings to the struct parsing in `aucl-game`. Confining
+alignment hazard MSVC brings to the struct parsing in `acl-game`. Confining
 injection to a 32-bit process — the helper itself, or a third smaller one —
 removes all three. It has not been decided either way.
 
