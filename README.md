@@ -17,6 +17,40 @@ It is a fork of [BetterCrewLink](https://github.com/OhMyGuus/BetterCrewLink) by
 OhMyGuus, which in turn forked [CrewLink](https://github.com/ottomated/CrewLink) by
 ottomated. See [CREDITS.md](CREDITS.md).
 
+## Windows says the app is not safe
+
+It is not signed, so Windows has nothing to check it against and says so. Two different
+mechanisms do this and only one of them can be waved past.
+
+**SmartScreen** shows "Windows protected your PC". Click **More info**, then **Run
+anyway** — the link is deliberately unobtrusive. If the dialog reappears, right-click the
+installer, choose **Properties**, tick **Unblock** at the bottom and apply; that removes
+the mark-of-the-web the browser attached. Edge and Chrome may also refuse the download
+itself before any of this, which needs **Keep** in the downloads list.
+
+**Smart App Control** is a different feature, on by default only on Windows 11 machines
+that were installed clean. It blocks unsigned programs outright and offers no way past for
+a single app. The only options are to turn it off — under **Windows Security → App &
+browser control → Smart App Control** — or to wait for a signed build. Understand what that
+costs before doing it: **Smart App Control cannot be switched back on afterwards without
+reinstalling Windows.** That is how Microsoft designed it, and it applies to the whole
+machine, not to this app.
+
+If there is no "Run anyway" and no way to allow the app, it is Smart App Control rather
+than SmartScreen.
+
+### Checking what you downloaded
+
+A signature would prove where the installer came from. Until there is one, the checksum at
+least proves you have the same bytes the build produced. Compare it with the value on the
+[release page](https://github.com/greluc/AnotherCrewLink/releases):
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\AnotherCrewLink-Setup-1.0.3.exe
+```
+
+For 1.0.3 that is `744766e9304437c5f9e27206d7840c9f505d25cb62e0f3708adacf963f8d34ad`.
+
 ## Server
 
 **AnotherCrewLink does not work with the official BetterCrewLink server.** This

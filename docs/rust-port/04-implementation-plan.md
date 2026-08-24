@@ -882,6 +882,15 @@ Run the same impairments through the Electron client for reference numbers.
 >    the APM choice in §4.5 is open again on wider grounds than when it was
 >    made.
 >
+>    **Measured 2026-08-24:** `libwebrtc` 0.3.45 builds, links and runs on
+>    `x86_64-pc-windows-msvc`, so it really is a live option and not a
+>    theoretical one. But `webrtc-sys-build` downloads a prebuilt 86 MB
+>    `webrtc.lib` from LiveKit rather than compiling it — 493 MB in the build
+>    directory — and this project has spent the same week going the other way,
+>    stripping prebuilt binaries out of `native/uiohook-napi` so everything is
+>    compiled from source. That is the axis the choice now turns on, not echo
+>    return loss. See `experiments/README.md`.
+>
 > Criterion 3's 30 ms latency budget and the NACK target-delay decision are made
 > **jointly**, not independently: a buffer deep enough to make a retransmission
 > useful over a 60–100 ms RTT can consume the entire budget.

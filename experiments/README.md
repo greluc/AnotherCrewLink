@@ -81,3 +81,38 @@ Two of G2's preconditions remain open and neither is a build question. The A/B
 echo-return-loss-enhancement measurement against `webrtc-audio-processing` needs real
 speaker-and-mic captures on Linux, where both crates build. And sonora's bus factor is
 one — 209 of its 221 commits are from a single author — which no test run changes.
+
+### The comparison is no longer sonora against `webrtc-audio-processing`
+
+**Measured 2026-08-24.** Striking gate G2's criterion 6 removed the
+`i686-pc-windows-msvc` target, and that target was the only thing foreclosing
+`libwebrtc` — LiveKit's binding to the real Chromium stack, which would supply AEC3, NS
+and AGC together with Opus, RTP/RTCP and NetEQ as one dependency. Whether it builds where
+the users are had never been asked, because until the injection path was removed it could
+not matter. It does:
+
+| Candidate | `x86_64-pc-windows-msvc` |
+| --- | --- |
+| `sonora` 0.2.0 | builds, links, runs |
+| `libwebrtc` 0.3.45 | builds, links, runs — 48 s |
+| `webrtc-audio-processing` 2.1.0 | still no. PR #102 "Support MSVC targets" open since 2026-08-08, issue #34 "Windows build" open since 2023-09-27, latest release still 2.1.0 |
+
+So `webrtc-audio-processing` is out on the same grounds as before, and the real choice is
+**sonora against libwebrtc**.
+
+**It is not a like-for-like comparison, and the difference is not about audio quality.**
+`libwebrtc` does not build the Chromium stack: `webrtc-sys-build` downloads a prebuilt
+release from LiveKit and links it. That is an 86 MB `webrtc.lib` and 493 MB in the build
+directory, and it is a binary this project did not compile. Two weeks of work in this
+repository has gone the other way — the prebuilt `.node` files were deliberately left out
+of `native/uiohook-napi` so libuiohook is compiled from the C sources in the tree, and the
+code-signing application rests on every artifact being built from source in a verifiable
+way. Taking `libwebrtc` would put a downloaded binary blob at the centre of the audio path
+and would have to be argued for on those terms, not on ERLE.
+
+**A warning about measuring this.** The first attempt reported a hard failure —
+`fatal error C1083: Cannot open include file: 'absl/types/optional.h'` — and the header
+was there all along. The build ran under a path 298 characters deep, and `cl.exe` does not
+opt in to long paths whatever `LongPathsEnabled` says. Anyone repeating this must build
+from a short directory, or they will record "libwebrtc does not build on Windows" and be
+wrong.
