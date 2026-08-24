@@ -7,12 +7,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["http"]
+# The HTTP client, for fetching the offsets bundle. Off in a build that only ever reads a
+# cache or the embedded floor -- which is what the parity harness and the fuzzer do.
+http = ["dep:ureq"]
+
 [dependencies]
 acl-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+ureq = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

@@ -514,8 +514,12 @@ covered, 301 exemptions. `sonora`, `eframe`, `egui`, `winit`, `x11rb`,
 `windows-sys`, `kurbo`, `serde_json`, `tokio-tungstenite` and `webpki-roots` have
 no audit in any shared set; `postcard` does. The count moved twice during this
 phase — 283, then 316 when the transport landed, then 346 when the overlay probe
-named eframe's platform features — and the gate failed each time until the new
-crates were written down. §8 asked that this be said plainly instead of letting a
+named eframe's platform features, then 360 when the offsets store brought in
+`ureq` and `rustls-platform-verifier` (45 covered, 315 exemptions) — and the gate
+failed each time until the new crates were written down. The last of those also
+failed `cargo-deny`, on `webpki-root-certs`: Mozilla's CA data ships under
+CDLA-Permissive-2.0, which is a licence for data rather than code and is allowed
+in `deny.toml` with that reasoning written beside it. §8 asked that this be said plainly instead of letting a
 supply-chain table imply coverage that does not exist, and `supply-chain/README.md`
 says it.
 
@@ -620,6 +624,31 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
 > target, the NASM requirement, the alignment hazard item 2 lints around, the
 > `PROCESS_VM_WRITE` right, and the foreclosure of LiveKit's `libwebrtc` binding
 > are all bought by a branding stamp.
+
+> **Decided 2026-08-24: removed, not split.** The measurement above priced it, and
+> the answer was that a branding stamp does not buy an `i686` target. The
+> injection module, the `injection` feature, the `PROCESS_VM_WRITE` right and the
+> 32-bit target are all gone, from this port and from the 1.x client — where
+> `native/memoryjs` now opens the game with `PROCESS_VM_READ |
+> PROCESS_QUERY_LIMITED_INFORMATION` instead of `PROCESS_ALL_ACCESS`.
+>
+> Verified against a real process with the rebuilt module: reading still works and
+> a write to the same address leaves the bytes unchanged. `memoryjs` never noticed
+> the refusal, because `writeBuffer` ignores `WriteProcessMemory`'s return value —
+> which is why the write declarations came out of the type definitions too.
+>
+> What this buys, beyond the risk table: no NASM on the build machine, no MSVC
+> 4-byte alignment hazard in struct parsing, and LiveKit's `libwebrtc` binding is
+> live again for `P3+` — AEC3, Opus with FEC, RTP/RTCP and NetEQ as one dependency
+> instead of five separate crates with a bus factor of one between them.
+>
+> What it does **not** change is elevation, which never depended on writing. A
+> same-user game needs none; a game running at a higher integrity level cannot be
+> opened at all, whatever rights are asked for, and takes push-to-talk with it
+> through UIPI. The `runas` fallback in `03-target-architecture.md` §3.2 stays, and
+> is now the only thing standing behind that one configuration.
+>
+> The paragraph below is kept as the record of what the decision was between.
 
 **An explicit open decision: split the injection path into its own 32-bit
 process.** The `i686-pc-windows-msvc` target exists for nothing but item 6, and

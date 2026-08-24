@@ -35,7 +35,7 @@ use crate::memory::{Module, ProcessMemory, ReadError};
 /// The rights this reader opens a process with.
 ///
 /// Reading, and enough to ask whether the process is 32- or 64-bit. Writing is added by
-/// the `injection` feature and by nothing else.
+/// the removed injection path and by nothing else.
 const READ_RIGHTS: u32 = PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION;
 
 /// The rights actually requested.
@@ -271,7 +271,6 @@ mod tests {
             PROCESS_QUERY_LIMITED_INFORMATION
         );
 
-        #[cfg(not(feature = "injection"))]
         {
             use windows_sys::Win32::System::Threading::{
                 PROCESS_ALL_ACCESS, PROCESS_CREATE_THREAD, PROCESS_VM_OPERATION, PROCESS_VM_WRITE,
@@ -285,16 +284,6 @@ mod tests {
             );
             assert_ne!(requested_rights(), PROCESS_ALL_ACCESS);
         }
-    }
-
-    #[cfg(feature = "injection")]
-    #[test]
-    fn the_injection_feature_adds_writing_but_never_thread_creation() {
-        use windows_sys::Win32::System::Threading::{PROCESS_CREATE_THREAD, PROCESS_VM_WRITE};
-        assert_ne!(requested_rights() & PROCESS_VM_WRITE, 0);
-        // Even with injection on. Nothing in this project needs to start a thread in the
-        // game, and asking for the right is what makes a handle worth stealing.
-        assert_eq!(requested_rights() & PROCESS_CREATE_THREAD, 0);
     }
 
     #[test]
@@ -351,7 +340,7 @@ mod tests {
         // The question this answers is "what actually needs administrator rights", and the
         // answer is: for a game running as the same user at the same integrity level,
         // nothing does. Windows grants PROCESS_VM_READ over a same-user process to an
-        // ordinary token, and under the `injection` feature it grants PROCESS_VM_WRITE
+        // ordinary token, and the removed injection path granted PROCESS_VM_WRITE
         // too. Elevation is only ever needed when the *game* is elevated, because a
         // medium-integrity process cannot open a high-integrity one at all.
         //

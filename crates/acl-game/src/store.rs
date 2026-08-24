@@ -18,7 +18,8 @@ use std::time::Duration;
 use crate::offsets::{BundleContext, Lookup, Offsets, Rejected};
 
 /// The mirror. Ours, pinned to a branch we control and review.
-pub const PRIMARY_MIRROR: &str = "https://raw.githubusercontent.com/greluc/AnotherCrewlink-Offsets/main";
+pub const PRIMARY_MIRROR: &str =
+    "https://raw.githubusercontent.com/greluc/AnotherCrewlink-Offsets/main";
 /// The fallback, reached when the primary cannot be.
 ///
 /// jsDelivr caches a branch reference for up to twelve hours, so this can be stale. The
@@ -166,13 +167,16 @@ impl OffsetStore {
     /// Returns [`StoreError::BrokenFloor`] if even the compiled-in copy does not validate,
     /// which means this build shipped broken and there is nothing left to fall back to.
     pub fn load_lookup(&self, fetcher: &dyn Fetcher) -> Result<Loaded<Lookup>, StoreError> {
-        let held = self.cached_lookup().ok().and_then(|lookup| lookup.bundle_version);
+        let held = self
+            .cached_lookup()
+            .ok()
+            .and_then(|lookup| lookup.bundle_version);
         let context = BundleContext {
             client_version: self.client_version.clone(),
             held_bundle_version: held,
         };
 
-        let mut reason = None;
+        let mut reason;
         match fetcher.fetch("lookup.json") {
             Ok(body) => match parse_and_validate_lookup(&body, &context) {
                 Ok(lookup) => {
@@ -231,7 +235,7 @@ impl OffsetStore {
         let path = format!("offsets/{arch}/{file}");
         let cache_name = format!("offsets-{arch}-{}", file.replace(['/', '\\'], "_"));
 
-        let mut reason = None;
+        let mut reason;
         match fetcher.fetch(&path) {
             Ok(body) => match parse_and_validate_offsets(&body) {
                 Ok(offsets) => {
@@ -272,9 +276,9 @@ impl OffsetStore {
             });
         }
 
-        Err(StoreError::Unavailable(
-            reason.unwrap_or_else(|| format!("{file} is not the build the floor describes")),
-        ))
+        Err(StoreError::Unavailable(reason.unwrap_or_else(|| {
+            format!("{file} is not the build the floor describes")
+        })))
     }
 
     /// Drops both caches, so the next load reads the floor and then the mirror again.
@@ -419,7 +423,10 @@ mod tests {
 
         let loaded = store.load_lookup(&bad).expect("falls back");
         assert_eq!(loaded.source, Source::Embedded);
-        assert!(!store.cache.join("lookup.json").exists(), "it was cached anyway");
+        assert!(
+            !store.cache.join("lookup.json").exists(),
+            "it was cached anyway"
+        );
     }
 
     #[test]
@@ -428,7 +435,10 @@ mod tests {
         let body = EMBEDDED_LOOKUP.to_owned();
 
         let online = Scripted::new(vec![Ok(body)]);
-        assert_eq!(store.load_lookup(&online).expect("loads").source, Source::Mirror);
+        assert_eq!(
+            store.load_lookup(&online).expect("loads").source,
+            Source::Mirror
+        );
         assert!(store.cache.join("lookup.json").exists());
 
         let offline = Scripted::new(vec![Err("offline".to_owned())]);
@@ -445,9 +455,10 @@ mod tests {
         let online = Scripted::new(vec![Ok(EMBEDDED_LOOKUP.to_owned())]);
         store.load_lookup(&online).expect("loads");
 
-        let mut tampered: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(store.cache.join("lookup.json")).unwrap())
-                .unwrap();
+        let mut tampered: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(store.cache.join("lookup.json")).unwrap(),
+        )
+        .unwrap();
         tampered["versions"]["default"]["file"] =
             serde_json::Value::from("https://evil.example/x.json");
         std::fs::write(
@@ -503,7 +514,10 @@ mod tests {
         let mut newer: serde_json::Value = serde_json::from_str(EMBEDDED_LOOKUP).unwrap();
         newer["bundle_version"] = serde_json::Value::from(9);
         let online = Scripted::new(vec![Ok(serde_json::to_string(&newer).unwrap())]);
-        assert_eq!(store.load_lookup(&online).expect("loads").source, Source::Mirror);
+        assert_eq!(
+            store.load_lookup(&online).expect("loads").source,
+            Source::Mirror
+        );
 
         // The mirror was reverted, or someone replayed an old file at it.
         let mut older: serde_json::Value = serde_json::from_str(EMBEDDED_LOOKUP).unwrap();

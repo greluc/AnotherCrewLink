@@ -14,6 +14,9 @@
 //! one and finds nothing, which is exactly how this port first failed its own test. The
 //! same shape as the function RVAs, which are placeholders for the same reason — and the
 //! reason the bundle's *signatures* are what the validator bounds tightly.
+//!
+//! Seven fills, then, and not twelve. The other five entries in the Electron reader's list
+//! were addresses to write to; see the note beside them below.
 
 use std::collections::BTreeMap;
 
@@ -97,24 +100,13 @@ pub fn resolve_offsets(
         }
     }
 
-    // The four write-path functions and the ping string are whole values rather than chain
-    // steps, and on a 64-bit build their signatures are absent entirely — writing is
-    // 32-bit only, which is why ninety entries in the corpus are `{}`.
-    for (signature_name, field) in [
-        ("connectFunc", "connectFunc"),
-        ("fixedUpdateFunc", "fixedUpdateFunc"),
-        ("showModStamp", "showModStampFunc"),
-        ("modLateUpdate", "modLateUpdateFunc"),
-        ("pingMessageString", "pingMessageString"),
-    ] {
-        if let Some(address) = scan(memory, module, offsets.signatures.get(signature_name))? {
-            let relative = address.saturating_sub(module.base);
-            if let Ok(relative) = i64::try_from(relative) {
-                set_function(&mut resolved, field, relative);
-                found.insert(signature_name.to_owned(), address);
-            }
-        }
-    }
+    // The bundle also carries five whole-value offsets -- `connectFunc`,
+    // `fixedUpdateFunc`, `showModStampFunc`, `modLateUpdateFunc` and
+    // `pingMessageString`. Every one of them existed to be written to or jumped into, and
+    // nothing writes any more, so this reader does not scan for them. They are still parsed
+    // and still bounds-checked, because they are in the file and the validator's job is the
+    // file; they are simply never resolved against a live process. Ninety entries in the
+    // corpus are `{}` here in any case: the write path was 32-bit only.
 
     Ok(ResolvedOffsets {
         offsets: resolved,
@@ -185,18 +177,6 @@ fn fill_first_step(offsets: &mut Offsets, field: &str, address: u64) -> bool {
 #[cfg(test)]
 pub(crate) fn fill_first_step_for_test(offsets: &mut Offsets, field: &str, address: u64) -> bool {
     fill_first_step(offsets, field, address)
-}
-
-/// Sets one of the five whole-value function offsets.
-fn set_function(offsets: &mut Offsets, field: &str, relative: i64) {
-    match field {
-        "connectFunc" => offsets.connect_func = relative,
-        "fixedUpdateFunc" => offsets.fixed_update_func = relative,
-        "showModStampFunc" => offsets.show_mod_stamp_func = relative,
-        "modLateUpdateFunc" => offsets.mod_late_update_func = relative,
-        "pingMessageString" => offsets.ping_message_string = relative,
-        _ => {}
-    }
 }
 
 #[cfg(test)]

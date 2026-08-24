@@ -71,6 +71,16 @@ smaller split, not by a thread split. Two processes:
 > What the split actually buys is written in the paragraph below and does not
 > depend on privilege at all: it is about what shares an address space with the
 > handle on the game.
+>
+> **The injection path was removed on 2026-08-24, and that does not change any of
+> this.** Writing a same-user process never needed elevation either — the same
+> measurement covered it. What removing the writes changed is how much this
+> project holds when it does open the game: `PROCESS_VM_READ |
+> PROCESS_QUERY_LIMITED_INFORMATION` rather than `PROCESS_ALL_ACCESS`, in the 1.x
+> client as well as here. The narrower set also *fails less often*:
+> `PROCESS_QUERY_LIMITED_INFORMATION` exists precisely to be grantable where the
+> wider query right is not, so "run it as administrator" is advice fewer people
+> will need.
 
 A thread boundary is not a privilege boundary. `catch_unwind` around a peer does
 not contain a memory-safety bug in the APM's C++ or in a pre-1.0 RTP parser, and
