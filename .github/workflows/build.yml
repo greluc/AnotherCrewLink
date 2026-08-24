@@ -22,6 +22,7 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      - 'test/recordings/**'
   pull_request:
     paths-ignore:
       - 'crates/**'
@@ -32,6 +33,7 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      - 'test/recordings/**'
   workflow_dispatch:
 
 jobs:

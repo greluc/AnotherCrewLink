@@ -21,6 +21,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # Gate G1 replays these against the Rust reader. Without them here, adding a
+      # recording the reader disagrees with leaves the repository green until somebody
+      # happens to touch a crate.
+      - 'test/recordings/**'
   pull_request:
     paths:
       - 'crates/**'
@@ -31,6 +35,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # Gate G1 replays these against the Rust reader. Without them here, adding a
+      # recording the reader disagrees with leaves the repository green until somebody
+      # happens to touch a crate.
+      - 'test/recordings/**'
   workflow_dispatch:
 
 permissions:
