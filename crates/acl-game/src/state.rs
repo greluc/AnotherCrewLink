@@ -1,0 +1,574 @@
+//! What the reader produces: one frame of the game, as the rest of the client sees it.
+//!
+//! The field names and the JSON shape are the Electron client's, because gate G1 compares
+//! the two field for field and a rename would make that comparison meaningless. Where the
+//! two differ it is because one of them is wrong, and this is where that shows up.
+//!
+//! # Purity
+//!
+//! Everything here takes `&dyn ProcessMemory` and returns `Result`. No `unwrap`, no `as`
+//! truncation on a value that came out of the target. That is what item 7 of the plan
+//! asks for, and it is not decoration: a fuzzer that has to open a process finds nothing,
+//! and a parity run that has to have a game running cannot be part of CI.
+
+use serde::{Deserialize, Serialize};
+
+use crate::dotnet::{read_dictionary, read_string, strip_rich_text};
+use crate::memory::{ProcessMemory, ReadError, read_pointer, resolve_chain};
+use crate::offsets::Offsets;
+
+/// Where the game is.
+///
+/// The discriminants are the game's own, and the JSON is the number, because that is what
+/// the Electron client sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+pub enum GameState {
+    /// In a lobby, before the game starts.
+    Lobby,
+    /// Playing.
+    Tasks,
+    /// A meeting or a vote.
+    Discussion,
+    /// Not in a game at all.
+    Menu,
+    /// Not read yet, or a value this build does not know.
+    Unknown,
+}
+
+impl From<GameState> for u8 {
+    fn from(state: GameState) -> Self {
+        match state {
+            GameState::Lobby => 0,
+            GameState::Tasks => 1,
+            GameState::Discussion => 2,
+            GameState::Menu => 3,
+            GameState::Unknown => 4,
+        }
+    }
+}
+
+impl TryFrom<u8> for GameState {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(Self::from_game(u32::from(value)))
+    }
+}
+
+impl GameState {
+    /// The state for a value read out of the game.
+    ///
+    /// Anything unrecognised is [`GameState::Unknown`] rather than an error: a new game
+    /// build adding a state should leave players audible, not stop the reader.
+    #[must_use]
+    pub fn from_game(value: u32) -> Self {
+        match value {
+            0 => Self::Lobby,
+            1 => Self::Tasks,
+            2 => Self::Discussion,
+            3 => Self::Menu,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// One player, as the client needs them.
+///
+/// `ptr`, `taskPtr` and `objectPtr` are addresses in the game's memory. They are here
+/// because the Electron reader puts them here and G1 compares field for field; H1's
+/// `WireGameState` projection is what strips them before anything leaves the machine.
+// Eight booleans, and clippy would rather they were a bitfield. They are the Electron
+// client's field names and gate G1 compares the two structures field for field, so the
+// shape is not free to improve.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Player {
+    /// The player record's address.
+    pub ptr: u64,
+    /// The in-game player id.
+    pub id: u8,
+    /// The network client id.
+    pub client_id: u32,
+    /// The name, with rich-text tags stripped.
+    pub name: String,
+    /// A hash of the name, for the overlay.
+    pub name_hash: u32,
+    /// The colour index.
+    pub color_id: u32,
+    /// The hat, by asset name.
+    pub hat_id: String,
+    /// The pet, by index.
+    pub pet_id: u32,
+    /// The skin, by asset name.
+    pub skin_id: String,
+    /// The visor, by asset name.
+    pub visor_id: String,
+    /// Whether they have left.
+    pub disconnected: bool,
+    /// Whether they are an impostor.
+    pub is_impostor: bool,
+    /// Whether they are dead.
+    pub is_dead: bool,
+    /// The task list's address.
+    pub task_ptr: u64,
+    /// The player object's address.
+    pub object_ptr: u64,
+    /// Whether this is the player at this machine.
+    pub is_local: bool,
+    /// A colour a mod has shifted them to, or -1.
+    pub shifted_color: i32,
+    /// Whether the record looked wrong and was kept anyway.
+    pub bugged: bool,
+    /// Where they are.
+    pub x: f32,
+    /// See [`Player::x`].
+    pub y: f32,
+    /// Whether they are in a vent.
+    pub in_vent: bool,
+    /// Whether they are a practice-mode dummy.
+    pub is_dummy: bool,
+}
+
+/// One frame of the game.
+// As above: the shape is the wire format, not a design decision this crate gets to make.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmongUsState {
+    /// Where the game is now.
+    pub game_state: GameState,
+    /// Where it was on the previous frame.
+    pub old_game_state: GameState,
+    /// The lobby code as the game stores it.
+    pub lobby_code_int: i32,
+    /// The lobby code as players type it.
+    pub lobby_code: String,
+    /// Everyone in the lobby.
+    pub players: Vec<Player>,
+    /// Whether this machine is the host.
+    pub is_host: bool,
+    /// This machine's network client id.
+    pub client_id: u32,
+    /// The host's network client id.
+    pub host_id: u32,
+    /// Whether communications are sabotaged.
+    pub coms_sabotaged: bool,
+    /// Which security camera the local player is watching.
+    pub current_camera: u32,
+    /// Which map.
+    pub map: u32,
+    /// How far the local player can see.
+    pub light_radius: f32,
+    /// Whether that changed since the previous frame.
+    pub light_radius_changed: bool,
+    /// Which doors are shut.
+    pub closed_doors: Vec<u32>,
+    /// Which server the game is on.
+    pub current_server: String,
+    /// The lobby's player limit.
+    pub max_players: u32,
+    /// Which mod is loaded.
+    pub mod_id: String,
+    /// Whether this build has the older meeting HUD layout.
+    pub old_meeting_hud: bool,
+}
+
+/// The alphabet the game encodes a lobby code with.
+const CODE_ALPHABET: &[u8; 26] = b"QWXRTYLPESDFGHUJKZOCVBINMA";
+
+/// Below this, the value is the packed six-character format.
+///
+/// The thresholds are the Electron reader's exactly: at or below -1000 is the six
+/// character code, strictly above zero is the older four character one, and everything
+/// between is no code at all. Getting the boundary wrong would turn a menu into a lobby.
+const CODE_V2_MAXIMUM: i32 = -1000;
+
+/// Turns the integer the game stores into the code players type.
+///
+/// Two formats, and the thresholds between them matter as much as the arithmetic. Both
+/// are ported from `IntToGameCode` in `GameReader.ts`.
+#[must_use]
+pub fn lobby_code_to_string(value: i32) -> String {
+    if value == 0 {
+        return String::new();
+    }
+    if value > 0 {
+        // Four characters, one per byte, little-endian.
+        return value
+            .to_le_bytes()
+            .iter()
+            .take_while(|byte| **byte != 0)
+            .map(|byte| char::from(*byte))
+            .collect();
+    }
+    if value > CODE_V2_MAXIMUM {
+        // Negative but not a packed code. The Electron reader returns nothing here and so
+        // does this; a lobby code is never in that range.
+        return String::new();
+    }
+
+    // Masked first, so both are known to be small and non-negative before the cast. The
+    // TypeScript has no such concern and the arithmetic below has to match it exactly.
+    let a = u32::try_from(value & 0x3ff).unwrap_or(0);
+    let b = u32::try_from((value >> 10) & 0xfffff).unwrap_or(0);
+    let letter = |index: u32| -> char {
+        CODE_ALPHABET
+            .get(index as usize % CODE_ALPHABET.len())
+            .map_or('?', |byte| char::from(*byte))
+    };
+    [
+        letter(a % 26),
+        // The TypeScript writes `V2[Math.floor(a / 26)]` with no second modulo. For any
+        // code the game actually produces that is the same thing: the encoder builds `a`
+        // as `c0 + 26 * c1` with both letters under 26, so `a` never exceeds 675 and
+        // `a / 26` never exceeds 25. For a value outside that range the TypeScript indexes
+        // past the end of its string and joins the word "undefined" into the code, which
+        // is a bug rather than a behaviour worth reproducing.
+        letter(a / 26 % 26),
+        letter(b % 26),
+        letter(b / 26 % 26),
+        letter(b / 676 % 26),
+        letter(b / 17576 % 26),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// A stable hash of a player name, for the overlay.
+///
+/// The same arithmetic as the Electron client's, so the two agree about which colour a
+/// name gets.
+#[must_use]
+pub fn hash_name(name: &str) -> u32 {
+    let mut hash: u32 = 0;
+    for byte in name.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
+    }
+    hash
+}
+
+/// Where the outfit fields live, from the bundle.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutfitOffsets {
+    /// The name string.
+    pub player_name: i64,
+    /// The colour index.
+    pub color_id: i64,
+    /// The hat asset name.
+    pub hat_id: i64,
+    /// The skin asset name.
+    pub skin_id: i64,
+    /// The visor asset name.
+    pub visor_id: i64,
+}
+
+/// How many outfits a player can have. Six, as the Electron reader asks for.
+const MAX_OUTFITS: usize = 6;
+
+/// The outfit a player is wearing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Outfit {
+    /// The name, tags stripped.
+    pub name: String,
+    /// The colour index.
+    pub color_id: u32,
+    /// The hat asset name.
+    pub hat_id: String,
+    /// The skin asset name.
+    pub skin_id: String,
+    /// The visor asset name.
+    pub visor_id: String,
+    /// A colour a mod has shifted them to, or -1 when none has.
+    pub shifted_color: i32,
+}
+
+/// Reads the outfits dictionary hanging off a player object.
+///
+/// Entry zero is what the player looks like; an entry matching `current_outfit` is a mod
+/// having shifted their colour, which is why both are read in one walk rather than two.
+///
+/// # Errors
+///
+/// Returns [`ReadError`] if the dictionary header cannot be read.
+pub fn read_outfit(
+    memory: &dyn ProcessMemory,
+    outfits_ptr: u64,
+    current_outfit: u32,
+    offsets: OutfitOffsets,
+) -> Result<Outfit, ReadError> {
+    let mut outfit = Outfit {
+        shifted_color: -1,
+        ..Outfit::default()
+    };
+
+    for (index, entry) in read_dictionary(memory, outfits_ptr, MAX_OUTFITS)?
+        .into_iter()
+        .enumerate()
+    {
+        let mut raw = [0u8; 4];
+        if memory.read_exact(entry.key, &mut raw).is_err() {
+            continue;
+        }
+        let key = i32::from_le_bytes(raw);
+        let Ok(value) = read_pointer(memory, entry.value) else {
+            continue;
+        };
+        if value == 0 {
+            continue;
+        }
+
+        if key == 0 && index == 0 {
+            outfit.name = strip_rich_text(&read_named_string(memory, value, offsets.player_name)?);
+            outfit.color_id = read_u32(memory, value, offsets.color_id).unwrap_or(0);
+            outfit.hat_id = read_named_string(memory, value, offsets.hat_id)?;
+            outfit.skin_id = read_named_string(memory, value, offsets.skin_id)?;
+            outfit.visor_id = read_named_string(memory, value, offsets.visor_id)?;
+            // The Electron reader stops here when the current outfit is the base one or
+            // out of range, and so does this: a shifted colour cannot be entry zero.
+            if current_outfit == 0 || current_outfit > 10 {
+                break;
+            }
+        } else if u32::try_from(key).is_ok_and(|key| key == current_outfit) {
+            outfit.shifted_color = read_u32(memory, value, offsets.color_id)
+                // A colour index that does not fit in an i32 is not a colour; -1 is what
+                // the Electron reader uses for "not shifted".
+                .and_then(|colour| i32::try_from(colour).ok())
+                .unwrap_or(-1);
+        }
+    }
+    Ok(outfit)
+}
+
+/// Follows a pointer at `base + offset` and reads the string it names.
+fn read_named_string(
+    memory: &dyn ProcessMemory,
+    base: u64,
+    offset: i64,
+) -> Result<String, ReadError> {
+    if offset < 0 {
+        return Ok(String::new());
+    }
+    let Ok(at) = resolve_chain(memory, base, &[offset]) else {
+        return Ok(String::new());
+    };
+    let Ok(pointer) = read_pointer(memory, at) else {
+        return Ok(String::new());
+    };
+    read_string(memory, pointer, 1000)
+}
+
+/// Reads a `u32` at `base + offset`, or nothing if the field is absent.
+fn read_u32(memory: &dyn ProcessMemory, base: u64, offset: i64) -> Option<u32> {
+    if offset < 0 {
+        return None;
+    }
+    let at = base.checked_add_signed(offset)?;
+    let mut raw = [0u8; 4];
+    memory.read_exact(at, &mut raw).ok()?;
+    Some(u32::from_le_bytes(raw))
+}
+
+/// The chain for a named field of the player offsets, if the bundle has one.
+///
+/// The bundle carries most player fields as JSON arrays under names the reader knows.
+/// Absent is not an error: twenty of the forty-four real files omit fields that build
+/// does not have.
+#[must_use]
+pub fn player_chain(offsets: &Offsets, field: &str) -> Option<Vec<i64>> {
+    let value = offsets.player.rest.get(field)?;
+    match value {
+        serde_json::Value::Array(steps) => steps.iter().map(serde_json::Value::as_i64).collect(),
+        serde_json::Value::Number(number) => number.as_i64().map(|one| vec![one]),
+        _ => None,
+    }
+}
+
+/// The chain for a named top-level field, if the bundle has one.
+#[must_use]
+pub fn top_level_chain(offsets: &Offsets, field: &str) -> Option<Vec<i64>> {
+    let value = offsets.rest.get(field)?;
+    match value {
+        serde_json::Value::Array(steps) => steps.iter().map(serde_json::Value::as_i64).collect(),
+        serde_json::Value::Number(number) => number.as_i64().map(|one| vec![one]),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use crate::sparse::SparseProcess;
+
+    #[test]
+    fn a_state_number_the_build_does_not_know_is_unknown_rather_than_an_error() {
+        // A new game build adding a state should leave players audible, not stop the
+        // reader.
+        assert_eq!(GameState::from_game(0), GameState::Lobby);
+        assert_eq!(GameState::from_game(3), GameState::Menu);
+        assert_eq!(GameState::from_game(99), GameState::Unknown);
+    }
+
+    #[test]
+    fn game_state_serialises_as_the_number_the_electron_client_sends() {
+        // G1 compares the two states field for field, so the wire shape is not free.
+        assert_eq!(serde_json::to_string(&GameState::Tasks).unwrap(), "1");
+        assert_eq!(
+            serde_json::from_str::<GameState>("2").unwrap(),
+            GameState::Discussion
+        );
+    }
+
+    #[test]
+    fn decodes_a_six_character_lobby_code() {
+        // The packed format. Round-tripping through the alphabet is the check that the
+        // arithmetic matches the game's.
+        let code = lobby_code_to_string(-2_073_360_669);
+        assert_eq!(code.len(), 6);
+        assert!(
+            code.bytes().all(|byte| CODE_ALPHABET.contains(&byte)),
+            "{code} has a character outside the alphabet"
+        );
+    }
+
+    #[test]
+    fn decodes_the_older_four_character_code() {
+        // Stored as its characters directly, little-endian.
+        let packed = i32::from_le_bytes(*b"ABCD");
+        assert_eq!(lobby_code_to_string(packed), "ABCD");
+    }
+
+    #[test]
+    fn uses_the_same_thresholds_as_the_electron_reader() {
+        // Getting the boundary wrong turns a menu into a lobby. At or below -1000 is the
+        // packed code; strictly above zero is the four character one; between is nothing.
+        assert_eq!(lobby_code_to_string(0), "");
+        assert_eq!(lobby_code_to_string(-1), "");
+        assert_eq!(lobby_code_to_string(-999), "");
+        assert_eq!(lobby_code_to_string(-1000).len(), 6);
+        assert!(
+            !lobby_code_to_string(32).is_empty(),
+            "32 is the local game code"
+        );
+    }
+
+    #[test]
+    fn every_code_the_game_can_produce_stays_inside_the_alphabet() {
+        // The encoder builds the low field as `c0 + 26 * c1` with both letters under 26,
+        // so it never exceeds 675 — which is why the TypeScript gets away with having no
+        // second modulo there. This is that claim, checked rather than asserted.
+        for c0 in 0..26u32 {
+            for c1 in 0..26u32 {
+                let a = c0 + 26 * c1;
+                assert!(a <= 675, "a reached {a}");
+                assert!(a / 26 <= 25, "a / 26 reached {}", a / 26);
+            }
+        }
+    }
+
+    #[test]
+    fn hashes_a_name_the_same_way_the_client_does() {
+        assert_eq!(hash_name(""), 0);
+        // 'a' is 97; "ab" is 97*31 + 98.
+        assert_eq!(hash_name("a"), 97);
+        assert_eq!(hash_name("ab"), 97 * 31 + 98);
+        // And it wraps rather than panicking on a long name.
+        let long = "x".repeat(200);
+        let _ = hash_name(&long);
+    }
+
+    fn with_string(process: SparseProcess, address: u64, text: &str) -> SparseProcess {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let mut bytes = Vec::new();
+        for unit in &units {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        process
+            .with_region(
+                address + 0x10,
+                i32::try_from(units.len()).unwrap().to_le_bytes(),
+            )
+            .with_region(address + 0x14, bytes)
+    }
+
+    fn outfit_offsets() -> OutfitOffsets {
+        OutfitOffsets {
+            player_name: 0x40,
+            color_id: 0x14,
+            hat_id: 0x18,
+            skin_id: 0x20,
+            visor_id: 0x28,
+        }
+    }
+
+    /// A dictionary at `dict` with one entry whose value is the outfit at `outfit`.
+    fn with_outfits(process: SparseProcess, dict: u64, entries: u64, count: u32) -> SparseProcess {
+        process
+            .with_pointer(dict + 0x18, entries)
+            .with_region(dict + 0x20, count.to_le_bytes())
+    }
+
+    #[test]
+    fn reads_the_base_outfit() {
+        let dict = 0x1000;
+        let entries = 0x2000;
+        let outfit = 0x3000;
+        let mut process = with_outfits(SparseProcess::new(true), dict, entries, 1);
+        // Entry zero: key 0, value -> the outfit object.
+        process = process
+            .with_region(entries + 0x20, 0u32.to_le_bytes())
+            .with_pointer(entries + 0x30, outfit);
+        // The outfit's fields.
+        process = process.with_region(outfit + 0x14, 7u32.to_le_bytes());
+        process = process.with_pointer(outfit + 0x40, 0x4000);
+        process = with_string(process, 0x4000, "<color=red>Alice</color>");
+        process = process.with_pointer(outfit + 0x18, 0x5000);
+        process = with_string(process, 0x5000, "hat_01");
+        process = process.with_pointer(outfit + 0x20, 0x6000);
+        process = with_string(process, 0x6000, "skin_01");
+        process = process.with_pointer(outfit + 0x28, 0x7000);
+        process = with_string(process, 0x7000, "visor_01");
+
+        let read = read_outfit(&process, dict, 0, outfit_offsets()).expect("reads");
+        // Tags stripped, so a player called `<color=red>Alice</color>` is the same person
+        // as one called `Alice`.
+        assert_eq!(read.name, "Alice");
+        assert_eq!(read.color_id, 7);
+        assert_eq!(read.hat_id, "hat_01");
+        assert_eq!(read.skin_id, "skin_01");
+        assert_eq!(read.visor_id, "visor_01");
+        assert_eq!(read.shifted_color, -1);
+    }
+
+    #[test]
+    fn a_player_with_no_outfits_reads_as_empty_rather_than_failing() {
+        // A player who has not spawned yet.
+        let read = read_outfit(&SparseProcess::new(true), 0, 0, outfit_offsets()).expect("reads");
+        assert_eq!(
+            read,
+            Outfit {
+                shifted_color: -1,
+                ..Outfit::default()
+            }
+        );
+    }
+
+    #[test]
+    fn finds_a_chain_the_bundle_carries_and_tolerates_one_it_does_not() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test/fixtures/offsets/offsets__x86__V2026.8.18__offsets.json"),
+        )
+        .expect("a fixture");
+        let offsets: Offsets = serde_json::from_str(&text).expect("parses");
+
+        assert!(top_level_chain(&offsets, "allPlayersPtr").is_some());
+        // Absent is not an error: twenty of the forty-four real files omit fields their
+        // build does not have.
+        assert!(top_level_chain(&offsets, "no_such_field").is_none());
+        assert!(player_chain(&offsets, "isLocal").is_some());
+    }
+}

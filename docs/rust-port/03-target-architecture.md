@@ -49,9 +49,38 @@ depend on, and it exists so that the boundary is a written type, defined in
 Electron's process split (main = privileged, renderer = UI) is replaced by a
 smaller split, not by a thread split. Two processes:
 
-- **`acl-helper`**, elevated: process memory reading, injection, the keyboard
-  poll, and the overlay window.
+- **`acl-helper`**: process memory reading, injection, the keyboard poll, and the
+  overlay window. **Unelevated by default** — see below.
 - **`acl-core`**, never elevated: tokio, signalling, WebRTC, audio, and the GUI.
+
+> **The split is not about administrator rights, and calling the helper "the
+> elevated binary" invites exactly the wrong reading.** Measured on 2026-08-24
+> from an unelevated shell: opening a same-user child process and reading another
+> module's memory out of it succeeds with an ordinary token, and still succeeds
+> with `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` requested. Windows grants both
+> over a process at the same integrity level. `acl-game`'s
+> `reads_another_process_without_any_elevation` is that measurement, kept as a
+> test: if it ever needs elevation to pass, the premise here has changed.
+>
+> Elevation is needed in one configuration only — the *game* running at a higher
+> integrity level, where a medium-integrity process cannot open it at all and no
+> rights request helps. That is the case the README is about, and it also breaks
+> the keyboard hook, because UIPI stops a low-level hook seeing input while an
+> elevated window has focus.
+>
+> What the split actually buys is written in the paragraph below and does not
+> depend on privilege at all: it is about what shares an address space with the
+> handle on the game.
+>
+> **The injection path was removed on 2026-08-24, and that does not change any of
+> this.** Writing a same-user process never needed elevation either — the same
+> measurement covered it. What removing the writes changed is how much this
+> project holds when it does open the game: `PROCESS_VM_READ |
+> PROCESS_QUERY_LIMITED_INFORMATION` rather than `PROCESS_ALL_ACCESS`, in the 1.x
+> client as well as here. The narrower set also *fails less often*:
+> `PROCESS_QUERY_LIMITED_INFORMATION` exists precisely to be grantable where the
+> wider query right is not, so "run it as administrator" is advice fewer people
+> will need.
 
 A thread boundary is not a privilege boundary. `catch_unwind` around a peer does
 not contain a memory-safety bug in the APM's C++ or in a pre-1.0 RTP parser, and

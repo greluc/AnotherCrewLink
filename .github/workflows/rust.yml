@@ -78,15 +78,12 @@ jobs:
 
   test:
     strategy:
-      # One target's failure must not hide another's, and i686 is the one most likely to
-      # differ.
+      # One target's failure must not hide another's.
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: windows-latest
-            target: i686-pc-windows-msvc
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
@@ -238,7 +235,7 @@ jobs:
         run: cargo install cargo-auditable cargo-audit --locked
 
       - name: Build with an embedded dependency list
-        run: cargo auditable build --locked --release -p apm-i686
+        run: cargo auditable build --locked --release -p apm-probe
 
       - name: The list is actually in the binary
-        run: cargo audit bin target/release/apm-i686
+        run: cargo audit bin target/release/apm-probe

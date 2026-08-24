@@ -1,11 +1,15 @@
-# Pinned so every machine and every CI leg compiles with the same compiler. The three
-# targets are the ones this project ships to; i686 is not optional, it is where a large
-# share of Among Us installs still are.
+# Pinned so every machine and every CI leg compiles with the same compiler.
+#
+# `i686-pc-windows-msvc` was here until 2026-08-24. It existed for the injection path and
+# for nothing else — a 64-bit reader reads a 32-bit game perfectly well through WOW64, so
+# the players on 32-bit Among Us never needed a 32-bit client. When the injection path was
+# removed the target lost its only reason, and with it went the NASM requirement on the
+# build machine, the MSVC alignment hazard in struct parsing, and the foreclosure of
+# LiveKit's libwebrtc binding.
 [toolchain]
 channel = "1.98.0"
 components = ["rustfmt", "clippy"]
 targets = [
 	"x86_64-pc-windows-msvc",
-	"i686-pc-windows-msvc",
 	"x86_64-unknown-linux-gnu",
 ]

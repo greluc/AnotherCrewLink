@@ -45,16 +45,20 @@ own. The Linux leg answers what the experiment exists for — does it start, is 
 transparent, does the renderer survive — and the passthrough claim there rests on winit's
 implementation.
 
-## 2. `apm-i686` — does the echo canceller exist on 32-bit Windows?
+## 2. `apm-probe` — does the echo canceller exist on 32-bit Windows?
 
-**Answered 2026-08-24: yes. Builds, and its own test suite passes.**
+**Answered 2026-08-24: yes. Builds, and its own test suite passes. The question then
+stopped mattering the same day**, when the injection path was removed and the
+`i686-pc-windows-msvc` target went with it. The result is kept because a fact does not
+stop being one when it stops being needed — and because if a 32-bit target is ever wanted
+again, this is the answer rather than the question.
 
 Gate G2 precondition (a). `webrtc-audio-processing`, which the plan originally named as
 the conservative choice, does not compile for either Windows target — so `sonora` is the
 default and this is the question that decides whether the audio phase has an APM at all.
 
 ```
-cargo build -p apm-i686 --target i686-pc-windows-msvc
+cargo build -p apm-probe --target i686-pc-windows-msvc
 ```
 
 The stronger check is sonora's own suite, run against a checkout of

@@ -1,6 +1,6 @@
 [package]
-name = "apm-i686"
-description = "P1+ experiment 2 / gate G2 precondition (a): does the chosen echo canceller build for 32-bit Windows?"
+name = "apm-probe"
+description = "P1+ experiment 2: the chosen echo canceller links. Its 32-bit question was answered and is now moot."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

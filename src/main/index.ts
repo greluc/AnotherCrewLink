@@ -15,6 +15,7 @@ import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import { resetOffsetsToEmbedded } from './offsetStore';
+import { startRecordingIfAsked } from './recorder';
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
 import Store from 'electron-store';
@@ -452,6 +453,10 @@ if (!gotTheLock) {
 	// a bad bundle from, so reverting the mirror fixes the next download but not the copy
 	// already cached on a player's machine. This is what they have instead, and it is a
 	// button rather than an instruction to delete a file out of `userData`.
+	// Gate G1 of the Rust port compares the Rust reader against this one, frame for
+	// frame. Recording is off unless ACL_RECORD names a session.
+	startRecordingIfAsked();
+
 	ipcMain.handle(IpcHandlerMessages.RESET_OFFSETS, async () => {
 		const status = resetOffsetsToEmbedded();
 		// The reader holds the old offsets in memory, and those are the ones being
