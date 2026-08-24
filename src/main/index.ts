@@ -14,6 +14,7 @@ import { captureMainConsole, logDirectory, writeLog } from './logFile';
 import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
+import { resetOffsetsToEmbedded } from './offsetStore';
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
 import Store from 'electron-store';
@@ -445,6 +446,18 @@ if (!gotTheLock) {
 
 	ipcMain.on('update-app', () => {
 		autoUpdater.downloadUpdate();
+	});
+
+	// The manual recovery path. Without a signature there is no signed floor to supersede
+	// a bad bundle from, so reverting the mirror fixes the next download but not the copy
+	// already cached on a player's machine. This is what they have instead, and it is a
+	// button rather than an instruction to delete a file out of `userData`.
+	ipcMain.handle(IpcHandlerMessages.RESET_OFFSETS, async () => {
+		const status = resetOffsetsToEmbedded();
+		// The reader holds the old offsets in memory, and those are the ones being
+		// recovered from, so clearing the caches on disk is only half of it.
+		await gameReader?.reloadOffsets();
+		return status;
 	});
 
 	ipcMain.on(IpcHandlerMessages.OPEN_LOBBYBROWSER, () => {

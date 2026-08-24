@@ -17,7 +17,21 @@ import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
 import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
+import { isAddressInModule } from './offsetsValidator';
 import Errors from '../common/Errors';
+
+/** The length of the `E9 rel32` detour this client writes, plus its `0x90` padding byte. */
+const DETOUR_LENGTH = 5;
+
+/**
+ * How far past an allocation a detour may point and still be one of ours.
+ *
+ * A page, not the 0x60 bytes actually requested: `VirtualAllocEx` rounds a commit up to
+ * the page granularity, and this code relies on that — the second stub lives at
+ * `shellCodeAddr + 0x300`, well past the requested size and well inside the page. One
+ * recorded base therefore covers both stubs.
+ */
+const SHELLCODE_PAGE_SIZE = 0x1000;
 import { CameraLocation, MapType } from '../common/AmongusMap';
 import { GenerateAvatars, numberToColorHex } from './avatarGenerator';
 import { RainbowColorId } from '../common/playerColors';
@@ -78,6 +92,8 @@ export default class GameReader {
 	rainbowColor = -9999;
 	gameCode = 'MENU';
 	shellcodeAddr = -1;
+	/** Every page this process has allocated in the game, so its own detours are recognisable. */
+	shellcodePages: number[] = [];
 	currentServer = '';
 	disableWriting = false;
 	pid = -1;
@@ -433,6 +449,23 @@ export default class GameReader {
 		return null;
 	}
 
+	/**
+	 * Loads the offsets again, for a game that is already attached.
+	 *
+	 * Resetting to the embedded bundle clears what is on disk, but this process is still
+	 * holding the offsets it read at attach time — and those are exactly the ones the user
+	 * is trying to get rid of. Without this, recovery would mean closing the game.
+	 */
+	async reloadOffsets(): Promise<void> {
+		if (!this.amongUs || !this.gameAssembly) {
+			// Nothing is attached, so the next attach will read them fresh anyway.
+			return;
+		}
+		this.initializedWrite = false;
+		this.shellcodePages = [];
+		await this.initializeoffsets();
+	}
+
 	async initializeoffsets(): Promise<void> {
 		console.log('INITIALIZEOFFSETS???');
 		this.is_64bit = this.isX64Version();
@@ -609,6 +642,7 @@ export default class GameReader {
 
 		// Shellcode to join games when u press join..
 		const shellCodeAddr = virtualAllocEx(this.amongUs.handle, null, 0x60, 0x00001000 | 0x00002000, 0x40);
+		this.shellcodePages.push(shellCodeAddr);
 		const compareAddr = shellCodeAddr + 0x30;
 
 		const compareAddr1 = (compareAddr & 0xff000000) >> 24;
@@ -745,6 +779,27 @@ export default class GameReader {
 			`<size=85%><color=#BA68C8>AnotherCrewLink v${appVersion}</color></size>\n<size=60%><color=#BA68C8>aucl.greluc.me</color></size><size=85%>\nPing: {0}ms</size>`
 		);
 
+		// Nothing above this point has touched the game. Both detours are checked before
+		// either is written, so a refusal leaves the process exactly as it was found
+		// rather than half patched.
+		const fixedUpdateSite = this.inspectDetourSite(fixedUpdateFunc, 'InnerNetClient.FixedUpdate');
+		const lateUpdateSite = this.inspectDetourSite(modManagerLateUpdate, 'ModManager.LateUpdate');
+		if (fixedUpdateSite === 'refuse' || lateUpdateSite === 'refuse') {
+			// Refusing costs the join button and the mod stamp. Writing anyway, into
+			// bytes we did not recognise, costs the player their game.
+			console.error('Refusing to patch: the game does not look the way these offsets describe');
+			this.disableWriting = true;
+			return;
+		}
+		if (fixedUpdateSite === 'already-ours' && lateUpdateSite === 'already-ours') {
+			// A second client attached to the same game, or this one restarted without the
+			// game restarting. The detours are already in place and rewriting them would
+			// point them at a shellcode page that is about to be allocated a second time.
+			console.warn('The game is already patched; leaving both detours alone');
+			this.initializedWrite = true;
+			return;
+		}
+
 		writeBuffer(this.amongUs!.handle, shellCodeAddr, Buffer.from(shellcode));
 		writeBuffer(this.amongUs!.handle, fixedUpdateFunc, Buffer.from(shellcodeJMP));
 
@@ -754,6 +809,75 @@ export default class GameReader {
 		this.shellcodeAddr = shellCodeAddr;
 		this.writtenPingMessage = false;
 		this.initializedWrite = true;
+	}
+
+	/**
+	 * What is at a detour site, before anything is written to it.
+	 *
+	 * The offsets arrive over the network, and on 32-bit Windows four of them decide where
+	 * a five-byte `E9 rel32` lands inside the game. The address itself is not read from the
+	 * bundle — `findPattern` produces it — but the *signature* that steers that scan is,
+	 * so a hostile bundle picks the address by choosing bytes that match somewhere useful.
+	 * This is the check that stands between such a match and a write.
+	 *
+	 * Three answers, because two are not enough. A site that is already carrying our own
+	 * detour is not an error and must not be rewritten; a site that carries something else,
+	 * or that cannot be read at all, is not ours to touch.
+	 */
+	inspectDetourSite(address: number, what: string): 'ready' | 'already-ours' | 'refuse' {
+		if (!this.amongUs || !this.gameAssembly) return 'refuse';
+
+		if (!isAddressInModule(address, this.gameAssembly.modBaseAddr, this.gameAssembly.modBaseSize)) {
+			// A signature that matched nothing returns 0, and a hostile one can resolve
+			// anywhere. Either way this is not an address inside GameAssembly.dll.
+			console.error(
+				`${what}: 0x${address.toString(16)} is outside GameAssembly.dll ` +
+					`(0x${this.gameAssembly.modBaseAddr.toString(16)} + 0x${this.gameAssembly.modBaseSize.toString(16)})`
+			);
+			return 'refuse';
+		}
+
+		let prologue: Buffer;
+		try {
+			prologue = readBuffer(this.amongUs.handle, address, DETOUR_LENGTH);
+		} catch (error) {
+			console.error(`${what}: could not read the prologue:`, error);
+			return 'refuse';
+		}
+		if (!prologue || prologue.length < DETOUR_LENGTH) {
+			console.error(`${what}: the prologue is not readable`);
+			return 'refuse';
+		}
+
+		if (prologue[0] === 0xe9) {
+			// Something already jumps out of here. If the destination is one of our own
+			// shellcode pages it is our detour from an earlier run; if not, another tool
+			// owns this function and overwriting it would break whatever it is doing.
+			const relative = prologue.readInt32LE(1);
+			const destination = address + DETOUR_LENGTH + relative;
+			if (this.ownsShellcodeAt(destination)) {
+				return 'already-ours';
+			}
+			console.error(
+				`${what}: already detoured to 0x${destination.toString(16)}, which is not ours — refusing to overwrite it`
+			);
+			return 'refuse';
+		}
+
+		// Unmapped or freshly zeroed memory reads as all zeros, which is not code and is
+		// the one non-jump case worth naming: it means the address is wrong, not that the
+		// function is unusual.
+		if (prologue.every((byte) => byte === 0x00)) {
+			console.error(`${what}: the prologue is all zeros, so 0x${address.toString(16)} is not code`);
+			return 'refuse';
+		}
+
+		return 'ready';
+	}
+
+	/** Whether an address falls inside a shellcode page this process allocated. */
+	ownsShellcodeAt(destination: number): boolean {
+		return this.shellcodePages.some((page) => destination >= page && destination < page + SHELLCODE_PAGE_SIZE);
 	}
 
 	writeString(address: number, text: string): void {

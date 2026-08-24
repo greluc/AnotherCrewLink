@@ -441,17 +441,84 @@ export function validateOffsets(value: unknown, where = 'offsets'): IOffsets {
 	return value as IOffsets;
 }
 
+/** A relative path inside the offsets tree, ending in .json. Nothing else is fetched. */
+const LOOKUP_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.json$/;
+
+/**
+ * Compares two dotted numeric versions. Returns <0, 0 or >0.
+ *
+ * Deliberately not semver: it must answer "is the running client older than this bundle
+ * asks for", and a pre-release suffix on our own version should not make a client look
+ * older than it is. Anything after the numbers is ignored.
+ */
+export function compareVersions(left: string, right: string): number {
+	const parse = (text: string) =>
+		text
+			.split('.')
+			.map((part) => Number.parseInt(part, 10))
+			.map((part) => (Number.isFinite(part) ? part : 0));
+	const a = parse(left);
+	const b = parse(right);
+	for (let index = 0; index < Math.max(a.length, b.length); index++) {
+		const difference = (a[index] ?? 0) - (b[index] ?? 0);
+		if (difference !== 0) return difference;
+	}
+	return 0;
+}
+
+/** What the caller knows that the bundle itself cannot: who is reading it, and what came before. */
+export interface BundleContext {
+	/** The running client, for `min_client_version`. */
+	clientVersion: string;
+	/** The `bundle_version` already held, if any. A lower one arriving is a rollback. */
+	heldBundleVersion?: number;
+}
+
 /**
  * Validates the lookup that maps a game build to an offsets file.
  *
  * `file` is interpolated into a URL, so it is checked against a conservative shape: a
  * traversal or an absolute URL here would redirect the offsets fetch to a host of the
  * attacker's choosing, which is a more direct route than any wrong number.
+ *
+ * The envelope fields are optional. A mirror that has not published them yet is not an
+ * outage — this project's own mirror gained them on 2026-08-24 and the clients in the
+ * field predate that. What is *present* is enforced.
  */
-const LOOKUP_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.json$/;
-
-export function validateLookup(value: unknown, where = 'lookup'): IOffsetsLookup {
+export function validateLookup(value: unknown, where = 'lookup', context?: BundleContext): IOffsetsLookup {
 	const lookup = requireRecord(value, where);
+
+	if (Object.hasOwn(lookup, 'bundle_version')) {
+		const bundleVersion = requireInteger(lookup, 'bundle_version', `${where}.bundle_version`);
+		if (bundleVersion < 0) {
+			throw new OffsetsRejected('wrong-type', `${where}.bundle_version`, `${bundleVersion} is negative`);
+		}
+		// A replayed older bundle is how an attacker who once had a bad file on the mirror
+		// gets it back after it is reverted. Refusing it leaves the held bundle in force.
+		if (context?.heldBundleVersion !== undefined && bundleVersion < context.heldBundleVersion) {
+			throw new OffsetsRejected(
+				'bundle-version-replayed',
+				`${where}.bundle_version`,
+				`${bundleVersion} is older than the ${context.heldBundleVersion} already held`
+			);
+		}
+	}
+
+	if (Object.hasOwn(lookup, 'min_client_version')) {
+		const minimum = requirePresent(lookup, 'min_client_version', `${where}.min_client_version`);
+		if (typeof minimum !== 'string' || !/^\d+(?:\.\d+)*/.test(minimum)) {
+			throw new OffsetsRejected('wrong-type', `${where}.min_client_version`, 'expected a dotted version string');
+		}
+		if (context && compareVersions(context.clientVersion, minimum) < 0) {
+			// The bundle describes a game this client cannot read correctly. Saying so is
+			// better than reading the wrong fields and reporting nothing.
+			throw new OffsetsRejected(
+				'client-too-old',
+				`${where}.min_client_version`,
+				`bundle needs ${minimum}, this client is ${context.clientVersion}`
+			);
+		}
+	}
 
 	const patterns = requireRecord(requirePresent(lookup, 'patterns', `${where}.patterns`), `${where}.patterns`);
 	for (const arch of ['x64', 'x86'] as const) {

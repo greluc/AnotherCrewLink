@@ -116,7 +116,10 @@
 			"title": "Fehlerbehebung",
 			"restore": "Einstellungen zurücksetzen",
 			"restore_warning": "Dadurch werden ALLE Einstellungen auf die Standardwerte zurückgesetzt.",
-			"warning": "Nicht als Host im Spiel verfügbar!"
+			"warning": "Nicht als Host im Spiel verfügbar!",
+			"reset_offsets": "Spiel-Offsets zurücksetzen",
+			"reset_offsets_warning": "Verwirft die heruntergeladenen Spiel-Offsets, greift auf die in dieser Version enthaltenen zurück und lädt sie anschließend neu. Hilft, wenn die App das Spiel nach einem Update nicht mehr richtig ausliest.",
+			"reset_offsets_done": "Offsets zurückgesetzt. Aktiv ist jetzt das Paket für {{version}}."
 		}
 	},
 	"lobbybrowser": {
