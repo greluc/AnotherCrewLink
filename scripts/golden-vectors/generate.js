@@ -126,16 +126,41 @@ async (sampleRate, assets) => {
 	}
 
 	const vectors = [];
+	const writtenInputs = new Set();
+
+	/**
+	 * Writes the input itself as a vector, once per input and duration.
+	 *
+	 * Without this the Rust side would have to regenerate the inputs from the same
+	 * formulas, and a disagreement about the *input* would read as a disagreement about
+	 * the node. Handing over both halves makes the comparison about the node alone.
+	 */
+	function addInput(input, seconds) {
+		const name = `input__${input}__${seconds}s`;
+		if (writtenInputs.has(name)) return name;
+		writtenInputs.add(name);
+		const frames = Math.round(sampleRate * seconds);
+		vectors.push({
+			name,
+			node: 'input',
+			input,
+			config: { seconds },
+			channels: 1,
+			samples: [...inputs[input](sampleRate, seconds)],
+		});
+		return name;
+	}
 
 	async function add(node, input, config, seconds, channels, build) {
 		const label = Object.entries(config)
 			.map(([key, value]) => `${key}-${value}`)
 			.join('_');
 		const name = `${node}__${input}${label ? `__${label}` : ''}`;
+		const from = addInput(input, seconds);
 		const samples = await render(seconds, channels, (offline, frames) =>
 			build(offline, source(offline, frames, input))
 		);
-		vectors.push({ name, node, input, config, channels, samples: [...samples] });
+		vectors.push({ name, node, input, from, config, channels, samples: [...samples] });
 	}
 
 	// ---------------------------------------------------------------- gain

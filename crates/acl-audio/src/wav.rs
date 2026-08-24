@@ -34,7 +34,10 @@ impl fmt::Display for WavError {
             Self::NotRiff => write!(formatter, "not a RIFF/WAVE file"),
             Self::MissingChunk(name) => write!(formatter, "no {name} chunk"),
             Self::Unsupported { format, bits } => {
-                write!(formatter, "format {format} at {bits} bits, not 32-bit float")
+                write!(
+                    formatter,
+                    "format {format} at {bits} bits, not 32-bit float"
+                )
             }
         }
     }
@@ -57,11 +60,7 @@ impl Wav {
     /// How many frames it holds.
     #[must_use]
     pub fn frames(&self) -> usize {
-        if self.channels == 0 {
-            0
-        } else {
-            self.samples.len() / self.channels
-        }
+        self.samples.len().checked_div(self.channels).unwrap_or(0)
     }
 
     /// One channel, deinterleaved.
@@ -127,10 +126,11 @@ pub fn decode(bytes: &[u8]) -> Result<Wav, WavError> {
         return Err(WavError::MissingChunk("fmt "));
     }
 
-    let tag = u16::from_le_bytes([format[0], format[1]]);
-    let channels = u16::from_le_bytes([format[2], format[3]]) as usize;
-    let sample_rate = u32::from_le_bytes([format[4], format[5], format[6], format[7]]);
-    let bits = u16::from_le_bytes([format[14], format[15]]);
+    let field = |at: usize, len: usize| format.get(at..at + len).unwrap_or(&[]);
+    let tag = u16::from_le_bytes(field(0, 2).try_into().unwrap_or([0, 0]));
+    let channels = usize::from(u16::from_le_bytes(field(2, 2).try_into().unwrap_or([0, 0])));
+    let sample_rate = u32::from_le_bytes(field(4, 4).try_into().unwrap_or([0; 4]));
+    let bits = u16::from_le_bytes(field(14, 2).try_into().unwrap_or([0, 0]));
 
     // 3 is IEEE float. 1 is PCM, and reading one as the other silently produces noise.
     if tag != 3 || bits != 32 {
@@ -138,8 +138,10 @@ pub fn decode(bytes: &[u8]) -> Result<Wav, WavError> {
     }
 
     let samples = data
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect();
 
     Ok(Wav {

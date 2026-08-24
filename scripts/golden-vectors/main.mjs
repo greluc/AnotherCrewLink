@@ -92,6 +92,9 @@ app.whenReady().then(async () => {
 			name: vector.name,
 			node: vector.node,
 			input: vector.input,
+			// Which input vector this one was rendered from, so the comparison does not
+			// depend on the Rust side reproducing the input.
+			from: vector.from,
 			config: vector.config,
 			channels: vector.channels,
 			frames: samples.length / vector.channels,

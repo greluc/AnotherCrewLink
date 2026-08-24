@@ -58,9 +58,9 @@ impl Biquad {
                 let alpha = w0.sin() / 2.0 * 10f64.powf(-f64::from(q) / 20.0);
                 let cos = w0.cos();
                 (
-                    (1.0 - cos) / 2.0,
+                    f64::midpoint(1.0, -cos),
                     1.0 - cos,
-                    (1.0 - cos) / 2.0,
+                    f64::midpoint(1.0, -cos),
                     1.0 + alpha,
                     -2.0 * cos,
                     1.0 - alpha,
@@ -71,9 +71,9 @@ impl Biquad {
                 let alpha = w0.sin() / 2.0 * 10f64.powf(-f64::from(q) / 20.0);
                 let cos = w0.cos();
                 (
-                    (1.0 + cos) / 2.0,
+                    f64::midpoint(1.0, cos),
                     -(1.0 + cos),
-                    (1.0 + cos) / 2.0,
+                    f64::midpoint(1.0, cos),
                     1.0 + alpha,
                     -2.0 * cos,
                     1.0 - alpha,
@@ -108,7 +108,16 @@ impl Biquad {
         self.x1 = x0;
         self.y2 = self.y1;
         self.y1 = y0;
-        y0 as f32
+        // The graph carries f32; the state is kept in f64 so a resonant filter does not
+        // accumulate its own rounding, which is what the specification's own wording
+        // implies and what Chromium does.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "narrowing back to the sample format is the point"
+        )]
+        {
+            y0 as f32
+        }
     }
 
     /// Filters a block in place.
@@ -123,7 +132,12 @@ use FilterKind::{HighPass, LowPass};
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::cast_precision_loss
+    )]
 
     use super::*;
 
@@ -134,8 +148,7 @@ mod tests {
         // Drive a sine through and measure what comes out, past the settling transient.
         let mut peak = 0.0f32;
         for index in 0..samples {
-            let phase =
-                2.0 * std::f32::consts::PI * frequency * (index as f32) / RATE;
+            let phase = 2.0 * std::f32::consts::PI * frequency * (index as f32) / RATE;
             let out = filter.process(phase.sin());
             if index > samples / 2 {
                 peak = peak.max(out.abs());
@@ -166,17 +179,19 @@ mod tests {
 
     #[test]
     fn q_is_read_in_decibels() {
-        // The detail that decides whether this agrees with Chromium. At the corner
-        // frequency the gain is set by alpha, and alpha is `sin(w0)/2 * 10^(-Q/20)`.
-        // Read linearly, a Q of 20 would be a sharp resonance; read in decibels it is a
-        // mild one, and the two differ by more than 20 dB at the corner.
-        let mut db = Biquad::new(LowPass, 2000.0, 20.0, RATE);
-        let at_corner = response(&mut db, 2000.0, 9600);
-        // A linear Q of 20 would peak far above unity here. In decibels it does not.
-        assert!(
-            at_corner > 1.0 && at_corner < 6.0,
-            "corner gain {at_corner} is neither the dB nor the linear reading"
-        );
+        // The detail that decides whether this agrees with Chromium, and it is exact:
+        // with `alpha = sin(w0)/2 * 10^(-Q/20)`, the gain at the corner frequency is
+        // 10^(Q/20). A Q of 20 therefore peaks at ten, not at twenty — reading Q linearly
+        // would put it at twenty, which is a filter that is plausible, stable and wrong.
+        for q in [0.0f32, 6.0, 20.0] {
+            let mut filter = Biquad::new(LowPass, 2000.0, q, RATE);
+            let at_corner = response(&mut filter, 2000.0, 19200);
+            let expected = 10f32.powf(q / 20.0);
+            assert!(
+                (at_corner - expected).abs() < expected * 0.01,
+                "Q={q} dB should peak at {expected} at the corner, got {at_corner}"
+            );
+        }
     }
 
     #[test]

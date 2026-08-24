@@ -5,4 +5,7 @@
 //! out, so every part of it can be measured against the Electron client's own output
 //! rather than against an opinion.
 
+pub mod biquad;
+pub mod gain;
 pub mod voice;
+pub mod wav;
