@@ -51,6 +51,7 @@ import type { VADOptions } from './vad';
 import { pushToTalkOptions } from './settings/SettingsStore';
 import { poseCollide } from '../common/ColliderMap';
 import { hasRelay, isRelayUrl, withTcpRelays, withTransportPolicy } from './iceServers';
+import { routeSignal } from './signalRoute';
 
 console.log(adapter.browserDetails.browser);
 
@@ -1495,20 +1496,20 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						}
 						return;
 					}
-					let connection: Peer;
+
 					// Only signals carrying a `type` used to be forwarded, so trickled ICE
 					// candidates, which have no type, were dropped outright. Connections then
 					// depended on whatever candidates happened to be in the initial SDP.
 					const existing = peerConnections.current[from];
-					const isOffer = 'type' in data && data.type === 'offer';
-					if (isOffer) {
-						connection = createPeerConnection(from, false, client);
-					} else if (existing) {
-						connection = existing;
-					} else {
-						// An answer or candidate with no connection left to apply it to.
-						return;
-					}
+					const route = routeSignal(
+						{
+							isOffer: 'type' in data && data.type === 'offer',
+							isRenegotiation: 'renegotiation' in data && data.renegotiation === true,
+						},
+						{ exists: existing !== undefined, hasSession: existing?.negotiated === true }
+					);
+					if (route === 'drop') return;
+					const connection = route === 'existing' && existing ? existing : createPeerConnection(from, false, client);
 					void connection.signal(data);
 				});
 			},

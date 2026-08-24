@@ -9,7 +9,14 @@
  */
 
 export type SignalData =
-	| { type: 'offer'; sdp: string }
+	// `renegotiation` marks an offer that continues an existing session rather than
+	// starting one. The far end has to tell the two apart: a first offer means build a
+	// connection, and a renegotiation offer means apply it to the one already running --
+	// rebuilding for it would destroy exactly what the renegotiation was protecting.
+	//
+	// Added alongside rather than replacing anything, so a client that predates it simply
+	// does not see the field and behaves as it did before.
+	| { type: 'offer'; sdp: string; renegotiation?: true }
 	| { type: 'answer'; sdp: string }
 	| { candidate: RTCIceCandidateInit }
 	| { renegotiate: true };
@@ -255,6 +262,16 @@ export default class Peer {
 	 * forcing. At zero the allocation itself failed, and relay-only would gather nothing
 	 * at all -- it would turn a connection that sometimes works into one that cannot.
 	 */
+	/**
+	 * Whether a remote description has been applied, so this is a running session.
+	 *
+	 * Read by the signalling layer to decide whether an incoming offer continues this
+	 * connection or replaces it.
+	 */
+	public get negotiated(): boolean {
+		return this.remoteDescriptionSet;
+	}
+
 	public relayCandidates(): number {
 		return this.gathered.relay ?? 0;
 	}
@@ -348,9 +365,18 @@ export default class Peer {
 	private async negotiate(): Promise<void> {
 		if (this.destroyed) return;
 		try {
+			// A remote description already applied means this is not the opening offer, so
+			// the other end must not treat it as one. The ICE restart is the only thing
+			// that renegotiates today, and it exists to keep a connection alive.
+			const renegotiation = this.remoteDescriptionSet;
 			const offer = await this.pc.createOffer();
 			await this.pc.setLocalDescription(offer);
-			this.emit('signal', { type: 'offer', sdp: this.pc.localDescription!.sdp });
+			this.emit(
+				'signal',
+				renegotiation
+					? { type: 'offer', sdp: this.pc.localDescription!.sdp, renegotiation: true }
+					: { type: 'offer', sdp: this.pc.localDescription!.sdp }
+			);
 		} catch (error) {
 			this.emit('error', error instanceof Error ? error : new Error(String(error)));
 		}
