@@ -835,9 +835,19 @@ that is why it is a G2 criterion.
 > `OPUS_SET_PACKET_LOSS_PERC`: it rises quickly, falls slowly, holds a dead band so a
 > settled call stops re-planning libopus's bit allocation every interval, and clamps at 25%
 > so a peer that lies degrades its own audio and nobody else's. `idle()` decays when reports
-> stop, or a peer that left would be paid for until the call ended. What remains of the
-> item is the source of those reports -- `rtc`'s `ReceiverReportInterceptor` -- which is
-> phase 4, and criterion 5's Chromium sender, which is the same.
+> stop, or a peer that left would be paid for until the call ended.
+>
+> **The `ReceiverReportInterceptor` wiring is deliberately not written, and this is the
+> decision rather than a gap.** `rtc-rtcp` has a stable 0.20.3 matching the `webrtc =0.20.3`
+> that §7 proposes, so it *could* be taken today. It should not be: §4.6 item 1 schedules a
+> three-week spike to choose between `webrtc` and `str0m`, and taking a dependency on one
+> of them to save a single call would make that choice by accident, in the wrong phase, for
+> the wrong reason. The seam is `observe_fraction_lost(u8)`, and its argument is RFC 3550
+> §6.4.1's `fraction lost` — a definition no crate choice changes. Whichever arm the spike
+> picks, the wiring is one line at the point the interceptor delivers a report.
+>
+> Criterion 5's Chromium sender is phase 4 for the same reason: there is no transport to
+> put a Chromium peer on the other end of.
 >
 > **Building the join found that the receiving half had been measuring nothing.**
 > `decode_lost` succeeds whether or not the packet it is handed carries a redundant copy:
