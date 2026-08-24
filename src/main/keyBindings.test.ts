@@ -70,8 +70,20 @@ const STORED_NAMES = [
 	'Numpad7',
 	'Numpad8',
 	'Numpad9',
+	'NumpadMultiply',
+	'NumpadAdd',
+	'NumpadSubtract',
+	'NumpadDecimal',
+	'NumpadDivide',
+	'NumpadEnter',
 	'Disabled',
 ];
+
+/**
+ * Keys the vendored declaration types as `number` rather than as a literal, so the check
+ * below cannot see them. Every one has to be justified individually and checked by hand.
+ */
+const NOT_DECLARED_AS_LITERALS = ['NumpadEnter'];
 
 describe('the copied keycode table', () => {
 	it('agrees with the vendored module', () => {
@@ -80,14 +92,44 @@ describe('the copied keycode table', () => {
 		// in any log to say so.
 		const declared = declaredKeycodes();
 		for (const [name, keycode] of Object.entries(UIOHOOK_KEY_TABLE)) {
+			if (NOT_DECLARED_AS_LITERALS.includes(name)) continue;
 			expect(declared[name], `${name} is not declared by the vendored module`).toBeDefined();
 			expect(declared[name], `${name} has moved`).toBe(keycode);
+		}
+	});
+
+	it('exempts nothing from the check that could have been checked', () => {
+		// The exemption list is the hole in this file, so it has to stay a hole nobody can
+		// widen by accident. A name that the declaration does give as a literal must not
+		// sit in it.
+		const declared = declaredKeycodes();
+		for (const name of NOT_DECLARED_AS_LITERALS) {
+			expect(declared[name], `${name} is declared after all and needs no exemption`).toBeUndefined();
 		}
 	});
 
 	it('read something, rather than passing on an empty file', () => {
 		// A regex that matched nothing would make the check above vacuous.
 		expect(Object.keys(declaredKeycodes()).length).toBeGreaterThan(80);
+	});
+});
+
+describe('the numpad operator keys', () => {
+	it('resolve, because the settings panel lets them be assigned', () => {
+		// `setShortcut` accepts any `ev.code` starting with `Numpad`, so a player can bind
+		// the numpad plus key. Before these were listed the binding saved and resolved to
+		// nothing: a shortcut that looks set and does nothing at all.
+		for (const name of ['NumpadMultiply', 'NumpadAdd', 'NumpadSubtract', 'NumpadDecimal', 'NumpadDivide']) {
+			expect(bindingFor(name).kind, name).toBe('keys');
+		}
+	});
+
+	it('give NumpadEnter the value the vendored module computes', () => {
+		// The declaration types it as `number` rather than a literal, so the drift check
+		// cannot see it. The vendored `dist/index.js` writes it as `0x0E00 | 0x001C`; the
+		// two have no bits in common, so a sum is the same number and reads without a
+		// suppression comment.
+		expect(bindingFor('NumpadEnter')).toEqual({ kind: 'keys', keycodes: [0x0e00 + 0x001c] });
 	});
 });
 

@@ -70,6 +70,10 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 		// while the local player was an impostor, so a state change between keydown and
 		// keyup skipped the decrement and left the microphone open until restart.
 		const speakingKeys = new Set<string>();
+		// Kept apart from `speakingKeys`, because that set decides whether the microphone
+		// is open. Deafen and mute are held keys too, and putting them in there would open
+		// the microphone for as long as somebody holds the key that mutes them.
+		const heldKeys = new Set<string>();
 		const isLocalImpostor = (): boolean =>
 			gameReader?.lastState.players?.find((value) => value.clientId === gameReader.lastState.clientId)?.isImpostor ===
 			true;
@@ -93,6 +97,18 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 			if (isBound(pushToTalkShortcut)) {
 				speakingKeys.add('pushToTalk');
 			}
+			// Deafen and mute act on the release, so they have to see the press first. The
+			// settings panel binds a shortcut on key *down* and re-reads the store
+			// immediately, so without this the release of the very key you pressed to
+			// assign mute was matched against the binding it had just created -- you were
+			// muted the instant you bound mute, with no sound to say so, and the usual
+			// conclusion is that the microphone is broken.
+			if (isBound(deafenShortcut)) {
+				heldKeys.add('deafen');
+			}
+			if (isBound(muteShortcut)) {
+				heldKeys.add('mute');
+			}
 			// `has` first: the repeat would otherwise announce the radio again on every
 			// repeated event for as long as the key is down.
 			if (isBound(impostorRadioShortcut) && isLocalImpostor() && !speakingKeys.has('impostorRadio')) {
@@ -107,10 +123,12 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 			if (isBound(pushToTalkShortcut)) {
 				speakingKeys.delete('pushToTalk');
 			}
-			if (isBound(deafenShortcut)) {
+			// Only if this end saw the press. `delete` returning false means the key went
+			// down before it was bound to this, which is what happens while assigning it.
+			if (isBound(deafenShortcut) && heldKeys.delete('deafen')) {
 				event.sender.send(IpcRendererMessages.TOGGLE_DEAFEN);
 			}
-			if (isBound(muteShortcut)) {
+			if (isBound(muteShortcut) && heldKeys.delete('mute')) {
 				event.sender.send(IpcRendererMessages.TOGGLE_MUTE);
 			}
 			// Released unconditionally: the impostor state may have changed while held.
@@ -136,8 +154,22 @@ ipcMain.handle(IpcHandlerMessages.START_HOOK, async (event) => {
 			}
 		});
 
-		// Read game memory
-		gameReader = new GameReader(event.sender.send.bind(event.sender));
+		// Read game memory. If constructing it throws -- a module that will not load, a
+		// platform check that fails -- the flag above has already been set, so the
+		// renderer's retry takes the `else if (gameReader)` branch, finds nothing there,
+		// and does nothing at all. The app then sits with the input hook running and no
+		// game reader, for the rest of the session, with no way back short of a restart.
+		try {
+			gameReader = new GameReader(event.sender.send.bind(event.sender));
+		} catch (error) {
+			readingGame = false;
+			console.error('Could not start reading the game:', error);
+			event.sender.send(
+				IpcRendererMessages.ERROR,
+				`Could not start reading the game: ${error instanceof Error ? error.message : String(error)}`
+			);
+			return;
+		}
 		let gotError = false;
 		const frame = async () => {
 			const err = await gameReader.loop();

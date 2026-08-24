@@ -71,6 +71,14 @@ interface VadNode {
 }
 
 interface AudioNodes {
+	/**
+	 * The context every node below lives in.
+	 *
+	 * One per peer, which is wasteful but works; what did not work is that nothing ever
+	 * closed them. Each holds an audio thread and its buffers for as long as the process
+	 * runs, so a session that saw thirty players over an evening kept thirty of them.
+	 */
+	context: AudioContext;
 	dummyAudioElement: HTMLAudioElement;
 	audioElement: HTMLAudioElement;
 	gain: GainNode;
@@ -337,8 +345,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			// round leaves the player silent if the second step throws.
 			gain.connect(effectNode);
 			effectNode.connect(destination);
-			gain.disconnect(destination);
-			return true;
 		} catch {
 			console.log('error with applying effect: ', player.name, effectNode);
 			try {
@@ -348,6 +354,20 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			}
 			return false;
 		}
+
+		// Separately, and tolerant of already being gone. Another effect may hold this
+		// path already -- the reverb and the muffle can both be live at once -- and the
+		// specification requires `disconnect` to throw for a pair that is not connected.
+		// Counting that as a failure is what corrupted the graph: the catch above put the
+		// direct path back while both effects stayed connected, so the player was summed
+		// three times and the flag said the effect had not been applied, which stopped it
+		// ever being taken out again.
+		try {
+			gain.disconnect(destination);
+		} catch {
+			/* the direct path was already replaced by another effect */
+		}
+		return true;
 	}
 
 	function restoreEffect(gain: AudioNode, effectNode: AudioNode, destination: AudioNode, player: Player) {
@@ -567,6 +587,13 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			if (!audio.muffleConnected) {
 				audio.muffleConnected = applyEffect(gain, muffle, destination, other);
 			}
+			// Set every time, because the impostor radio borrows this same node and leaves
+			// it a highpass. Nothing put it back: the only other assignment to `type` runs
+			// once, where the node is created. So one use of the radio turned every later
+			// vent and camera into a highpass at the lowpass corner frequency, stripping
+			// out everything below 2 kHz -- which is where speech lives -- for the rest of
+			// that player's session.
+			muffle.type = 'lowpass';
 			// The two distance checks that read maxdistance both run earlier, so writing it
 			// here had no effect. Left out rather than moved: shortening the hearing range
 			// for cameras is an audible change that needs testing in game to get right.
@@ -597,6 +624,16 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		return endGain;
 	}
 
+	/**
+	 * The handle for the mobile-host announcement, so it can be stopped.
+	 *
+	 * It used to reschedule itself unconditionally and nothing ever cancelled it: leaving a
+	 * lobby left it running, and coming back started a second one beside the first. Every
+	 * cycle of the voice effect added another announcer, all emitting on the same socket
+	 * five seconds apart, for as long as the app stayed open.
+	 */
+	const mobileNotifyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
 	function notifyMobilePlayers() {
 		if (
 			settingsRef.current.mobileHost &&
@@ -608,7 +645,14 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				data: { mobileHostInfo: { isHostingMobile: true, isGameHost: hostRef.current.isHost } },
 			});
 		}
-		setTimeout(() => notifyMobilePlayers(), 5000);
+		mobileNotifyTimer.current = setTimeout(() => notifyMobilePlayers(), 5000);
+	}
+
+	function stopNotifyingMobilePlayers() {
+		if (mobileNotifyTimer.current !== undefined) {
+			clearTimeout(mobileNotifyTimer.current);
+			mobileNotifyTimer.current = undefined;
+		}
 	}
 
 	function disconnectAudioHtmlElement(element: HTMLAudioElement) {
@@ -635,6 +679,12 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			audioElements.current[peer].gain.disconnect();
 			// if (audioElements.current[peer].reverbGain != null) audioElements.current[peer].reverbGain?.disconnect();
 			if (audioElements.current[peer].reverb != null) audioElements.current[peer].reverb?.disconnect();
+			// The context goes with the nodes. Closing it releases the audio thread and the
+			// buffers behind it; disconnecting the nodes alone does not, and this ran once
+			// per player who ever left.
+			audioElements.current[peer].context.close().catch((error: unknown) => {
+				console.warn('Could not close the audio context for', peer, error);
+			});
 			delete audioElements.current[peer];
 		}
 	}
@@ -1002,6 +1052,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			console.log('DISCONNECTED??');
 		});
 
+		stopNotifyingMobilePlayers();
 		notifyMobilePlayers();
 
 		let iceConfig: RTCConfiguration = DEFAULT_ICE_CONFIG;
@@ -1312,6 +1363,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						});
 
 						audioElements.current[peer] = {
+							context,
 							dummyAudioElement: dummyAudio,
 							audioElement: audio,
 							gain,
@@ -1525,6 +1577,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 		return () => {
 			hostRef.current.mobileRunning = false;
+			stopNotifyingMobilePlayers();
 			cancelAllReconnects();
 			socket.emit('leave');
 			Object.keys(peerConnections.current).forEach((k) => {

@@ -84,6 +84,18 @@ const UIOHOOK_KEY = {
 	Numpad7: 71,
 	Numpad8: 72,
 	Numpad9: 73,
+	// The operator keys. The settings panel accepts any `ev.code` beginning with `Numpad`,
+	// so these could always be assigned -- and until they were listed here the binding was
+	// saved, resolved to nothing, and the shortcut silently did not work.
+	NumpadMultiply: 55,
+	NumpadAdd: 78,
+	NumpadSubtract: 74,
+	NumpadDecimal: 83,
+	NumpadDivide: 3637,
+	// 0x0E00 | 0x001C, which the vendored declaration types as `number` rather than a
+	// literal, so the drift test beside this file cannot check it. Written out from the
+	// vendored `dist/index.js` and repeated here so the arithmetic is visible.
+	NumpadEnter: 3612,
 	F1: 59,
 	F2: 60,
 	F3: 61,
@@ -179,6 +191,12 @@ const NAMED: Record<string, UiohookKeyName[] | { button: number } | null> = {
 	Numpad7: ['Numpad7'],
 	Numpad8: ['Numpad8'],
 	Numpad9: ['Numpad9'],
+	NumpadMultiply: ['NumpadMultiply'],
+	NumpadAdd: ['NumpadAdd'],
+	NumpadSubtract: ['NumpadSubtract'],
+	NumpadDecimal: ['NumpadDecimal'],
+	NumpadDivide: ['NumpadDivide'],
+	NumpadEnter: ['NumpadEnter'],
 	Disabled: null,
 };
 
