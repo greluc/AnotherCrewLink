@@ -146,6 +146,37 @@ function forceRelay(config: RTCConfiguration): RTCConfiguration {
 }
 
 /**
+ * Adds a TCP form of any relay that was advertised without a transport.
+ *
+ * A `turn:` URL with no `?transport=` means UDP. A player on a network that blocks
+ * outbound UDP — most schools, many offices, some mobile carriers — cannot reach that
+ * relay at all, and those are exactly the networks that needed a relay to begin with. The
+ * symptom is a player who hears nobody and whom nobody hears while everything else works,
+ * because the signalling runs over TLS and is fine.
+ *
+ * The server should advertise both, and this client's server now does. This is here for
+ * the ones that do not: a relay that already answers on TCP costs nothing to try, and a
+ * relay that does not simply produces no candidate from the extra entry.
+ *
+ * UDP stays first. ICE tries candidates in the order it is given them, and a TCP relay is
+ * a worse path for everyone who can use the other one.
+ */
+function withTcpRelays(servers: RTCIceServer[]): RTCIceServer[] {
+	const out: RTCIceServer[] = [];
+	for (const server of servers) {
+		out.push(server);
+		const urls = [].concat(server.urls as never).map(String);
+		for (const url of urls) {
+			// `turns:` is TLS over TCP already, so it needs nothing. A URL that names its
+			// transport has been decided by whoever wrote it.
+			if (!url.startsWith('turn:') || url.includes('transport=')) continue;
+			out.push({ ...server, urls: `${url}?transport=tcp` });
+		}
+	}
+	return out;
+}
+
+/**
  * Whether one advertised server is a relay.
  *
  * `turn:` and `turns:` both are, and checking only for `turn:` misses the TLS one —
@@ -1025,7 +1056,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 			iceConfig = {
 				iceTransportPolicy: clientPeerConfig.forceRelayOnly ? 'relay' : 'all',
-				iceServers: clientPeerConfig.iceServers,
+				iceServers: withTcpRelays(clientPeerConfig.iceServers),
 			};
 		});
 
