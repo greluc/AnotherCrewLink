@@ -66,10 +66,19 @@ npm run dist:linux   # Linux AppImage
 | `native/` | Vendored native modules (memory reading, keyboard hook, overlay window) |
 | `vendor/` | Vendored JavaScript dependencies |
 | `static/locales` | Translations |
+| `docs/rust-port` | Assessment and plan for a possible rewrite in Rust |
 
 The build is [electron-vite](https://electron-vite.org/). `npm run lint` runs
 [Biome](https://biomejs.dev/) for both linting and formatting, `npm run typecheck`
 runs TypeScript without emitting, and `npm test` runs the Vitest suite.
+
+## A possible Rust rewrite
+
+[docs/rust-port](docs/rust-port/) assesses whether the client, the server and the
+native parts could be rewritten in Rust with a native GUI. Short answer: yes,
+with no hard blockers, but the real-time voice stack that Chromium currently
+supplies for free is the part that decides it — so the plan builds and measures
+that first, before anything else.
 
 ## Contributing
 
