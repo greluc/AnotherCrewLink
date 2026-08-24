@@ -48,7 +48,7 @@ import adapter from 'webrtc-adapter';
 import type { VADOptions } from './vad';
 import { pushToTalkOptions } from './settings/SettingsStore';
 import { poseCollide } from '../common/ColliderMap';
-import { hasRelay, isRelayUrl, withTcpRelays } from './iceServers';
+import { hasRelay, isRelayUrl, withTcpRelays, withTransportPolicy } from './iceServers';
 
 console.log(adapter.browserDetails.browser);
 
@@ -130,6 +130,7 @@ interface ClientPeerConfig {
 }
 
 const DEFAULT_ICE_CONFIG: RTCConfiguration = {
+	bundlePolicy: 'max-bundle',
 	iceTransportPolicy: 'all',
 	iceServers: [
 		{
@@ -1013,10 +1014,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				clientPeerConfig.forceRelayOnly ? '(relay forced)' : ''
 			);
 
-			iceConfig = {
+			iceConfig = withTransportPolicy({
 				iceTransportPolicy: clientPeerConfig.forceRelayOnly ? 'relay' : 'all',
 				iceServers: advertised,
-			};
+			});
 		});
 
 		socket.on('VAD', (data: { activity: boolean; client: Client; socketId: string }) => {

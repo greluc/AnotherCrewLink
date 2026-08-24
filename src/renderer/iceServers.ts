@@ -70,3 +70,23 @@ export function isRelayUrl(urls: RTCIceServer['urls']): boolean {
 export function hasRelay(config: RTCConfiguration): boolean {
 	return (config.iceServers ?? []).some((server) => isRelayUrl(server.urls));
 }
+
+/**
+ * The transport settings every connection gets, whatever the server advertised.
+ *
+ * `max-bundle` puts the voice track and the data channel on one transport instead of
+ * letting them negotiate their own. On a good network that saves a little setup time. On a
+ * restrictive one it halves the work: one set of connectivity checks rather than two, one
+ * DTLS handshake, and -- the part that matters for a relay -- one allocation per peer
+ * rather than two. A fourteen-player lobby is ninety-one connections, and the relay's port
+ * range is finite.
+ *
+ * It also halves the ways a connection can fail. Both ends of every connection here are
+ * this same client, so there is no peer that might not support it.
+ *
+ * `rtcpMuxPolicy` is left alone: browsers require multiplexing already, and setting it
+ * explicitly has been deprecated.
+ */
+export function withTransportPolicy(config: RTCConfiguration): RTCConfiguration {
+	return { ...config, bundlePolicy: 'max-bundle' };
+}

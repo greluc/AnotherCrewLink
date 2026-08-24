@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasRelay, isRelayUrl, withTcpRelays } from './iceServers';
+import { hasRelay, isRelayUrl, withTcpRelays, withTransportPolicy } from './iceServers';
 
 // What the project's own server advertises, copied from a probe of it rather than
 // written from memory: one entry naming TCP and one bare, which means UDP. The bare
@@ -97,5 +97,21 @@ describe('hasRelay', () => {
 
 	it('is true for the live configuration', () => {
 		expect(hasRelay({ iceServers: LIVE })).toBe(true);
+	});
+});
+
+describe('withTransportPolicy', () => {
+	it('bundles everything onto one transport', () => {
+		// One set of connectivity checks instead of two, one DTLS handshake, and one relay
+		// allocation per peer rather than two. In a fourteen-player lobby that is
+		// ninety-one connections against a finite range of relay ports.
+		expect(withTransportPolicy({}).bundlePolicy).toBe('max-bundle');
+	});
+
+	it('keeps everything the server decided', () => {
+		// It must not quietly drop the relay list or the transport policy on its way
+		// through, which is the only way this could do harm.
+		const config: RTCConfiguration = { iceTransportPolicy: 'relay', iceServers: LIVE };
+		expect(withTransportPolicy(config)).toMatchObject(config);
 	});
 });

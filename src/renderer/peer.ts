@@ -34,6 +34,23 @@ export interface PeerOptions {
  */
 export const PEER_CONNECT_TIMEOUT = 20000;
 
+/**
+ * How long a connection may sit in `disconnected` before ICE is restarted.
+ *
+ * `disconnected` means connectivity checks have stopped succeeding but ICE has not given
+ * up. Sometimes it heals on its own -- a wifi roam, a moment of congestion -- and tearing
+ * anything down for it would be worse than waiting. Sometimes it does not, and Chromium
+ * then takes fifteen to thirty seconds to admit it by moving to `failed`. For all of that
+ * time the player is silent and this app was doing nothing about it, because nothing here
+ * watched the state at all.
+ *
+ * Four seconds is longer than the transient cases take to recover and much shorter than
+ * the wait for `failed`. An ICE restart re-gathers -- including a fresh relay allocation --
+ * and keeps the connection, its tracks and its DTLS session in place, which is a far
+ * cheaper repair than the rebuild that a `failed` triggers.
+ */
+export const ICE_RESTART_AFTER_DISCONNECTED = 4000;
+
 type Handler = (...args: never[]) => void;
 
 const DATA_CHANNEL_LABEL = 'anothercrewlink';
@@ -47,6 +64,15 @@ export default class Peer {
 	private pendingCandidates: RTCIceCandidateInit[] = [];
 	private remoteDescriptionSet = false;
 	private connectEmitted = false;
+	private disconnectedTimer?: ReturnType<typeof setTimeout>;
+	/**
+	 * One restart per connection.
+	 *
+	 * A path that is genuinely gone will go straight back to `disconnected` afterwards,
+	 * and restarting on a loop would keep re-gathering -- allocating a relay port each
+	 * time -- instead of letting it fail and be rebuilt.
+	 */
+	private restartedIce = false;
 
 	private connectTimer?: ReturnType<typeof setTimeout>;
 	/// How many candidates of each type this connection managed to gather.
@@ -104,6 +130,27 @@ export default class Peer {
 				// torn down for being slow to finish that.
 				this.clearConnectTimer();
 			}
+			// Cleared on every transition: the timer is only meaningful while the state it
+			// was started for still holds, and `disconnected` most often resolves itself.
+			this.clearDisconnectedTimer();
+
+			if (state === 'disconnected' && this.options.initiator && !this.restartedIce) {
+				// Only the initiator. `restartIce` works by making the next offer carry new
+				// ICE credentials, and the initiator is the only end here that offers.
+				this.disconnectedTimer = setTimeout(() => {
+					this.disconnectedTimer = undefined;
+					if (this.destroyed || this.pc.connectionState !== 'disconnected') return;
+					this.restartedIce = true;
+					try {
+						this.pc.restartIce();
+					} catch (error) {
+						// Nothing to fall back to, and nothing is worse than before: the
+						// connection stays in `disconnected` and reaches `failed` on its own.
+						console.warn('ICE restart refused:', error);
+					}
+				}, ICE_RESTART_AFTER_DISCONNECTED);
+			}
+
 			if (state === 'failed') {
 				// The candidate tally goes in the message. Whether this peer gathered a
 				// relay candidate is the single fact that separates "the relay is not
@@ -220,6 +267,13 @@ export default class Peer {
 		return errors.length > 0 ? `${summary}; gathering errors: ${errors.join(', ')}` : summary;
 	}
 
+	private clearDisconnectedTimer(): void {
+		if (this.disconnectedTimer !== undefined) {
+			clearTimeout(this.disconnectedTimer);
+			this.disconnectedTimer = undefined;
+		}
+	}
+
 	private clearConnectTimer(): void {
 		if (this.connectTimer !== undefined) {
 			clearTimeout(this.connectTimer);
@@ -231,6 +285,7 @@ export default class Peer {
 		if (this.destroyed) return;
 		this.destroyed = true;
 		this.clearConnectTimer();
+		this.clearDisconnectedTimer();
 		try {
 			this.channel?.close();
 		} catch {
@@ -242,6 +297,7 @@ export default class Peer {
 			this.pc.onconnectionstatechange = null;
 			this.pc.onnegotiationneeded = null;
 			this.pc.ondatachannel = null;
+			this.pc.onicecandidateerror = null;
 			this.pc.close();
 		} catch {
 			/* already gone */
