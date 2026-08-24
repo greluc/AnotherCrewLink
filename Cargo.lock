@@ -18,6 +18,7 @@ dependencies = [
  "acl-types",
  "cpal",
  "flate2",
+ "neteq",
  "opus",
  "rubato",
  "serde",
@@ -1588,6 +1589,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "neteq"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7727112beb3a6198ab4d15d25ea696395e33dfb1c03de4cb147fac2b2803c6a7"
+dependencies = [
+ "log",
+ "ringbuf",
+ "serde",
+ "thiserror 1.0.69",
+ "web-time",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2357,6 +2371,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ringbuf"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]

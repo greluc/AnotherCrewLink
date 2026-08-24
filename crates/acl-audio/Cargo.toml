@@ -15,6 +15,7 @@ cpal-backend = ["dep:cpal"]
 [dependencies]
 acl-types.workspace = true
 cpal = { workspace = true, optional = true }
+neteq.workspace = true
 opus.workspace = true
 rubato.workspace = true
 

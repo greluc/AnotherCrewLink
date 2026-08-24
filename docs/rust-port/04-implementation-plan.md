@@ -812,7 +812,24 @@ harmful. Then implement the receive half: `decode(input, output, fec: true)` on
 packet *N+1* to reconstruct *N*, driven by the jitter buffer's loss signal.
 Whether `neteq` 0.9.1 can signal loss to the decoder in a way that permits
 out-of-order FEC recovery is not established anywhere in its documented surface;
-that is why it is a G2 criterion. No bitrate ladder — below roughly 16–20 kbps
+that is why it is a G2 criterion.
+
+> **Answered 2026-08-24: it cannot.** `neteq` 0.9.1's `AudioDecoder` trait is
+> `sample_rate`, `channels` and `decode(&[u8])` — there is no way to say "this payload is
+> the next packet, decode the redundant copy of the previous one out of it". Its source
+> does not mention forward error correction at all; it fills a gap from its own expansion
+> in `expand.rs` rather than by asking the decoder.
+>
+> So recovery has to be arranged by whatever owns the packet sequence, and the fixed
+> buffer this item already required as a baseline is where it lives:
+> `acl-audio::jitter`. It holds packet *N+1* before giving up on *N*, which is what makes
+> the recovery possible at all, and it reports per frame whether the audio came from a
+> packet, from the redundancy, from concealment or from nothing — so the impairment
+> harness can say *how* a stream survived rather than only that it did.
+>
+> That does not rule `neteq` out. It rules out `neteq` alone meeting criterion 5, which
+> means the comparison the item asks for is now between a buffer that can recover and one
+> that cannot, and the measurement has to say what that is worth. No bitrate ladder — below roughly 16–20 kbps
 libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
 loop exactly when it is needed.
 

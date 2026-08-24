@@ -12,6 +12,7 @@ pub mod convolver;
 pub mod device;
 pub mod fft;
 pub mod gain;
+pub mod jitter;
 pub mod panner;
 pub mod resample;
 pub mod vad;

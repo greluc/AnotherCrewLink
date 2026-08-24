@@ -72,6 +72,10 @@ rubato = "=5.0.0"
 # precisely so it can be replaced, and `cubeb` is the documented fallback. See
 # `acl-audio::device` for the trigger conditions.
 cpal = "0.18"
+# `default-features = false` is not a preference, it is the whole reason this is usable:
+# the defaults pull in axum, clap, a second cpal three majors behind the pinned one, and
+# `ropus` — a second Opus implementation, in a binary that already carries libopus.
+neteq = { version = "0.9.1", default-features = false }
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 serde_json = "1.0"
 thiserror = "2.0"
