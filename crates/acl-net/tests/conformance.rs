@@ -30,8 +30,14 @@ use acl_net::client::Action;
 use acl_net::transport::Connection;
 use serde_json::json;
 
-/// A port unlikely to collide with a server someone is running for real.
-const PORT: u16 = 19_736;
+/// Ports unlikely to collide with a server someone is running for real.
+///
+/// One per test, not one shared. Tests in a binary run concurrently, so a shared port
+/// means the second server cannot bind and the test fails on a race rather than on
+/// anything it was written to check. Running locally with `--test-threads=1` hides that
+/// completely, which is how this reached CI.
+const PORT_SESSION: u16 = 19_736;
+const PORT_HEARTBEAT: u16 = 19_737;
 
 /// Kills the server however the test ends, including on a panic.
 struct Server(Child);
@@ -57,10 +63,10 @@ fn server_binary() -> Option<PathBuf> {
     from_workspace.exists().then_some(from_workspace)
 }
 
-fn start() -> Option<Server> {
+fn start(port: u16) -> Option<Server> {
     let binary = server_binary()?;
     let child = Command::new(binary)
-        .env("PORT", PORT.to_string())
+        .env("PORT", port.to_string())
         .env("BIND", "127.0.0.1")
         .env("RUST_LOG", "warn")
         .stdout(Stdio::null())
@@ -70,9 +76,9 @@ fn start() -> Option<Server> {
     Some(Server(child))
 }
 
-async fn wait_for_health() -> bool {
+async fn wait_for_health(port: u16) -> bool {
     for _ in 0..100 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", PORT))
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_ok()
         {
@@ -83,37 +89,66 @@ async fn wait_for_health() -> bool {
     false
 }
 
+/// How long to wait for something the server should send.
+///
+/// Generous rather than tight. A two-core runner builds, links and runs two of these
+/// concurrently, and a deadline that is merely usually enough produces a test that
+/// usually passes — which is worse than one that is slow.
+const PATIENCE: Duration = Duration::from_secs(30);
+
 /// Collects actions until one matches, or the session ends, or time runs out.
-async fn pump<F>(connection: &mut Connection, mut wanted: F) -> Option<Action>
+///
+/// Returns what it did see on the way, so a timeout says what arrived instead of the
+/// thing that was wanted. "The server should answer a join with setClients" is a much
+/// weaker report than "it answered with setHost and nothing else".
+async fn pump<F>(connection: &mut Connection, mut wanted: F) -> Result<Action, Vec<String>>
 where
     F: FnMut(&Action) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + PATIENCE;
     while tokio::time::Instant::now() < deadline {
-        let actions = connection.next().await?;
+        let Some(actions) = connection.next().await else {
+            seen.push("<session ended>".to_owned());
+            return Err(seen);
+        };
         for action in actions {
             if wanted(&action) {
-                return Some(action);
+                return Ok(action);
             }
+            seen.push(describe(&action));
         }
     }
-    None
+    seen.push("<timed out>".to_owned());
+    Err(seen)
+}
+
+fn describe(action: &Action) -> String {
+    match action {
+        Action::Send(frame) => format!("Send({})", frame.chars().take(40).collect::<String>()),
+        Action::Connected(id) => format!("Connected({id})"),
+        Action::Event { name, .. } => format!("Event({name})"),
+        Action::Acked { event, .. } => format!("Acked({event})"),
+        Action::AckExpired { event } => format!("AckExpired({event})"),
+        Action::Refused { reason } => format!("Refused({reason:?})"),
+        Action::Closed { reason } => format!("Closed({reason:?})"),
+    }
 }
 
 #[tokio::test]
 async fn talks_to_a_real_server() {
-    let Some(_server) = start() else {
+    let Some(_server) = start(PORT_SESSION) else {
         eprintln!(
             "skipping: set ACL_SERVER_BIN to an acl-server binary to run the conformance test"
         );
         return;
     };
     assert!(
-        wait_for_health().await,
+        wait_for_health(PORT_SESSION).await,
         "the server did not start listening"
     );
 
-    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT}"))
+    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT_SESSION}"))
         .await
         .expect("the handshake should succeed");
 
@@ -170,7 +205,7 @@ async fn talks_to_a_real_server() {
         |action| matches!(action, Action::Event { name, .. } if name == "setClients"),
     )
     .await
-    .expect("the server should answer a join with setClients");
+    .unwrap_or_else(|seen| panic!("the server should answer a join with setClients; saw {seen:?}"));
     assert!(matches!(set_clients, Action::Event { .. }));
 
     connection.close().await.expect("a clean close");
@@ -182,18 +217,18 @@ async fn answers_the_servers_heartbeat_for_longer_than_its_timeout() {
     // test proves the client answers a ping. This proves the server accepts the answer:
     // a client that pongs wrongly is dropped after pingTimeout, so surviving past that is
     // the only observation that distinguishes the two.
-    let Some(_server) = start() else {
+    let Some(_server) = start(PORT_HEARTBEAT) else {
         eprintln!(
             "skipping: set ACL_SERVER_BIN to an acl-server binary to run the conformance test"
         );
         return;
     };
     assert!(
-        wait_for_health().await,
+        wait_for_health(PORT_HEARTBEAT).await,
         "the server did not start listening"
     );
 
-    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT}"))
+    let mut connection = Connection::connect(&format!("http://127.0.0.1:{PORT_HEARTBEAT}"))
         .await
         .expect("the handshake should succeed");
 

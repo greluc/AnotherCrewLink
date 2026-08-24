@@ -9,7 +9,16 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-eframe = { version = "0.36.1", default-features = false, features = ["glow", "default_fonts"] }
+# Defaults off, then back on by name. Two of the names are not optional on Linux: winit
+# has no backend of its own and refuses to compile without `x11` or `wayland`, which the
+# default set would have supplied. wgpu and accesskit stay off — this probe answers a
+# question about the window, not about the renderer or the accessibility tree.
+eframe = { version = "0.36.1", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
 egui = "0.36.1"
 
 [target.'cfg(windows)'.dependencies]

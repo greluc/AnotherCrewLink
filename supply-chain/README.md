@@ -10,9 +10,9 @@ imported:
 
 | | |
 | --- | --- |
-| Crates in the tree | 316 |
-| Covered by a shared audit | 38 |
-| Exemptions — this workspace asserting it has not looked | 278 |
+| Crates in the tree | 346 |
+| Covered by a shared audit | 45 |
+| Exemptions — this workspace asserting it has not looked | 301 |
 
 `docs/rust-port/08-dependency-review.md` predicted that ratio and asked that it be said
 plainly rather than left for a supply-chain table to imply coverage that does not exist.
@@ -20,9 +20,14 @@ Of the crates that matter most here, **`sonora`, `eframe`, `egui`, `winit`, `x11
 `windows-sys`, `kurbo`, `serde_json`, `tokio-tungstenite` and `webpki-roots` have no
 audit in any shared set**. `postcard` does.
 
-The count moved from 283 to 316 when the WebSocket transport landed, and the gate failed
-until the 33 new crates were written down — which is the whole mechanism working, on its
-first real test.
+The count has moved twice while this phase was being written: 283 at first, 316 when the
+WebSocket transport landed, 346 when the overlay probe named eframe's `x11` and `wayland`
+features. Each time the gate failed until the new crates were written down, which is the
+whole mechanism working.
+
+Note the third one in particular. Those features are gated by platform, so the crates
+never build on Windows — but `cargo metadata --all-features`, which cargo-vet uses, lists
+them anyway. That is what lets a Windows machine keep a store the Linux CI leg accepts.
 
 ## So what is the gate for
 

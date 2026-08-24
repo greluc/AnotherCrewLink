@@ -105,7 +105,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libgtk-3-dev libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
             libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
 
       - name: Build
@@ -149,7 +149,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libgtk-3-dev libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
             libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
 
       - name: Run the overlay probe under a virtual display
