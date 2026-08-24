@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/acl-types", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "experiments/overlay-probe", "experiments/apm-probe"]
+members = ["crates/acl-types", "crates/acl-audio", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "experiments/overlay-probe", "experiments/apm-probe"]
 
 # CI checks the server repository out into `server/` to run the conformance test against
 # it. Without this, cargo folds that crate into this workspace and refuses to build it —
@@ -44,6 +44,7 @@ indexing_slicing = "warn"
 # `allow-wildcard-paths = false`, which is the setting that would otherwise let an
 # unversioned path dependency through unnoticed.
 acl-types = { path = "crates/acl-types", version = "0.0.0" }
+acl-audio = { path = "crates/acl-audio", version = "0.0.0" }
 kurbo = "0.13.1"
 serde = { version = "1.0", features = ["derive"] }
 # platform-verifier reads the operating system's certificate store, which is what

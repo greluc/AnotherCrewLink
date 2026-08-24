@@ -12,6 +12,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "acl-audio"
+version = "0.0.0"
+dependencies = [
+ "acl-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "acl-game"
 version = "0.0.0"
 dependencies = [
