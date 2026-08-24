@@ -134,10 +134,12 @@ interface IOffsetsStore {
 	offsetsVersion: number;
 	offsets: IOffsets;
 }
-//// "https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewlink-Offsets@main/"; // "https://raw.githubusercontent.com/OhMyGuus/BetterCrewlink-Offsets/main"
-
-const BASE_URL = 'https://raw.githubusercontent.com/OhMyGuus/BetterCrewlink-Offsets/main';
-const BASE_URL_error = 'https://cdn.jsdelivr.net/gh/OhMyGuus/BetterCrewlink-Offsets@main';
+// The offsets decide where this client reads inside another process, and on 32-bit
+// Windows they decide where the injection stub writes. They used to come from a branch
+// of a repository this project does not control; they now come from our own fork, which
+// is the only part of that chain we can review before it reaches users.
+const BASE_URL = 'https://raw.githubusercontent.com/greluc/AnotherCrewlink-Offsets/main';
+const BASE_URL_error = 'https://cdn.jsdelivr.net/gh/greluc/AnotherCrewlink-Offsets@main';
 
 const store = new Store<IOffsetsStore>({ name: 'offsets' });
 const lookupStore = new Store<IOffsetsLookup>({ name: 'lookup' });

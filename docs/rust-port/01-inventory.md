@@ -127,12 +127,19 @@ active window, read its title, and watch `_NET_WM_STATE` for fullscreen.
 
 ### Data fetched at runtime
 
-Two third-party datasets are downloaded at start-up, pinned very differently.
+Two datasets are downloaded at start-up, pinned very differently.
 
 | Source | Pinned to | Supplies |
 | --- | --- | --- |
-| `OhMyGuus/BetterCrewlink-Offsets` | nothing — `main` branch HEAD over `raw.githubusercontent.com`, with a jsDelivr mirror of the same branch as the fallback host | `lookup.json` and the per-build offsets file |
+| `greluc/AnotherCrewlink-Offsets` | nothing — `main` branch HEAD over `raw.githubusercontent.com`, with a jsDelivr mirror of the same branch as the fallback host | `lookup.json` and the per-build offsets file |
 | `OhMyGuus/BetterCrewLink-Hats` | commit `3d2cc7de`, through a jsDelivr `/gh/…@<sha>/` path | `hats.json` and every hat, visor and pet image |
+
+The offsets moved to a fork under this project's own account on 2026-08-24. That
+changes who can alter them and nothing else: the branch is still unpinned, the
+contents are still used without validation, and there is still no signature. It
+also creates an obligation that did not exist while the client followed upstream —
+the fork has to be kept in sync, because a client pointed at a mirror nobody
+updates cannot read a newly patched game at all.
 
 The hat collection is content-addressed and immutable for the life of a release;
 bumping `HAT_COLLECTION_COMMIT` in `src/common/hatCollection.ts` is a deliberate,
