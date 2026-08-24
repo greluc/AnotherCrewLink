@@ -230,6 +230,30 @@ async (sampleRate, assets) => {
 
 	// ---------------------------------------------------------------- convolver
 
+	// The impulse response itself, decoded, so the Rust side does not need an Ogg
+	// decoder to check the convolver. It is the same buffer the node was given, which
+	// makes the comparison about the convolution rather than about two decoders.
+	{
+		const channels = impulseResponse.numberOfChannels;
+		const frames = impulseResponse.length;
+		const interleaved = new Float32Array(frames * channels);
+		for (let channel = 0; channel < channels; channel++) {
+			const data = impulseResponse.getChannelData(channel);
+			for (let frame = 0; frame < frames; frame++) {
+				interleaved[frame * channels + channel] = data[frame];
+			}
+		}
+		vectors.push({
+			name: 'impulse-response',
+			node: 'impulse-response',
+			input: 'reverb.ogx',
+			config: { sampleRate: impulseResponse.sampleRate },
+			channels,
+			samples: [...interleaved],
+		});
+	}
+
+
 	// The reverb an impostor hears a haunting ghost through. Rendered long enough to
 	// carry the tail: a vector that ends mid-reverb would make a truncated port look
 	// correct. `normalize` is left at its default, which is what the client leaves it at

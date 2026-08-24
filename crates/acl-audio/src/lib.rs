@@ -6,6 +6,8 @@
 //! rather than against an opinion.
 
 pub mod biquad;
+pub mod convolver;
+pub mod fft;
 pub mod gain;
 pub mod panner;
 pub mod voice;

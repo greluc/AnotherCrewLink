@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use acl_audio::biquad::{Biquad, FilterKind};
+use acl_audio::convolver::Convolver;
 use acl_audio::gain::Gain;
 use acl_audio::panner::{Panner, Position};
 use acl_audio::wav;
@@ -32,7 +33,7 @@ const TOLERANCE_DBFS: f64 = -80.0;
 ///
 /// Every vector for one of these is counted and reported. Emptying this list is what
 /// finishes the first criterion of gate G2.
-const UNIMPLEMENTED: [&str; 2] = ["chain", "convolver"];
+const UNIMPLEMENTED: [&str; 0] = [];
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
@@ -157,6 +158,47 @@ fn run(vector: &Vector, input: &[f32], sample_rate: f32) -> Option<Vec<f32>> {
                 z: f64::from(number(&vector.config, "z")),
             };
             Some(panner.process_block(input, source))
+        }
+        "convolver" => {
+            // The response is a vector too, so this side needs no Ogg decoder and the
+            // comparison is about the convolution rather than about two decoders.
+            let response = read("impulse-response");
+            let convolver = Convolver::new(
+                &response.samples,
+                response.channels,
+                f64::from(response.sample_rate),
+                vector
+                    .config
+                    .get("normalize")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true),
+            );
+            Some(convolver.process_mono_to_stereo(input))
+        }
+        "chain" => {
+            // The whole per-peer path as `Voice.tsx` builds it: source into panner into
+            // muffle into gain. Each node is measured alone above; this one would catch an
+            // error in how they compose, and in particular that the biquad after a stereo
+            // panner filters each channel with its own state rather than sharing one.
+            let panned = Panner::default().process_block(
+                input,
+                Position {
+                    x: f64::from(number(&vector.config, "x")),
+                    y: 0.0,
+                    z: -0.5,
+                },
+            );
+
+            let mut left = Biquad::new(FilterKind::LowPass, 2000.0, 20.0, sample_rate);
+            let mut right = Biquad::new(FilterKind::LowPass, 2000.0, 20.0, sample_rate);
+            let gain = Gain::new(number(&vector.config, "gain"));
+
+            let mut out = Vec::with_capacity(panned.len());
+            for frame in panned.as_chunks::<2>().0 {
+                out.push(gain.process(left.process(frame[0])));
+                out.push(gain.process(right.process(frame[1])));
+            }
+            Some(out)
         }
         _ => None,
     }

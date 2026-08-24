@@ -391,6 +391,17 @@
 			"sha256": "dd4d4f3af3573e69010c07444ee4f4ad1dc351029dbd73854a5227bddef77a59"
 		},
 		{
+			"name": "impulse-response",
+			"node": "impulse-response",
+			"input": "reverb.ogx",
+			"config": {
+				"sampleRate": 48000
+			},
+			"channels": 2,
+			"frames": 144892,
+			"sha256": "844aa6a5e99d21a809fad798c4fc3060870fcbb1fa32a9110d01090583539a0f"
+		},
+		{
 			"name": "input__impulse__2s",
 			"node": "input",
 			"input": "impulse",
