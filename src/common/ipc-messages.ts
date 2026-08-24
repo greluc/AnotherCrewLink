@@ -33,6 +33,7 @@ export enum IpcHandlerMessages {
 	JOIN_LOBBY = 'JOIN_LOBBY',
 	JOIN_LOBBY_ERROR = 'JOIN_LOBBY_ERROR',
 	OPEN_LOBBYBROWSER = 'OPEN_LOBBYBROWSER',
+	RESET_OFFSETS = 'RESET_OFFSETS',
 }
 
 // Main --> Renderer (send/on)

@@ -116,7 +116,10 @@
 				"title": "Troubleshooting",
 				"restore": "Restore to Default",
 				"restore_warning": "This will reset ALL settings to their default values.",
-				"warning": "Not available as host in game!"
+				"warning": "Not available as host in game!",
+			"reset_offsets": "Reset game offsets",
+			"reset_offsets_warning": "This discards the downloaded game offsets and falls back to the ones built into this version, then fetches them again. Use it if the app stopped reading the game correctly after an update.",
+			"reset_offsets_done": "Offsets reset. Now using the bundle for {{version}}."
 			}
 	},
 	"lobbybrowser": {

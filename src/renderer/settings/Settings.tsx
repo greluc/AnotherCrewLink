@@ -182,6 +182,7 @@ function generateObsSecret(): string {
 const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) => {
 	const { classes } = useStyles({ open });
 	const [settings, setSettings, setLobbySettings] = useContext(SettingsContext);
+	const [offsetsResetTo, setOffsetsResetTo] = useState('');
 	const gameState = useContext(GameStateContext);
 	const [hostLobbySettings] = useContext(HostSettingsContext);
 	const [unsavedCount, setUnsavedCount] = useState(0);
@@ -290,6 +291,18 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 			const k = `MouseButton${ev.button + 1}`;
 			setSettings(shortcut, k);
 			ipcRenderer.send(IpcHandlerMessages.RESET_KEYHOOKS);
+		}
+	};
+
+	// Recovery for a bad offsets bundle. The main process clears both caches, drops back to
+	// the bundle compiled into this build, and tells the reader to load again — the reader is
+	// holding the offsets being recovered from, so clearing what is on disk is only half of it.
+	const resetOffsets = async () => {
+		try {
+			const status = (await ipcRenderer.invoke(IpcHandlerMessages.RESET_OFFSETS)) as { gameVersion?: string };
+			setOffsetsResetTo(status?.gameVersion ?? '');
+		} catch (error) {
+			console.error('Resetting the offsets failed:', error);
 		}
 	};
 
@@ -1201,6 +1214,28 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 							{t('settings.troubleshooting.restore')}
 						</Button>
 					</DisabledTooltip>
+					<Button
+						variant="contained"
+						color="secondary"
+						style={{ marginTop: 8 }}
+						onClick={() =>
+							openWarningDialog(
+								t('settings.warning'),
+								t('settings.troubleshooting.reset_offsets_warning'),
+								() => {
+									void resetOffsets();
+								},
+								true
+							)
+						}
+					>
+						{t('settings.troubleshooting.reset_offsets')}
+					</Button>
+					{offsetsResetTo && (
+						<Alert className={classes.alert} severity="success">
+							{t('settings.troubleshooting.reset_offsets_done', { version: offsetsResetTo })}
+						</Alert>
+					)}
 				</div>
 				<Alert className={classes.alert} severity="info" style={{ display: unsaved ? undefined : 'none' }}>
 					{t('buttons.exit')}
