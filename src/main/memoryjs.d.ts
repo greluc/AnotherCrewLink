@@ -78,8 +78,6 @@ declare module 'memoryjs' {
 
 	export function getProcessPath(handle: number): string;
 
-
-
 	export function findPattern(
 		handle: number,
 		moduleName: string,
