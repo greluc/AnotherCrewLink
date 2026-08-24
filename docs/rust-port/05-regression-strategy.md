@@ -244,6 +244,14 @@ time, in a language that will not carry the fix across for you.
 | `the_encoder_is_told_about_loss_or_the_flag_is_useless` | setting the FEC flag and never calling `OPUS_SET_PACKET_LOSS_PERC` | P3 ✅ |
 | `bitrate_stays_above_the_floor_where_redundancy_exists` | a bitrate change silently switching error correction off | P3 ✅ |
 | `a_missing_output_device_falls_back_to_the_default` | one player inaudible because the saved speaker was unplugged | P5 |
+| `a_renegotiation_offer_continues_the_session_it_names` | rebuilding for a mid-session offer, which destroys the connection the offer was repairing | P4 |
+| `a_shortcut_fires_only_on_a_press_this_end_saw` | releasing the key you just bound firing the thing you just bound it to | P5/P6 |
+| `every_binding_the_settings_panel_offers_resolves` | a shortcut that saves, looks set, and maps to nothing | P5/P6 |
+| `an_effect_that_is_already_bypassed_can_be_bypassed_again` | a redundant disconnect read as a failure, leaving two effects live and the flag saying neither is | P3 |
+| `a_filter_borrowed_by_two_features_is_reset_by_both` | one feature leaving a shared DSP node in a state the other does not expect | P3 |
+| `a_peer_releases_its_audio_resources_when_it_leaves` | a per-peer engine or thread kept for the life of the process | P3/P5 |
+| `a_start_that_fails_can_be_started_again` | a flag latched before the work that can fail, leaving the app half-started with no way back | P2/P5 |
+| `a_repeating_task_stops_when_its_owner_does` | a self-rescheduling timer nothing cancels, multiplying on every restart | P4/P6 |
 
 ✅ marks the ones that already exist in `crates/acl-audio`.
 
@@ -264,6 +272,16 @@ recoveries and therefore reported *identical* numbers for a sender that had been
 loss and one that never had. The number looked healthy for as long as it was wrong. Before
 trusting any parity figure, ask what it reads when the thing it measures is switched off --
 and if the answer is "the same", the figure is not evidence.
+
+**Most of these are not WebRTC bugs or audio bugs. They are two shapes.** One is a piece
+of state that two features share and only one of them resets -- the filter the impostor
+radio left as a highpass, the effect flag left saying "off" while the effect was on, the
+`readingGame` latch set before the thing that could fail. The other is a resource created
+per peer and released by nobody -- an audio context, a timer, a relay reservation. Both
+shapes survive a rewrite intact, because both come from how the code is organised rather
+than from the language it is in. A port that gives each peer an owner with a destructor,
+and each shared node a single writer, gets most of this for free; one that does not will
+find them again one at a time.
 
 **A repair that silently does nothing looks exactly like the fault.** The ICE restart added
 for a stalled connection depends on `restartIce()` causing a renegotiation. If it did not,

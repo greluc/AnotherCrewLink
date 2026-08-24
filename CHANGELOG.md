@@ -61,6 +61,30 @@ asking for permissions this app has no use for.
   problem at your end and a setting on the server. Those are fixed by different people,
   and the log used to give no way to tell which one you had.
 
+- **Assigning the mute or deafen shortcut switched it on immediately.** Both act when
+  the key is released, and the setting was saved while it was still held down — so
+  letting go of the key you had just pressed to assign mute muted you. There was no
+  sound to say so, and the natural conclusion was that the microphone had broken.
+
+- **One use of the impostor radio spoiled every muffled voice afterwards.** The radio
+  and the muffling for vents and cameras share one filter, and the radio left it set to
+  the wrong kind. From then on a player in a vent, or seen on a camera, had everything
+  below 2 kHz stripped out — which is where speech is — so they were thin and hard to
+  make out instead of muffled. It lasted until you restarted.
+
+- **Two effects at once made a player far too loud and stuck that way.** A ghost within
+  reverb range who then climbed into a vent ended up routed through three paths at once
+  and roughly three times as loud, and the app then believed no effect was applied, so
+  it never took them out again.
+
+- **The numpad's `+`, `-`, `*`, `/` and `Enter` could be set as shortcuts and did
+  nothing.** The settings panel accepted them and the key handler had never heard of
+  them.
+
+- **Every player you met left an audio engine behind.** One is created for each person
+  and none were ever shut down, so an evening of people coming and going accumulated
+  them for as long as the app stayed open.
+
 - **A missing speaker could silence one player and nothing else.** If the speaker you
   had chosen was no longer plugged in, sending a player's voice to it failed and the
   failure went nowhere — no message, no fallback, just one person you could not hear.
