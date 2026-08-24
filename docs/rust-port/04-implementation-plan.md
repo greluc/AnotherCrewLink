@@ -127,6 +127,41 @@ was: the mirror and its sync workflow, the bundle format, the embedded floor, th
 structural validator, the full-prologue write-side check and the "reset offsets
 to embedded" user action.
 
+**H2 delivered 2026-08-24.** All six items are in. The mirror carries a
+sync-by-PR workflow that proposes and never pushes, and branch protection on
+`main` — required pull request, no force-push, no deletions, linear history,
+administrators bound by all of it. `lookup.json` carries `bundle_version`,
+`min_client_version` and `upstream_commit`. The client validates structurally on
+**every** load including from the cache, falls back to a bundle compiled into the
+build and says which one it is using, checks both detour sites before writing to
+either, and has a "reset offsets to embedded" button.
+
+Two things came out different from what this section assumed, and both are
+recorded where the code is:
+
+- **The bundle's function RVAs are placeholders.** `GameReader` overwrites
+  `connectFunc`, `fixedUpdateFunc`, `showModStampFunc` and `modLateUpdateFunc`
+  with pattern-scan results before use; the real values in the corpus are 255 to
+  4095, far too small to be functions. What a bundle actually steers is the
+  *signature*, so the tight bounds are on `patternOffset` and `addressOffset`, and
+  the module-range check is on the resolved address where it is produced.
+- **Required review is one approval short of what this section asked for.** The
+  mirror has exactly one collaborator, so `required_approving_review_count: 1`
+  with administrators bound would have made it impossible for the maintainer to
+  merge an offsets update at all — the precise availability failure H2 exists to
+  avoid. It is set to 0: a pull request is still mandatory for everyone including
+  administrators, the diff is visible, and a human clicks merge. Raise it to 1 the
+  day a second maintainer exists.
+
+**Gate G0: four of five criteria met, and the fifth is waiting on Among Us rather
+than on us.** Criteria 1 to 4 are covered by 134 tests — the malicious-bundle
+corpus with a distinct error each, an edited on-disk cache rejected at load, all
+44 real offsets files plus the live `lookup.json` accepted unchanged, and the
+floor holding with the mirror unreachable while reporting which bundle is in use.
+Criterion 5, the timed drill, needs a real Among Us update to drill against; the
+procedure is in the mirror's README and the measurement is the interval between
+the upstream release and the merged, purged bundle.
+
 > **Gate G0 — the offsets trust chain is live.**
 > A committed corpus of bad bundles — malformed, replayed lower `bundle_version`,
 > truncated, RVAs out of module range — is rejected with a distinct error each,

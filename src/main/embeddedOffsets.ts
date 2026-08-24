@@ -18,6 +18,9 @@ export const EMBEDDED_GAME_VERSION = 'V2026.8.18';
 export const EMBEDDED_OFFSETS_FILE = 'V2026.8.18/offsets.json';
 
 export const EMBEDDED_LOOKUP: IOffsetsLookup = {
+	bundle_version: 1,
+	min_client_version: '1.0.0',
+	upstream_commit: '7c876253dd0e7880fd7d3fb56a8083ed32c92de1',
 	patterns: {
 		x64: {
 			broadcastVersion: {

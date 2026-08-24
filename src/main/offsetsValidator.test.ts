@@ -210,6 +210,45 @@ describe('the lookup', () => {
 		expect(error.path).toBe('lookup.versions.default');
 	});
 
+	it('carries the envelope the mirror publishes', () => {
+		// The real file gained bundle_version, min_client_version and upstream_commit on
+		// 2026-08-24. This asserts the fixture is the current shape rather than a snapshot
+		// of the old one, so the cases below are testing something that exists.
+		const lookup = load('lookup.json') as Record<string, unknown>;
+		expect(typeof lookup.bundle_version).toBe('number');
+		expect(typeof lookup.min_client_version).toBe('string');
+		expect(lookup.upstream_commit).toMatch(/^[0-9a-f]{40}$/);
+	});
+
+	it('accepts the real lookup for a client that meets its minimum', () => {
+		expect(() => validateLookup(load('lookup.json'), 'lookup', { clientVersion: '1.0.3' })).not.toThrow();
+	});
+
+	it('refuses the real lookup for a client older than it asks for', () => {
+		expect(() => validateLookup(load('lookup.json'), 'lookup', { clientVersion: '0.9.0' })).toThrowError(
+			/client-too-old/
+		);
+	});
+
+	it('refuses a replay of an older bundle than the one held', () => {
+		expect(() =>
+			validateLookup(load('lookup.json'), 'lookup', { clientVersion: '1.0.3', heldBundleVersion: 99 })
+		).toThrowError(/bundle-version-replayed/);
+	});
+
+	it('accepts a bundle newer than the one held', () => {
+		expect(() =>
+			validateLookup(load('lookup.json'), 'lookup', { clientVersion: '1.0.3', heldBundleVersion: 0 })
+		).not.toThrow();
+	});
+
+	it('treats a missing envelope as data rather than an error', () => {
+		// Clients in the field predate these fields, and a mirror mid-rollout is not an
+		// outage.
+		const { bundle_version: _v, min_client_version: _m, ...without } = load('lookup.json') as Record<string, unknown>;
+		expect(() => validateLookup(without, 'lookup', { clientVersion: '0.0.1', heldBundleVersion: 99 })).not.toThrow();
+	});
+
 	it('rejects a negative offsetsVersion', () => {
 		expect(
 			lookupRejection((l) => {
