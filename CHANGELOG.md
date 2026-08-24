@@ -33,9 +33,13 @@ asking for permissions this app has no use for.
   at all, it says so plainly instead of forcing a setting that would leave the
   connection with nothing to try.
 
-- **Every player was asking the relay for twice what they needed.** Two entries in the
-  server's list named the same relay, and the client added a third. Each entry costs a
-  reservation on the relay for as long as the call lasts.
+- **Every player was asking the relay for three times what they needed.** Two entries
+  in the server's list named the same relay and the client added a third, so every
+  connection took three reservations where one would do. With nine other players in the
+  lobby that is twenty-seven reservations from a single person — and a relay grants a
+  limited number. One player could use up the whole server's supply by themselves, and
+  the next person who needed the relay simply got nothing, in a lobby that had worked
+  ten minutes earlier. That is exactly what was reported.
 
 - **Writing to the game could fail silently.** The library the app used to read Among
   Us never checked whether a write succeeded — it reported success either way. Nothing
