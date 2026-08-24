@@ -32,6 +32,18 @@ use crate::codec::{CodecError, Decoder, FRAME_SAMPLES};
 /// enough that a conversation does not feel like a radio link.
 pub const DEFAULT_DEPTH: usize = 3;
 
+/// How many frames of silence count as the stream having stopped rather than stumbled.
+///
+/// Past this, the next packet to arrive re-primes the buffer instead of being judged
+/// against a sequence number that kept counting while nothing was there. Ten frames is
+/// 200 ms — longer than any reordering, shorter than a person notices as a decision.
+///
+/// Without it a wireless handover is permanent. The impairment harness measured exactly
+/// that: a 500 ms freeze, and then every one of the 500 packets that arrived afterwards
+/// was discarded as late, because `next` had advanced 25 places while the buffer was
+/// empty. Half the call played as silence.
+const STARVATION_FRAMES: u32 = 10;
+
 /// How far out of order a packet may be and still be accepted.
 ///
 /// Past this it is treated as a new stream rather than as a very late packet: a peer that
@@ -76,6 +88,8 @@ pub struct JitterStats {
     pub concealed: u64,
     /// Frames that were silence because nothing was there.
     pub silent: u64,
+    /// Times the buffer gave up on its sequence and started again from what arrived.
+    pub resyncs: u64,
 }
 
 /// A fixed-depth reordering buffer over a sequence-numbered packet stream.
@@ -85,6 +99,8 @@ pub struct JitterBuffer {
     /// The sequence number to play next, once playback has started.
     next: Option<u16>,
     depth: usize,
+    /// Consecutive frames produced with nothing in the buffer.
+    starved: u32,
     stats: JitterStats,
 }
 
@@ -102,6 +118,7 @@ impl JitterBuffer {
             // A depth of zero can never recover anything: the recovery needs the packet
             // after the gap to already be in hand.
             depth: depth.max(1),
+            starved: 0,
             stats: JitterStats::default(),
         })
     }
@@ -123,6 +140,13 @@ impl JitterBuffer {
     /// A packet whose slot has already played is dropped and counted: playing it would
     /// put audio out of order, which is worse than the gap it was meant to fill.
     pub fn push(&mut self, sequence: u16, payload: &[u8]) {
+        // Nothing has been there for long enough that the sequence number this buffer is
+        // waiting for is meaningless. Start again from whatever arrives.
+        if self.starved >= STARVATION_FRAMES {
+            self.next = None;
+            self.starved = 0;
+            self.stats.resyncs += 1;
+        }
         if let Some(next) = self.next {
             let behind = next.wrapping_sub(sequence);
             // `behind` is small when the packet is late, and enormous when it is ahead —
@@ -157,6 +181,7 @@ impl JitterBuffer {
         let mut samples = vec![0.0f32; FRAME_SAMPLES];
         let source = if let Some(payload) = self.packets.remove(&sequence) {
             self.decoder.decode(&payload, &mut samples)?;
+            self.starved = 0;
             self.stats.played += 1;
             FrameSource::Packet
         } else if let Some(next) = self.packets.get(&sequence.wrapping_add(1)) {
@@ -169,6 +194,7 @@ impl JitterBuffer {
             // Nothing at all. Concealment extrapolates from what came before, but with an
             // empty buffer there is nothing to extrapolate towards and the stream has
             // probably stopped.
+            self.starved = self.starved.saturating_add(1);
             self.stats.silent += 1;
             FrameSource::Silence
         } else {
