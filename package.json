@@ -82,7 +82,10 @@
 		"electron-vite": {
 			"vite": "$vite"
 		},
-		"node-gyp": "^13.0.1"
+		"node-gyp": "^13.0.1",
+		"prebuild-install": "^7.1.3",
+		"global-agent": "^4.1.3",
+		"roarr": "^7.21.7"
 	},
 	"allowScripts": {
 		"file:../native/memoryjs": true,
