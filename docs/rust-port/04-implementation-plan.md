@@ -2,8 +2,10 @@
 
 ## 4.1 Shape of the plan
 
-Eight phases. Each ends in something shippable or a decision. Three of them are
-**gates**: work stops there until an explicit, measurable criterion is met.
+Ten phases, plus a hardening track on the Electron client and the Node server
+that runs before and alongside the first of them. Each phase ends in something
+shippable or a decision. Five points are **gates**: work stops there until an
+explicit, measurable criterion is met.
 
 The order is chosen so that the riskiest work happens as early as possible and
 the most visible work happens last. That is deliberate and it is the opposite of
@@ -13,63 +15,280 @@ arrive at the audio engine nine months in, discover the jitter buffer is not goo
 enough, and have a beautiful shell around nothing.
 
 ```
-P0  Server                        ──► ships independently          2 wk
-P1  Foundations & toolchain                                        1 wk
-P2  Game reader                   ──► G1: parity with Electron     4 wk
-P3  Audio engine (offline)        ──► G2: golden-vector parity     8 wk
-P4  Transport & signalling        ──► G3: interop with 1.x         5 wk
-P5  Platform layer                                                 3 wk
-P6  GUI                                                           10 wk
-P7  Packaging, update, rollout    ──► ships as 2.0                 4 wk
-                                                            total ≈ 37 wk
+H1  1.x emergency hardening       ──► ships as 1.0.3               2.0 wk
+H2  1.x offsets trust chain       ──► G0: offsets trust chain      4.0 wk
+H3  1.x/Node envelope & OBS       ──► ships as 1.0.5 + server      3.0 wk
+                                                hardening subtotal 9.0 wk
+
+P0+ Server                        ──► ships independently          4.0 wk
+P1+ Foundations & toolchain                                        5.0 wk
+P2+ Game reader                   ──► G1: parity with Electron     6.0 wk
+P3+ Audio engine (offline)        ──► G2: golden-vector parity    10.0 wk
+P4+ Transport & signalling        ──► G3: interop with 1.x        10.5 wk
+P5+ Platform layer                                                 6.0 wk
+P6+ GUI                                                           11.5 wk
+P7+ Packaging, update, rollout    ──► ships as 2.0                11.0 wk
+P8  Bridge & sunset               ──► G4: bridge rehearsal         4.0 wk
+                                                    phase subtotal 68.0 wk
+                                                            total ≈ 77 wk
+
+P9  Post-1.x cleanup                                               3.0 wk
+                                              (outside the 2.0 budget)
 ```
 
-Roughly nine months of full-time work for one developer; call it a year with
-review, testing on real hardware and the inevitable. Phases P2–P5 can overlap
-between two developers; P3 is on the critical path throughout.
+Phases keep their identifiers; the `+` marks one whose scope grew, and each of
+those says below, in a line, what it grew by. Treat 77 as the honest midpoint of
+a range whose low end is around 68 — it is the union of independently priced
+corrections, several of which overlap, and nobody should want to find out where
+the high end is.
 
-## 4.2 Phase 0 — Server (2 weeks)
+Roughly eighteen months of full-time work for one developer; call it two years
+with review, testing on real hardware and the inevitable. Phases P2+–P5+ can
+still overlap between two developers, but two developers do not halve the total:
+P3+ is no longer the sole critical path, P4+ now rivals it, and P7+ can start on
+neither until both have landed.
+
+**Where the extra forty weeks went.** Three items account for most of it, and
+none of them is security. P4+ grows by 5.5 because `webrtc` 0.20 is a rewrite on
+a sans-IO core, which kills the premise that the 237 lines of `peer.ts` map onto
+it one-to-one. P7+ grows by 7.0 because `cargo-dist` builds neither of the two
+artefact types this project must keep producing — there is no NSIS backend and no
+AppImage backend — so both are hand-built and both must keep a CLI contract the
+installed 1.x fleet already depends on. P1+ grows by 4.0 because the Socket.IO
+client moves there out of P4, where it was quietly leaving three weeks for the
+entire WebRTC half. The rest is spread thin across an owned lobby registry, a
+signed offsets bundle, a second process, a GPU fallback chain and two spikes.
+
+**The hardening track.** H1–H3 ship on the Electron client and the Node server.
+They are not 1.x maintenance running beside the real work: H2 is a hard
+prerequisite for P2+, H1's cross-version single-instance lock has to be in the
+field before any 2.x beta build exists, and all three protect the fleet that will
+never see 2.x. H1 (2.0 wk) ships as 1.0.3 and is client-local or repository
+configuration throughout, so its items can ship in any order and need no server
+release. H2 (4.0 wk) ships as 1.0.4 and builds the offsets trust chain in
+TypeScript first, because the bundle format must be proven before a Rust consumer
+is written against it; it ends at gate G0. H3 (3.0 wk) ships as 1.0.5 plus a
+server release and is the only part with a wire component, so it runs consumer
+first — the OBS overlay page serves every client generation at once and lives in
+neither repository. The per-step content is in
+[09-technology-migration.md](09-technology-migration.md) §3.2.
+
+> **Gate G0 — the offsets trust chain is live and reversible.**
+> A committed corpus of bad bundles — unsigned, wrong key, replayed lower
+> `bundle_version`, truncated, RVAs out of module range — is rejected with a
+> distinct error each, leaving the previously held bundle in force. Editing the
+> cached bundle on disk between runs is rejected, proving verification happens at
+> load and not only at download. The validator accepts all 81 real upstream files
+> unchanged — a validator that rejects real data is a self-inflicted outage, and
+> that half matters as much as the first. A revocation drill returns an affected
+> client to a good state with no client release. And a timed drill against the
+> next real Among Us update publishes a signed bundle in under six hours.
+>
+> P2+'s offsets work does not start before G0.
+
+## 4.2 Phase 0 — Server (4 weeks)
 
 Ships on its own. Proves the toolchain, CI and release story on the smallest
 piece of the system.
 
-1. `server-rs` crate: `axum` 0.8 + `socketioxide` 0.18 + `tokio` 1.53.
-2. Port the eleven socket events and the lobby registry from `src/index.ts`,
-   keeping the two bug fixes named in §3.4.
-3. Port `/`, `/health`, `/lobbies`; `askama` replaces Pug.
-4. Port `peerConfig.yml` parsing and relay advertisement.
-5. Multi-stage `Dockerfile` on `rust:1.98-alpine` → `alpine:3.22`, non-root, no
-   shell in the final image.
-6. Port `test/lobby.test.ts` to a Rust integration test that drives a real
+**Why 4 and not 2:** the lobby registry is owned rather than borrowed from
+socketioxide rooms, the two HTTP endpoints the client will want are new code
+rather than a port, and CORS is a day-one requirement instead of hardening.
+
+1. `server-rs` crate: `axum` 0.8 + `socketioxide` 0.18 + `tower-http` 0.7 +
+   `tokio` 1.53. None of socketioxide's features are on by default; name
+   `tracing`, `extensions` and `state` explicitly, or its rejected-payload paths
+   log nothing at all. `tower` alone ships no HTTP-aware middleware — the body
+   cap, the request-body timeout, the panic catch and CORS are all in tower-http.
+2. Port the eleven socket events from `src/index.ts`, keeping the two bug fixes
+   named in §3.4. Own the lobby registry rather than leaning on socketioxide
+   rooms: rooms hold only socketioxide sockets and cannot answer "is socket X in
+   the lobby socket Y is in", which is the predicate the envelope rules need.
+   Three acceptance criteria go in writing before the first line of `lobby.rs`,
+   because a faithful-port instinct will otherwise undo them — a bounded
+   per-member channel with a logged overflow policy and a counter on `/health`,
+   serialisation once per encoding rather than once per member, and no lock held
+   across an await.
+3. Port `/`, `/health` and `/lobbies`. No template engine: `/health` and
+   `/lobbies` are `serde_json`, and the one status page is a string literal.
+4. Port the peer-config parsing and relay advertisement. Move the file itself to
+   TOML or JSON — the YAML crate the plan would otherwise use depends on
+   `unsafe-libyaml`, an archived machine translation of C, and the file is a
+   handful of url/username/credential fields.
+5. `GET /lobbies/{id}/code` with `Cache-Control: no-store` — a lobby code is the
+   credential that gates entry to a game — and `GET /lobbies/stream` as SSE with
+   a 15–30 s heartbeat comment and `Last-Event-ID`, or every reverse-proxied
+   deployment cuts the stream at nginx's 60 s default and the list goes silently
+   stale.
+6. CORS on the socket.io route. socketioxide ships no CORS handling, and the OBS
+   overlay page is a browser client on another origin: without it the polling
+   handshake fails for every browser client and the overlay breaks on day one.
+7. Multi-stage `Dockerfile` on `rust:1.98-alpine` → `alpine:3.22`, non-root, no
+   shell in the final image. TLS terminates at a reverse proxy and axum binds to
+   localhost, which keeps a crypto stack out of the server binary entirely.
+   Configuration comes from the environment — systemd `EnvironmentFile=` or
+   docker `--env-file` plus `std::env::var` — with no dotfile loader crate in
+   between.
+8. Port `test/lobby.test.ts` to a Rust integration test that drives a real
    `socket.io-client` from Node against the Rust server, so the wire format is
    verified against the reference implementation and not against itself.
+
+The envelope rules from H3 step 4 are written into this server from birth, but it
+ships in whatever mode the Node server it replaces is currently in. A Rust server
+that enforces ahead of the Node server is a rollout that cannot be rolled back.
+
+**Accepted risk, recorded here rather than closed.** socketioxide's WebSocket
+path applies no inbound frame cap — `max_payload` governs the outbound `emit()`
+and the handshake advertisement, both of which a hostile client ignores — and
+this cannot be fixed at a reverse proxy, because neither nginx nor Caddy has a
+post-upgrade frame directive. The routes are an upstream change or a fork. File
+the upstream issue in this phase and note the exposure; do not write it down as a
+configuration line.
 
 **Done when:** the existing 1.0.2 Electron client connects to the Rust server,
 joins a lobby, exchanges signalling, and the lobby browser populates — with no
 client change whatsoever.
 
-## 4.3 Phase 1 — Foundations (1 week)
+## 4.3 Phase 1 — Foundations (5 weeks)
+
+**Why 5 and not 1:** the Socket.IO client is built here rather than in P4, where
+it was crowding out the WebRTC half of that phase, and two cheap experiments that
+de-risk the two most expensive phases are run here rather than discovered later.
 
 1. Workspace, `rust-toolchain.toml` pinned to **1.98.0**, `edition = "2024"`.
 2. Workspace lints: `unsafe_op_in_unsafe_fn = "deny"`, `clippy::pedantic` at
-   warn, `missing_docs` on public crates.
+   warn, `missing_docs` on public crates. In `.cargo/config.toml`,
+   `-C control-flow-guard=yes` on both Windows targets and `-C link-arg=/CETCOMPAT`
+   on x86_64 — both are off by default on stable, both are free, and Chromium
+   already ships with the first.
 3. `cargo-deny` (`advisories`, `bans`, `licenses`, `sources`) and `cargo-vet`
-   wired into CI as blocking.
+   wired into CI as blocking, with two honest qualifications written into the
+   policy rather than discovered by a red build. The rule against duplicate major
+   versions is unsatisfiable against this dependency set — the RustCrypto
+   ecosystem is mid-migration and `rtc-dtls` alone declares two majors of `rand`
+   side by side — so it becomes a warning plus a dated, reviewed allow-list; a
+   gate that fails on day one gets switched off in week one. And cargo-vet begins
+   with a large exemptions block, because Mozilla's, Google's and the Bytecode
+   Alliance's shared audit sets contain **no** audits at all for the crates that
+   matter here: `cpal`, `opus`, `neteq`, `sonora`, `rubato`, `ringbuf`, `webrtc`,
+   `tokio-tungstenite`, `windows-sys`, `x11rb`, `eframe`, `egui`, `winit` and the
+   update crate among them. Say that, rather than letting the supply-chain table
+   imply coverage that does not exist. Add `cargo-about` for the third-party
+   attribution file GPL distribution wants, and `cargo-auditable` so
+   `cargo audit bin` works on a shipped artefact months later.
 4. `aucl-types`: port `src/common` wholesale, including the collider tables.
    Port `ColliderMap.test.ts` — it already exists and gives a free parity check
    on day one.
 5. CI skeleton: `fmt`, `clippy -D warnings`, `test`, `deny`, on Windows x64,
    Windows i686 and Linux x64.
+6. **The Socket.IO client**, hand-written against Engine.IO v4 / Socket.IO v5 on
+   `tokio-tungstenite` 0.30.0, websocket transport only, default namespace, no
+   binary attachments. `rust_socketio` is not used at all, not even for one
+   release: it pulls `backoff` (RUSTSEC-2025-0012) and `instant`
+   (RUSTSEC-2024-0384), both unmaintained with no fixed version, so CI would be
+   red from the first commit that added it. Both existing clients already pass
+   `transports: ['websocket']`, which deletes polling, the upgrade handshake and
+   base64 binary framing from the surface. Conformance-test it against the Node
+   server P0+ has just proven, and name the five failure modes as explicit tests,
+   because they are how hand-written v4 clients fail: the server sends `ping` and
+   the client replies `pong`, reversed from v3; `pingInterval`, `pingTimeout` and
+   `maxPayload` come from the OPEN packet rather than being hard-coded; the
+   Socket.IO `sid` in the CONNECT ack is not the Engine.IO `sid`; ack ids leak if
+   the server never acks `join_lobby`; and a `CONNECT_ERROR` must be
+   distinguishable from a transport close, so an auth rejection does not drive
+   the reconnect policy. `reconnectPolicy.ts` comes across with its tests
+   unchanged — it is 34 lines of pure functions with no transport coupling, and
+   the transport's only obligation is to report "closed" honestly. Budget
+   `rustls-platform-verifier` and a system proxy resolver as named line items on
+   all three targets: Chromium supplied WPAD/PAC resolution and the Windows
+   certificate store for free, tokio-tungstenite supplies neither, and the
+   symptom for a user behind a TLS-inspecting corporate proxy is "won't connect
+   at all".
+7. The localisation loader: under 100 lines over the 37 existing i18next JSON
+   directories, flattening the dotted keys once at startup into a map behind
+   `fn t(&self, key: &str) -> &str`, with the English fallback chain and each
+   locale's base text direction. See §4.8 for why there is no conversion.
+8. The IPC transport trait for the two-process split (§4.7), so P3+ and P4+ build
+   against the boundary instead of being retrofitted into it later.
+9. **Two experiments, both hours, both brutal to discover in month nine.** A
+   transparent click-through window on Windows x64, Windows i686 and Linux —
+   eframe's transparency has renderer-specific failures and the known workarounds
+   are mutually exclusive with a single-process design, so this must be answered
+   before the GUI phase is planned around it, not during it. And a
+   `cargo build --target i686-pc-windows-msvc` of the chosen echo canceller,
+   which is a G2 criterion and the one thing that decides whether the audio phase
+   has an APM at all.
 
-## 4.4 Phase 2 — Game reader (4 weeks) → **Gate G1**
+## 4.4 Phase 2 — Game reader (6 weeks) → **Gate G1**
 
-1. `ProcessMemory` trait and the Windows implementation.
-2. Pattern scanner, pointer-chain resolver, .NET dictionary/array walkers.
-3. `offsetStore` port: fetch, cache, the two-host retry with backoff and the
-   request timeout added in 1.0.1.
+**Why 6 and not 4:** the reader consumes a signed offsets bundle and validates
+it structurally, instead of trusting whatever an unpinned branch of a third-party
+repository returned.
+
+1. `ProcessMemory` trait and the Windows implementation. `OpenProcess` requests
+   `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more;
+   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` go behind `--features injection` and
+   `PROCESS_CREATE_THREAD` is never requested. Today's C++ opens the game with
+   `PROCESS_ALL_ACCESS`; this is the cheapest security improvement in the port.
+   Process enumeration is roughly 25 lines of Toolhelp32 on Windows and a `/proc`
+   scan on Linux — a direct transliteration of code already in `native/` — rather
+   than a crate that costs 25 dependencies and drags `winapi` 0.3.9 in with it,
+   and dropping that crate is also what lets the project's own Win32 move from
+   `windows` 0.62.2 to `windows-sys` 0.61.2. Find the PID once and keep the
+   handle; re-scan only on read failure.
+2. Pattern scanner, pointer-chain resolver, .NET dictionary/array walkers. On
+   `i686-pc-windows-msvc`, native code may align 8-byte types to 4, so
+   zerocopy's reference APIs are banned on any struct containing a 64-bit field —
+   a `clippy::disallowed-method` entry, and `read_from_bytes`, which copies, at
+   the call sites. Tens of bytes at 30 Hz; the copy costs nothing.
+3. Offsets bundle consumer: verify the signed bundle on **every** load, including
+   from cache, against the floor embedded at build time; run the structural
+   validator; keep the cache, the two-host retry with backoff and the request
+   timeout added in 1.0.1. The three GETs this client makes — offsets, hats,
+   update check — go through `ureq` 3.4.0 with the `platform-verifier` feature,
+   driven from `spawn_blocking`, which is a feature and not a compromise: an
+   update check then cannot stall the runtime the voice path shares. On an
+   unknown game build, fall back read-only with a
+   log line rather than silently to `lookup.versions.default`, and raise a banner
+   only on self-test failure — many Among Us builds ship without moving offsets,
+   so a "not supported" banner would cry wolf. The format is the one G0 proved,
+   so this is a consumer, not a design.
 4. Mod detection, VDF parsing, avatar recolouring.
-5. The Linux implementation.
-6. Injection module, 32-bit Windows, feature-gated.
+5. The Linux implementation. `nix::sys::uio::process_vm_readv` is a safe `fn`
+   whose lengths derive from the slices passed in, so the Linux reader contains
+   no `unsafe` at all. Two things not to port: the C code's response to a short
+   read is to zero-fill the buffer silently, so the trait method is `read_exact`
+   and a short read is an error; and Yama `ptrace_scope=1` is the Ubuntu and
+   Debian default and blocks reading a non-descendant process, which no crate
+   choice fixes and which the packaging phase has to document.
+6. Injection module, 32-bit Windows, feature-gated. Verify the **full replayed
+   prologue**, not just the five bytes the patch overwrites — the instruction at
+   +4 straddles the boundary — and carry an explicit "already patched by us"
+   third state, because the initialisation path can re-run against a live
+   patched process and a naive check then kills the mod stamp until the user
+   restarts the game.
+7. A `FuzzProcess` implementation of `ProcessMemory`, backed by arbitrary bytes
+   answering from a sparse map, so `AmongUsState::read_from` is fuzzable for
+   almost nothing on top of the trait that already exists. Two hazards are
+   reachable today from a modded or corrupted game process — a self-referential
+   pointer chain, and an attacker-influenced array length used to size a `Vec` —
+   so cap chain depth and element counts. For this to find anything the parsing
+   layer must stay pure: `&dyn ProcessMemory` in, `Result` out, no `unwrap`, no
+   `as` truncation.
+
+**An explicit open decision: split the injection path into its own 32-bit
+process.** The `i686-pc-windows-msvc` target exists for nothing but item 6, and
+it is the largest available lever on this project's risk profile. That one target
+is what forecloses LiveKit's `libwebrtc` binding — the integrated option that
+would supply AEC3, Opus with FEC, RTP/RTCP and NetEQ as a single dependency, and
+whose build script has no 32-bit x86 path at all. It is what puts a NASM
+requirement on the build machine as soon as a crypto stack that ships prebuilt
+objects for x86-64 only enters the tree. And it is where MSVC's 4-byte alignment
+of larger types creates the unsoundness hazard item 2 has to lint around, in
+exactly the struct-parsing code this crate is made of. A small 32-bit helper
+talking to a 64-bit client moves rows 13 and 14 of the risk table from High to
+Low and makes the integrated audio option live again. It is not scheduled here
+because it is not decided; it should be decided rather than defaulted into.
 
 **Recording harness.** Before writing the reader, add a debug command to the
 *existing Electron build* that dumps, once per frame, the raw bytes of every
@@ -83,16 +302,35 @@ fixtures.
 > Electron reader's, field for field, with float positions within 1e-6.
 > Non-negotiable: this is a lossless, purely mechanical transformation, so
 > anything less than exact means a bug, not a tolerance.
+>
+> Unchanged by the hardening track, with one addition: G1 must pass byte-for-byte
+> using the embedded bundle, which proves the bundle format lost nothing that
+> `lookup.json` carried.
 
-## 4.5 Phase 3 — Audio engine (8 weeks) → **Gate G2**
+## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.
+
+**Why 10 and not 8:** in-band FEC is not a flag. Making it work costs a feedback
+loop in both directions, and it is new work the flag-only design did not carry.
 
 ### 3a. DSP graph (3 wk)
 
 Implement `Panner`, `Biquad`, `Convolver`, `Gain`, `Analyser` against the Web
 Audio specification formulas. One golden-vector test per node.
+
+Four of the five are formulas. The convolver is not: it is uniformly partitioned
+FFT convolution with correct overlap-add accumulation, correct latency alignment
+and no allocation in the callback, and its failure modes are quiet — a reverb
+tail slightly late or slightly smeared produces no crash, no test failure and no
+bug report anyone can articulate. Use `fft-convolver` 0.4.0 for the general part
+and apply the Web Audio normalisation scalar, which genuinely is the one line the
+spec hands you. The impulse response is decoded once in the `xtask` and embedded
+as raw PCM: it is a 55 KB compile-time constant that never changes, and pulling a
+general-purpose media demuxer into the shipped runtime to read it is the wrong
+trade. Have the xtask print the decoded frame count so the embedded size is a
+recorded number rather than an estimate.
 
 **Generating the golden vectors.** A page loaded in the *current* Electron build
 runs each node with `OfflineAudioContext` over a fixed set of inputs — impulse,
@@ -116,14 +354,63 @@ replaying those tuples through the Rust function. Every tuple must match.
 
 ### 3c. Capture and codec (2 wk)
 
-`cpal` device enumeration and streams, `rubato` resampling, APM wiring
-(`webrtc-audio-processing`, `bundled`, pinned exactly), the VAD port, `opus`
-encode with FEC and DTX.
+`cpal` device enumeration and streams, `rubato` resampling pinned `=5.0.0` and
+used through `process_into_buffer` only, APM wiring, the VAD port, `opus` encode
+with FEC and DTX, pinned `=0.3.1`.
+
+The APM is `sonora` 0.2.0, behind the trait boundary the architecture already
+specifies for it, conditional on the green i686 build P1+ ran and G2 confirms.
+`webrtc-audio-processing` `=2.1.0` stays in the tree as a **Linux-only test
+baseline**, not as the shipping canceller: it does not build on either Windows
+target, PR #102 "Support MSVC targets" has been open and unmerged since
+2026-08-08, issue #34 "Windows build" has been open since 2023-09-27, and its CI
+runs on `ubuntu-latest` only, so nothing upstream would catch a regression even
+after #102 lands. Windows is the overwhelming majority of this app's users, and
+an A/B echo-return-loss-enhancement measurement of the two on Linux — where both
+build — is what justifies the choice rather than asserting it. sonora's own risks
+are different from the ones a "young crate" framing suggests, and they are gate
+items: bus factor 1, two releases, and an i686 build that is genuinely unproven.
+
+Keep the device layer behind a trait from day one, exactly as the APM is, and
+name `cubeb` 0.38.0 as the documented fallback with a written trigger condition —
+cpal 0.18 is a ten-week-old rework whose WASAPI device-change path, the one this
+app already has a bug class around, has four open issues on it.
 
 ### 3d. Jitter buffer and playback (2 wk)
 
-`neteq` integration, Opus decode, PLC, the mixer, output device selection
-(replacing `setSinkId`).
+`neteq` integration with `default-features = false` — mandatory, or the audio
+crate pulls a web framework, a CLI parser, a second `cpal` three majors behind
+the pinned one and a second Opus implementation — plus an implementation of
+`neteq::codec::AudioDecoder` over the `opus` crate, so libopus stays the only
+codec in the binary. Then Opus decode, PLC, the mixer, and output device
+selection (replacing `setSinkId`). NetEQ is pull-based: accelerate, preemptive
+expand and expand all drive decode on demand, so the `AudioDecoder`
+implementation is what makes the pipeline work at all, not an optimisation.
+
+Measure it against a well-tuned fixed jitter buffer with Opus in-band FEC and PLC
+under the same emulation. That is what most peer-to-peer voice apps ship, and
+without it the gate has no baseline to judge NetEQ against — and no fallback
+short of porting the reference implementation, which is a multi-week job.
+
+### 3e. The Opus FEC feedback loop, both directions (2 wk)
+
+libwebrtc emits Opus FEC only once RTCP receiver reports tell it there is loss.
+A Rust client that sets the flag but sends no RR achieves nothing, and because
+the Chromium peer then never learns it is losing packets either, it stops
+emitting FEC too. On a clean LAN 1.x↔2.x is perfect; at 3% loss, 1.x↔1.x sounds
+normal and 1.x↔2.x sounds broken in **both** directions, intermittently, for one
+pair — and it presents as a 1.x bug.
+
+Route the loss fraction out of `rtc`'s `ReceiverReportInterceptor` rather than
+rebuilding RR generation, drive `OPUS_SET_PACKET_LOSS_PERC` with hysteresis, and
+clamp the reported loss so a lying peer cannot drive the encoder anywhere
+harmful. Then implement the receive half: `decode(input, output, fec: true)` on
+packet *N+1* to reconstruct *N*, driven by the jitter buffer's loss signal.
+Whether `neteq` 0.9.1 can signal loss to the decoder in a way that permits
+out-of-order FEC recovery is not established anywhere in its documented surface;
+that is why it is a G2 criterion. No bitrate ladder — below roughly 16–20 kbps
+libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
+loop exactly when it is needed.
 
 **Network emulation harness.** A test that feeds the receive path a recorded RTP
 stream through a configurable impairment model — loss 0/1/2/5/10 %, jitter
@@ -138,6 +425,16 @@ Run the same impairments through the Electron client for reference numbers.
 >    latency is within 30 ms of Chromium's and its objective quality score is no
 >    more than 0.2 MOS below it.
 > 4. The render callback performs zero allocations under the CI allocator.
+> 5. Under a 5% loss profile with a Chromium sender, the Rust receive path
+>    recovers Opus in-band FEC — `decode(..., fec: true)` on the following
+>    packet, driven by the jitter buffer's loss signal — and `getStats()` on the
+>    Electron peer shows `fecPacketsSent` climbing in both directions.
+> 6. A green `cargo build --target i686-pc-windows-msvc` of whichever APM is
+>    shipping, and its test suite passing there.
+>
+> Criterion 3's 30 ms latency budget and the NACK target-delay decision are made
+> **jointly**, not independently: a buffer deep enough to make a retransmission
+> useful over a 60–100 ms RTT can consume the entire budget.
 >
 > **If (3) fails and cannot be fixed within two weeks, stop the port.** That is
 > the honest exit: without a jitter buffer at least as good as NetEQ, a proximity
@@ -145,13 +442,40 @@ Run the same impairments through the Electron client for reference numbers.
 > changes that. Phases 0–2 remain valuable on their own (a Rust server, and a
 > Rust game reader that can be exposed to the Electron client through a small
 > N-API shim if desired).
+>
+> Criterion 5 is part of the same stop decision. If `neteq` cannot support
+> out-of-order FEC recovery, the cost of vendoring the reference NetEQ is decided
+> here, at the gate, not five weeks later at G3 — which is precisely why the
+> criterion sits here rather than with the other interop work.
 
-## 4.6 Phase 4 — Transport and signalling (5 weeks) → **Gate G3**
+## 4.6 Phase 4 — Transport and signalling (10.5 weeks) → **Gate G3**
 
-1. Socket.IO client, typed events, reconnect policy ported from
-   `reconnectPolicy.ts` (its tests come across unchanged).
-2. `Peer` over the `webrtc` crate: trickle ICE with candidate queueing, data
-   channel, connect timeout, TURN with `relay`-only support.
+**Why 10.5 and not 5:** since 0.20.0 the `webrtc` crate is a runtime-agnostic
+rewrite on a sans-IO core rather than a Pion port, so this is a port and not a
+mapping — and the Socket.IO client that used to be item 1 has moved to P1+.
+
+1. **The crate spike, weeks 1–3**, on all three targets including i686, because
+   whatever crypto backend the tree resolves to is nearly free to discover while
+   the rig is standing and expensive to discover in P7+. Spend it proving
+   `webrtc` `=0.20.3` against a real 1.0.2 Chromium client — direct, relay-only,
+   trickle in both directions, SDP captured. The two arms are not symmetric and
+   must not be run as though they were: `str0m` explicitly does not implement
+   TURN, and G3 requires relay-only through coturn, so that arm cannot reach the
+   criterion without first importing or writing an RFC 8656 client and its result
+   would measure a hand-written I/O loop as much as the crate. Timebox it to a
+   written feasibility read answering only "what TURN client and what event loop
+   would a 14-peer mesh need". TURN is the reason `webrtc` wins here; its
+   staleness relative to str0m is not, and neither crate can demonstrate Chromium
+   interop in CI, which is why this is a spike and not a table.
+2. `Peer` over the `webrtc` crate, pinned `=0.20.3` because the maintainer states
+   a minor bump may carry breaking changes: trickle ICE with candidate queueing,
+   data channel, connect timeout, TURN with `relay`-only support. One shape
+   change to design for rather than discover: `peer.ts` nulls all five event
+   handlers before `pc.close()`, and that teardown is exactly how the 1.0.0 fixes
+   avoid acting on events from a connection being replaced. `webrtc` 0.20 takes a
+   single `Arc<dyn PeerConnectionEventHandler>` with no per-event detach, so the
+   pattern becomes a generation counter or an atomic detached flag inside the
+   handler. That is where offer glare and stuck-in-`new` come back.
 3. The peer mesh: join, leave, offer glare, orphan cleanup, rebuild-on-failure.
 4. `validateClientPeerConfig` port — its tests come across unchanged.
 
@@ -171,80 +495,312 @@ will otherwise reintroduce them:
 > `forceRelayOnly` through coturn. Tested on Windows and Linux, and across a NAT.
 > This is what makes a staged rollout possible; without it, 2.0 must ship to
 > everyone at once, which is not acceptable for a voice app.
+>
+> **Amended, because the clean-network version of this gate cannot see the
+> failure mode that matters.** Add (a) the same 1.x↔2.x call repeated under each
+> of P3+'s impairment profiles — 1, 2, 5 and 10% loss — scoring within 0.2 MOS of
+> a 1.x↔1.x call under the identical profile; and (b) a three-client
+> mixed-generation row, with one client leaving and rejoining.
 
-## 4.7 Phase 5 — Platform layer (3 weeks)
+## 4.7 Phase 5 — Platform layer (6 weeks)
+
+**Why 6 and not 3:** the client becomes two processes, and the overlay moves into
+the elevated one.
 
 Keyboard hook, overlay window, single-instance lock, autostart, paths, logging.
 Port `native/electron-overlay-window/src/lib/windows.c` and `x11.c` logic
 directly rather than re-deriving it — that code already knows about the window
 managers and edge cases this needs.
 
-## 4.8 Phase 6 — GUI (10 weeks)
+**Two processes, not one.** `aucl-helper` runs elevated and holds memory reading,
+injection, the keyboard hook and the overlay window. `aucl-core` is never
+elevated and holds tokio, signalling, WebRTC, audio and the GUI. Length-prefixed
+`postcard` over a named pipe on Windows and a Unix socket on Linux. A thread
+boundary is not a privilege boundary, and the alternative — a single elevated,
+unsandboxed address space holding the RTP parser, the Opus decoder, an image
+decoder for remotely fetched hats, the TLS stack and a process-memory writer — is
+also a straight availability regression against today, where the overlay is its
+own `BrowserWindow` and a driver fault there does not drop the call.
+
+The overlay is in the **helper**, which is the counter-intuitive half. UIPI
+blocks window manipulation and out-of-context `SetWinEventHook` across integrity
+levels, so an unelevated overlay stops following an elevated game — the exact
+configuration the README instructs users into. The consequence is a design
+constraint from the first commit: the overlay receives **pre-rasterised sprites**
+over the IPC and never fetches or decodes an image, so no image decoder enters
+the elevated process. Port the UIPI access check too; it is the difference
+between "the overlay is broken" and an accurate message about elevation.
+
+**The keyboard hook stays a poll.** `native/node-keyboard-watcher` is a 60 ms
+`GetAsyncKeyState` loop on Windows, aliased to `XQueryKeymap` on Linux. There is
+no `SetWindowsHookEx` anywhere in the current tree, so a `WH_KEYBOARD_LL` hook is
+not a port of anything: it is new code that puts a desktop-wide latency
+dependency in front of every keystroke, gets silently unhooked if a callback
+exceeds `LowLevelHooksTimeout`, and buys nothing over a poll that already works
+and intercepts nothing. One free Linux improvement while porting it: the current
+code opens and closes the X11 display on every key check — open one connection at
+startup.
+
+Also here: exclusive-fullscreen detection, because with Fullscreen Optimizations
+off a layered window will not appear at all and the alternative is a swapchain
+hook this project must not ship; Wayland detection gated on the **live winit
+backend** rather than `XDG_SESSION_TYPE`, which describes the session and not the
+backend the process actually got, and would grey out the overlay for XWayland
+users who work today; and the single-instance lock using the same
+`Local\AnotherCrewLink` name H1 puts into the field, so a 1.x and a 2.x install
+on one machine cannot run two keyboard hooks, two overlays and two memory readers
+against the same game.
+
+## 4.8 Phase 6 — GUI (11.5 weeks)
+
+**Why 11.5 and not 10:** net of dropping the localisation conversion (−1.0), the
+phase gains a framework spike, the GPU fallback chain and the performance
+baseline the footprint claims are currently asserted without.
 
 In this order, so that the app is usable as early as possible:
 
-1. Shell, custom title bar, window state persistence (2 wk)
+1. Framework spike (0.5 wk) and shell, custom title bar, window state
+   persistence (2 wk)
 2. Main view: player list, avatars, talking indicators, mute/deafen (3 wk)
 3. Settings (3 wk) — the largest single screen
 4. Lobby browser (1 wk)
 5. Overlay view (1 wk)
+6. GPU fallback chain and the performance baseline (1 wk)
 
-Localisation runs alongside: the `xtask` that converts 37 locale directories from
-i18next JSON to Fluent `.ftl` is written once, and translation content is never
-retyped.
+The spike must produce more than three text controls — a lobby-browser table with
+sortable columns and one composited animating avatar — and its decision point is
+the end of the main-view milestone, roughly week five, not the end of the phase
+where it can no longer change anything. The transparent click-through window was
+answered in P1+, before this phase was planned around it.
+
+**No GPU is not a failure to launch.** Chromium currently gives every user
+SwiftShader for free, and this project has already found the problem in the
+field: hardware acceleration is disabled unconditionally on Linux today and on
+demand on Windows through a shipped setting. So Linux defaults to software,
+matching what ships now; Windows goes wgpu/DX12, then WARP through
+`force_fallback_adapter`, then a CPU rasteriser. **No glow rung** — glow needs GL
+3.3 or ES 3.0, and a Windows machine without a vendor driver offers software GL
+1.1, so the rung does not save the RDP and bare-VM cases it would exist for.
+Migrate the existing `hardware_acceleration` answer forward rather than inventing
+a key, and make automatic demotion non-persistent by default: a key written by a
+process in the act of crashing pins users to the slow rung for reasons unrelated
+to the GPU.
+
+**Localisation is not a conversion.** The 37 locale directories stay i18next
+JSON, read by the loader written in P1+. Measured across all 4,736 strings there
+is not one interpolation placeholder, not one plural key and not one selector, so
+every feature that would distinguish a localisation framework from a flat map is
+unused — and Fluent identifiers cannot contain dots, so "translation content is
+untouched" would be true of the values and false of the keys, which are what
+Crowdin and every call site key on. Keeping the JSON also means 1.x and 2.x
+consume the identical tree during the beta, one Crowdin project, translators
+working in one format. `format!` covers the first string that ever needs
+formatting; nobody should reopen this.
+
+No separate clipboard crate either: `egui-winit`'s default `clipboard` feature
+already provides one, with better Wayland coverage than a direct dependency, and
+a direct line would only add version-drift surface.
 
 **Deliberately accepted:** the Rust UI will not be pixel-identical to the React
 one. Layout, spacing and control affordances will differ. What must not differ is
 what every control *does* — the settings schema is ported unchanged, including
 defaults, so that an existing `config.json` keeps working.
 
-## 4.9 Phase 7 — Packaging, update and rollout (4 weeks)
+## 4.9 Phase 7 — Packaging, update and rollout (11 weeks)
 
-1. `cargo-dist` for Windows x64, Windows i686 and Linux x64; NSIS installer and
-   AppImage to match today's artefacts.
-2. Code signing on Windows; reproducible builds where the toolchain allows.
-3. Auto-update: `self_update` against GitHub Releases, with **signature
-   verification** — a hard requirement, and an improvement on today, where
-   `electron-updater` verifies only the publisher certificate on Windows and
-   nothing on Linux.
+**Why 11 and not 4:** `cargo-dist` cannot build either artefact type this project
+must keep producing, and the update path is signed end to end here rather than
+delegated to a crate that cannot verify the artefacts we ship.
+
+1. `cargo-dist` for Windows x64, Windows i686 and Linux x64 — for archives and
+   the release job only. Its installer set is shell, PowerShell, npm, Homebrew
+   and MSI: there is no NSIS backend and no AppImage backend, and MSI would
+   strand every installed 1.x client, because `electron-updater`'s `findFile`
+   picks by extension and changing artefact type is the same act as abandoning
+   the installed base. So the NSIS script and the AppImage are hand-built and
+   keep their exact CLI contracts. Name the Windows installers with the literal
+   `x64` and `ia32` tokens `findFile` prefers, or 32-bit users silently receive
+   the 64-bit installer. Turn on `github-attestations` and `cargo-auditable`, and
+   write down the exit: the output is checked-in GitHub Actions YAML, which is
+   what makes a one-maintainer build tool an acceptable dependency.
+2. Code signing on Windows, with `publisherName` as an **array** of every CA
+   subject we might ever use — `NsisUpdater.verifySignature` fails closed, so
+   shipping one name and later switching CA bricks every install permanently.
+   The array must already be in the field from H1, before we know which CA
+   approves us. Reproducible builds where the toolchain allows, though the
+   attestations answer "prove this binary came from this commit" better than
+   chasing bit-for-bit output across three targets.
+3. Auto-update, in a separate `aucl-updater` binary. `self_update` 0.44.0 is not
+   shippable: its non-optional `quick-xml ^0.38` carries RUSTSEC-2026-0194 and
+   RUSTSEC-2026-0195, both CVSS 7.5, both fixed only at `>= 0.41.0`, which the
+   caret cannot reach — the project's own advisory gate fails against its own
+   pinned version, and its signature feature verifies nothing about an NSIS
+   `.exe` or an AppImage anyway. Either track its 1.0 line and pin exactly once
+   stable, or write the updater around `minisign` verification and `self-replace`
+   — that is not writing crypto, the verification stays in a purpose-built crate.
+   Two embedded public keys, the operational key held offline and never in a
+   release-workflow secret; rollback protection that the user can bypass, because
+   the 2.0→1.x downgrade path is documented; no freeze rule, which is a
+   fleet-wide time bomb dependent on the user's clock. Never install an update
+   while elevated. On Linux there is no separate updater process and nothing to
+   install: verify then replace inside the AppImage, which is a second update
+   code path this project chooses to own permanently and should say so.
 4. Settings migration: read the existing `electron-store` `config.json` on first
-   run and write it forward. Test with real files from 1.x installs.
+   run and write it forward. Test with real files from 1.x installs. The importer
+   reads once and **never writes back** — during the beta a user runs both
+   clients, and neither may silently rewrite the other's settings.
 5. CI: the four existing workflows ported, actions still pinned to commit SHAs,
-   `cargo-audit`/`cargo-deny` replacing `npm audit`, CodeQL still covering the
-   repository.
+   `cargo-audit`/`cargo-deny` replacing `npm audit`, `cargo-about` producing the
+   attribution file GPL distribution wants, CodeQL still covering the repository.
+   One thing CI cannot do for us, and it is a real loss against today: RustSec
+   does not systematically track CVEs in the C vendored inside `-sys` crates, so
+   `cargo audit` will never report a libopus or APM security release. One
+   `electron` bump currently patches libopus, libvpx, BoringSSL and libpng at
+   once, with CVE numbers and a public feed. After the port that becomes a named
+   human with a named upstream watch list, and it needs an owner here.
+6. The Linux tarball with a documented `setcap cap_sys_ptrace+ep` step. On the
+   common `ptrace_scope=1` default the client cannot read the game at all, and an
+   AppImage that silently fails is worse than a documented step.
 
-**Rollout.** Because G3 guarantees interop, 2.0 can go out as an opt-in beta
-alongside 1.x, then as the default once the beta is quiet for a full release
-cycle. The Electron client stays buildable and receives security updates until
-2.0 has been the default for one cycle.
+Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
+its CLI contract is tested against real 1.x updaters before it carries anything
+important.
+
+**Rollout.** Because G3 guarantees interop, 2.0 goes out first as a parallel
+install — different appId, different directory, config read forward, opt-in by
+download only — and sits there for a full release cycle while 1.x keeps receiving
+1.x updates. Moving the installed fleet is P8 (§4.12), and it does not begin until
+signing, the elevation gate and immutable releases are all in the field. The
+Electron client stays buildable and receives security updates until 2.0 has been
+the default for one cycle.
 
 ## 4.10 Milestones and decision points
 
 | | Milestone | Externally visible? |
 | --- | --- | --- |
+| H1 | 1.0.3 hardening in the field | Yes — ships |
+| H2 | **G0** offsets trust chain live and reversible | Yes — ships as 1.0.4 |
+| H3 | Envelope rules and the new OBS feed, logging first | Yes — ships as 1.0.5 |
 | M1 | Rust server serves 1.x clients | Yes — ships |
 | M2 | **G1** reader parity on recorded sessions | No |
 | M3 | **G2** audio parity and impairment results | No — **go/no-go** |
 | M4 | **G3** Rust ↔ Electron in one lobby | No |
 | M5 | Rust client usable end-to-end, no GUI polish | Internal alpha |
 | M6 | Feature parity | Public beta |
-| M7 | 2.0 default | Yes — ships |
+| M7 | 2.0 available as a parallel install | Yes — ships |
+| M8 | **G4** bridge rehearsal on real 1.0.2 installs | No |
+| M9 | 1.x fleet moved; 2.0 default | Yes — ships |
 
-Only M3 can end the project. M1 is valuable whatever happens after it. M2's
-output (a Rust game reader) is reusable from the Electron client if the port
-stops.
+Only M3 can end the project. G0 and G4 gate the work that follows them, not the
+port. M1 is valuable whatever happens after it. M2's output (a Rust game reader)
+is reusable from the Electron client if the port stops.
+
+**Decisions that must be made before phase 1.** Fifteen questions have to be
+answered before the port is committed to; the full set, with the reasoning, is in
+[09-technology-migration.md](09-technology-migration.md) §6. Five of them block
+work that starts in H1–P1+ and therefore belong here. Each is answerable yes or
+no, and leaving one unanswered is itself an answer with a cost.
+
+| Blocks | Decision |
+| --- | --- |
+| P0+, H3 | Is `/socket.io/` accepted as the permanent server wire protocol, with no second path, unless and until a dated 1.x sunset and a migrated OBS page both exist? |
+| P0+, H3 | Is the mobile-client promise in `03-target-architecture.md` §3.5 being kept? Mobile `socket.io-client` defaults to `["polling","websocket"]`, so a websocket-only server refuses its handshake; §3.5 and the polling removal cannot both hold. |
+| P1+, P5+ | Do we accept a per-launch UAC prompt for the elevated helper rather than installing a Windows service? A no to both collapses the two-process split, and the fallback must then be a `--single-process` feature CI builds on every commit, or it will not compile by month six. |
+| H1, P7+ | Do we enable GitHub immutable releases now, accepting that `latest.yml` becomes frozen and the staged rollout must be sequential tagged releases rather than percentage edits? |
+| everything | Do we accept ~77 developer-weeks to 2.0 instead of 37? If no, the defensible cut is written down there and lands near 60 — and the offsets trust chain, update integrity and the signal envelope are not on it. |
 
 ## 4.11 Effort summary
 
 | Phase | Weeks | Parallelisable |
 | --- | ---: | --- |
-| P0 Server | 2 | independent |
-| P1 Foundations | 1 | no |
-| P2 Game reader | 4 | with P3 |
-| P3 Audio engine | 8 | critical path |
-| P4 Transport | 5 | with P5 |
-| P5 Platform | 3 | with P4 |
-| P6 GUI | 10 | after P5 |
-| P7 Packaging | 4 | partly with P6 |
-| **Total, one developer** | **37** | |
-| **Two developers** | **~26** | P3 remains the critical path |
+| H1 1.x emergency hardening | 2.0 | before P0+ |
+| H2 1.x offsets trust chain → G0 | 4.0 | before P2+ |
+| H3 1.x/Node envelope and OBS | 3.0 | alongside P0+–P1+ |
+| P0+ Server | 4.0 | independent |
+| P1+ Foundations | 5.0 | no |
+| P2+ Game reader | 6.0 | with P3+ |
+| P3+ Audio engine | 10.0 | critical path |
+| P4+ Transport | 10.5 | critical path |
+| P5+ Platform | 6.0 | with P4+ |
+| P6+ GUI | 11.5 | after P5+ |
+| P7+ Packaging | 11.0 | partly with P6+ |
+| P8 Bridge and sunset → G4 | 4.0 | after P7+ |
+| **Total to 2.0, one developer** | **77** | midpoint of a range whose low end is 68 |
+| **Two developers** | not half | P3+ and P4+ are both on the critical path, and P7+ waits on both |
+| P9 Post-1.x cleanup | 3.0 | outside the 2.0 budget |
+
+## 4.12 Phase 8 — Bridge and sunset (4 weeks) → **Gate G4**
+
+P7+ produces a 2.0 anyone can download. This phase moves the people who will
+never download anything, and it is the moment a large number of machines execute
+a downloaded installer. It does not start before Authenticode signing, the
+elevation gate and immutable releases are all in the field.
+
+The mechanism is fully specified and can be read out of the installed
+`electron-updater`: `latest.yml` supplies version, path and SHA-512; `findFile`
+picks by extension and then prefers a filename containing `x64` or `ia32`;
+`NsisUpdater` spawns the installer with `--updated /S /D=<installDirectory>`; the
+AppImage updater unlinks the running AppImage, moves the replacement into place
+and runs it with `execFileSync` and `APPIMAGE_EXIT_AFTER_INSTALL=true`. That last
+detail decides the Linux rollout: `execFileSync` is synchronous, so a Rust
+AppImage that starts its GUI instead of exiting hangs the old client forever, on
+every Linux machine, at once. The Rust binary checks that variable in `main()`
+before anything else.
+
+1. The bridge is built by the Rust pipeline and published into the 1.x feed as
+   **1.1.0**. On Windows, either NSIS installers carrying the literal `x64` and
+   `ia32` tokens or one combined dual-arch installer — decide explicitly, because
+   the default behaviour on a mismatch is to hand every client the first `.exe`
+   in `latest.yml`. On Linux, an AppImage that *is* the Rust client and exits
+   immediately on `APPIMAGE_EXIT_AFTER_INSTALL`.
+2. No `.blockmap` asset for the bridge, or the updater attempts a differential
+   download against a file that is not there.
+3. Staged rollout as sequential tagged releases — 1.1.0, 1.1.1, 1.1.2, a week
+   apart, cohort baked in at build time. `stagingPercentage` is not available: it
+   lives in `latest.yml`, which immutable releases freeze. Each step is therefore
+   its own build, Authenticode signature, minisign signature and manifest. Three
+   release ceremonies is why this phase is four weeks and not two.
+4. The first bridge installer **renames rather than deletes** the Electron
+   install and its config, and 2.x ships a documented way back. Only after the
+   bridge has sat at full rollout for a cycle does it begin deleting.
+
+**Rollback** is re-marking the 1.0.2 release as *Latest*: un-updated clients
+revert within one check interval without touching a frozen asset. It is
+all-or-nothing and cannot express a percentage. Deleting the bridge release does
+not free the tag, so a retry is 1.1.1.
+
+**Measuring it needs no new telemetry.** The server sees every client that joins
+a lobby, so per-version join counts show the fleet moving. The rollout is working
+if the 1.0.2 share falls roughly in proportion to the cohort and the 2.x share
+rises to match, **with no drop in total joins**. A drop in total joins is the
+signal to stop.
+
+> **Gate G4 — bridge rehearsal.**
+> On **real 1.0.2 installs**, not dev builds: Windows x64, Windows ia32 and Linux
+> each update from a staging feed to the bridge. Silent install; the correct
+> architecture selected; correct install directory; a working uninstall entry;
+> migrated config; and on Linux the old process exits within two seconds rather
+> than hanging. G3 must have passed, because during the staged rollout the same
+> lobby contains both generations, by design, for weeks.
+
+**Sunset.** The binding commitment is the **server**, not the client: users who
+never update keep working for as long as the server speaks the 1.x wire format.
+Publish a dated promise, announce it in-app through the existing
+update-notification path at least two release cycles ahead, and when it arrives
+have the server return a message the 1.x client displays rather than failing
+silently. The per-step detail for this phase and for the hardening track is in
+[09-technology-migration.md](09-technology-migration.md) §3.
+
+## 4.13 Phase 9 — Post-1.x cleanup (3 weeks, outside the 2.0 budget)
+
+Everything here is blocked not by effort but by the existence of 1.x clients in
+the same lobby, so it is scheduled once the 1.x share is below the agreed
+threshold and it is not part of the 77 weeks.
+
+Move lobby settings and the impostor radio claim to the socket, drop the data
+channel and disable SCTP, and delete the SCTP fuzz targets. Revisit a second wire
+protocol *only* if a dated `/socket.io/` sunset and a migrated OBS page both
+exist. Revisit the Opus bitrate ladder only if the impairment harness has
+actually shown self-inflicted congestion in a 12–15 player mesh — until then it
+fights the FEC loop on the same input with the opposite sign, and it is the one
+behaviour with no Electron reference to measure against.

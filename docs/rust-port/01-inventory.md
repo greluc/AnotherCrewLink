@@ -13,7 +13,7 @@ from the `fix/bugs-and-deps-224r05` branch at version 1.0.2 and from
 | `src/common` | TS | 666 | Shared types, map colliders, mods |
 | `native/memoryjs` | C++ | 2,905 | Process memory, both platforms |
 | `native/electron-overlay-window` | C | 1,205 | Overlay attach, Win32 + X11 |
-| `native/node-keyboard-watcher` | C++ | 280 | Global key hook, Win32 + X11 |
+| `native/node-keyboard-watcher` | C++ | 280 | Polled key watcher, Win32 + X11 |
 | `vendor/structron` | JS | 802 | Binary struct parsing |
 | Server `src` | TS | 476 | Signalling relay, lobby browser |
 | **Total hand-written** | | **~16,300** | excluding tests, locales, assets |
@@ -41,7 +41,7 @@ which compiles them against Electron's ABI.
 | `GameReader.ts` | 1,223 | Reads Among Us state out of process memory; pattern-scans `GameAssembly.dll`; injects x86 shellcode | **Very high** |
 | `index.ts` | 489 | Windows, auto-update, protocol handlers, hardening | Electron |
 | `hook.ts` | 239 | Global key hooks, game-read loop, settings store | High |
-| `offsetStore.ts` | 219 | Fetches and caches memory offsets over HTTP | None |
+| `offsetStore.ts` | 219 | Fetches and caches memory offsets from a third-party branch HEAD | None |
 | `ipc-handlers.ts` | 171 | Main↔renderer bridge | Electron |
 | `avatarGenerator.ts` | 135 | Recolours player sprites per colour id (Jimp) | None |
 | `windowState.ts` | 101 | Persists window geometry | Electron |
@@ -74,7 +74,11 @@ which compiles them against Electron's ABI.
 | `vad.ts` | 192 | Voice activity detection over `AnalyserNode` |
 | `cosmetics.ts` | 152 | Hat collection fetched at runtime, with per-hat CSS geometry |
 
-The renderer runs with `nodeIntegration: true` and `contextIsolation: false`.
+The renderer runs with `nodeIntegration: true` and `contextIsolation: false`. That
+combination disables Chromium's renderer sandbox, so the WebRTC stack, the Opus
+decoders, the Web Audio graph and the hat-image decode already run unsandboxed today,
+in a process that also holds full Node access. What separates them from the memory
+reader is Electron's process split, not a sandbox.
 
 ### The audio pipeline in detail
 
@@ -106,8 +110,37 @@ repository.
 | Module | What it actually calls |
 | --- | --- |
 | `memoryjs` | `CreateToolhelp32Snapshot`, `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAllocEx`, `EnumProcessModules`, `QueryFullProcessImageName`; on Linux `process_vm_readv` and `/proc/<pid>/maps` |
-| `node-keyboard-watcher` | `SetWindowsHookEx(WH_KEYBOARD_LL)` on a dedicated thread; `XQueryKeymap` polling on X11 |
-| `electron-overlay-window` | `SetWinEventHook` to follow the game window, `SetWindowLongPtr` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT\|WS_EX_TOPMOST`; on X11 `XFixes` input regions and `_NET_WM_STATE_ABOVE` |
+| `node-keyboard-watcher` | `GetAsyncKeyState` on a dedicated thread, polled every 60 ms; on X11 the same loop with `GetAsyncKeyState` aliased to `XQueryKeymap`, opening and closing the display on every check |
+| `electron-overlay-window` | `SetWinEventHook` to follow the game window, `SetWindowLong` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT`, `SetWindowPos` for z-order, and a `PostMessage` probe for UIPI access; on X11 plain `xcb` only, tracking `_NET_ACTIVE_WINDOW`, `_NET_WM_NAME` and `_NET_WM_STATE` |
+
+There is no low-level keyboard hook anywhere in the tree: `SetWindowsHookEx`,
+`WH_KEYBOARD_LL` and `LowLevelKeyboardProc` do not appear in `native/` or `src/`. The
+watcher polls, so it never intercepts a keystroke and never sits in another process's
+input path.
+
+Click-through is Electron's, not the native module's — `overlay.setIgnoreMouseEvents(true)`
+at `src/main/index.ts:224`. On Windows the module additionally sets `WS_EX_TRANSPARENT`
+as part of its transparency fix; on Linux `x11.c` includes only `<xcb/xcb.h>`, links
+only `-lxcb`, and contains no XFixes and no Shape code, so nothing native sets an input
+region there. What the X11 half of the module actually does is EWMH tracking: follow the
+active window, read its title, and watch `_NET_WM_STATE` for fullscreen.
+
+### Data fetched at runtime
+
+Two third-party datasets are downloaded at start-up, pinned very differently.
+
+| Source | Pinned to | Supplies |
+| --- | --- | --- |
+| `OhMyGuus/BetterCrewlink-Offsets` | nothing — `main` branch HEAD over `raw.githubusercontent.com`, with a jsDelivr mirror of the same branch as the fallback host | `lookup.json` and the per-build offsets file |
+| `OhMyGuus/BetterCrewLink-Hats` | commit `3d2cc7de`, through a jsDelivr `/gh/…@<sha>/` path | `hats.json` and every hat, visor and pet image |
+
+The hat collection is content-addressed and immutable for the life of a release;
+bumping `HAT_COLLECTION_COMMIT` in `src/common/hatCollection.ts` is a deliberate,
+reviewable act. The offsets are whatever that branch holds at the moment the request
+lands. There is no hash, no signature and no structural validation on them, and a
+failed fetch falls back to an unauthenticated copy in `userData` that is likewise never
+checked. Those numbers drive every pointer chain in `GameReader`, the buffer lengths it
+allocates, and — on 32-bit Windows — the addresses the `JMP` patches are written to.
 
 ### Server
 

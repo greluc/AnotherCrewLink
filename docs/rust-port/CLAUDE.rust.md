@@ -17,7 +17,7 @@ cargo nextest run -p aucl-audio          # one crate
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo deny check                         # advisories, licences, bans, sources
-cargo run -p aucl-client                 # the app
+cargo run -p aucl-core                   # the app (spawns aucl-helper)
 cargo xtask golden --verify              # DSP golden vectors
 cargo xtask netemu                       # receive path under emulated loss
 ```
@@ -36,15 +36,27 @@ Targets: `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc` (the injection path is
 | `aucl-game` | Process memory, pattern scanning, offsets, shellcode injection |
 | `aucl-audio` | Capture, APM, Opus, jitter buffer, the DSP graph, the mixer |
 | `aucl-net` | Socket.IO signalling, WebRTC peer mesh |
-| `aucl-platform` | Keyboard hook, overlay window, paths, single instance |
+| `aucl-platform` | Keyboard poll, overlay window, paths, single instance |
+| `aucl-ipc` | Helper ↔ core: `postcard` message types and framing |
 | `aucl-app` | The state machine wiring the above together |
 | `aucl-ui` | egui views: main, settings, lobby browser, overlay |
-| `aucl-client` | The binary |
+| `aucl-helper` | Elevated binary: game reader, injection, key poll, overlay window |
+| `aucl-core` | Unelevated binary: tokio, signalling, WebRTC, audio, GUI |
 | `server/` | `axum` + `socketioxide` signalling relay |
 | `xtask/` | Build and release automation, in Rust rather than shell |
 
 `aucl-types`, `aucl-game`, `aucl-audio` and `aucl-net` must build and test with
 **no GUI dependency**. Do not add one.
+
+**Two binaries, not one.** `aucl-helper` is the only elevated process and holds
+memory reading, injection, the key poll and the overlay window; `aucl-core`
+never elevates and holds tokio, signalling, WebRTC, audio and the GUI. They talk
+length-prefixed `postcard` over a named pipe (Windows) or a Unix socket (Linux).
+The overlay is in the helper because UIPI blocks window manipulation across
+integrity levels; it receives **pre-rasterised sprites** and never decodes an
+image, so no image decoder enters the elevated process. `aucl-game` is never
+linked into `aucl-core`. See
+[docs/rust-port/03-target-architecture.md](docs/rust-port/03-target-architecture.md) §3.2.
 
 ## Rules that are not negotiable
 
@@ -66,8 +78,9 @@ until proven otherwise — do not regenerate the vector to make the test pass.
 
 ### `AmongUsState` has exactly one producer
 
-`aucl-game` produces it; everything else reads it through `tokio::sync::watch`.
-Nothing outside `aucl-game` constructs or mutates it.
+`aucl-game`, on the helper's game thread, produces it; it crosses the IPC once
+and everything inside `aucl-core` reads it through `tokio::sync::watch`. Nothing
+outside `aucl-game` constructs or mutates it.
 
 ### `unsafe`
 
@@ -126,9 +139,10 @@ fine; renaming or repurposing one needs a migration step.
 
 ## Dependencies
 
-Latest stable, no pre-releases in a shipped build. `webrtc-audio-processing` and
-`neteq` are pinned exactly (`=x.y.z`) because they sit in the audio path and the
-former does not follow semver strictly. No git dependencies, no path
+Latest stable, no pre-releases in a shipped build. `sonora`, `neteq`, `rubato`,
+`opus`, `webrtc` and the `webrtc-audio-processing` test baseline are pinned
+exactly (`=x.y.z`), because each sits on the audio or media path and each
+upstream has broken inside a minor or a patch. No git dependencies, no path
 dependencies outside the workspace — the pre-1.0 client depended on unpinned
 branch HEADs of three native modules and that is what the vendoring ended.
 
