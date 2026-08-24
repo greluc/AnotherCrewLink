@@ -60,6 +60,31 @@ Splitting also preserves a boundary that exists today: the Electron overlay is
 its own `BrowserWindow` and Chromium's GPU work is out-of-process, so an overlay
 fault or a driver crash does not currently take voice down with it.
 
+The helper is started on demand and elevated per launch, through UAC, with no
+Windows service anywhere in the design. On Windows `aucl-core` spawns it the
+first time a game process appears and spawns it *unelevated*; a same-user game
+needs no privilege beyond that, which is the majority case and the one that works
+today without anybody being asked anything. If `OpenProcess` comes back denied
+because the game is running at a higher integrity level — the configuration the
+README is about — the helper exits with that status and `aucl-core` respawns it
+through `ShellExecuteW`'s `runas` verb. That is one UAC prompt, once per session,
+paid only by the users who need it. The service was the alternative, and it buys
+the removal of that prompt at the price of a permanently installed `LocalSystem`
+component holding debug-level access to arbitrary processes, reachable over an
+IPC endpoint every account on the machine can open, present whether or not anyone
+is playing. That is a larger and always-present privilege than the friction it
+removes. The prompt is accepted, and it is also the one moment where the
+operating system, rather than this project's documentation, tells the user that
+the program is about to read another program's memory. Declining it is a
+supported state and not a crash: the unelevated helper stays up and keeps polling
+keys, and reports that it cannot read the game, so the client has no proximity
+data and an overlay that cannot attach. §3.3 makes that a named UI state with a
+way to ask again, rather than a blank screen. On Linux nothing elevates:
+`process_vm_readv` against a same-uid process needs only the documented
+`setcap cap_sys_ptrace+ep` on the common `ptrace_scope=1` default, so there the
+split is a fault boundary and not a privilege boundary, and it is kept for the
+first reason rather than the second.
+
 The overlay is in the *elevated* half, which is counter-intuitive and is not a
 free choice. UIPI blocks window manipulation and out-of-context `SetWinEventHook`
 across integrity levels, so an unelevated overlay stops following an elevated
@@ -69,7 +94,7 @@ over the IPC and never fetches or decodes an image, so no image decoder enters
 the elevated process.
 
 ```
-┌─ aucl-helper — elevated ──────────────────────────────────────┐
+┌─ aucl-helper — elevated when the game is ─────────────────────┐
 │  game thread (5 Hz, blocking)                                 │
 │    aucl-game: read process memory → AmongUsState              │
 │  key thread (60 ms poll): GetAsyncKeyState / XQueryKeymap     │
@@ -186,7 +211,9 @@ anything the parsing layer must stay pure — `&dyn ProcessMemory` in, `Result`
 out, no `unwrap`, no `as` truncation.
 
 Whether the 32-bit requirement can be confined to a second, small helper process
-is an **open decision**, not a settled one. That single target is what forecloses
+is an **open decision**, not a settled one — a different question from the
+elevation split in §3.2, which is settled, and one that would add a *third*
+process rather than change the two. That single target is what forecloses
 LiveKit's `libwebrtc` binding, what puts NASM in the build once TLS enters the
 tree, and what creates the alignment hazard for exactly the struct parsing this
 crate is full of: MSVC on `i686` may align >4-byte types to only 4 bytes, so
@@ -373,6 +400,7 @@ and Chromium interop is the whole constraint; the `P4+` spike against a real
 | Overlay attach | `SetWinEventHook` + `SetWindowLongPtrW` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT\|WS_EX_TOPMOST` | `XFixes` input region + `_NET_WM_STATE_ABOVE` |
 | Paths | `directories` | `directories` |
 | Single instance | named mutex | abstract socket |
+| Helper launch | spawned unelevated on demand; `ShellExecuteW` `runas` only after `OpenProcess` is denied, one UAC prompt per session (§3.2) | ordinary `Command::spawn`; no elevation, `setcap cap_sys_ptrace+ep` documented instead |
 
 The Windows key path stays the 60 ms `GetAsyncKeyState` poll that
 `native/node-keyboard-watcher` already runs. A `SetWindowsHookEx(WH_KEYBOARD_LL)`
@@ -388,9 +416,13 @@ from startup.
 The overlay window lives in `aucl-helper` (§3.2) and receives pre-rasterised
 sprites; the ported UIPI access check becomes a first-class UI state, so a user
 whose game is elevated and whose helper is not gets an accurate message instead
-of a blank screen. Exclusive-fullscreen detection comes with it: with Fullscreen
-Optimizations off a layered window will not appear at all, and the alternative —
-hooking the swapchain — is not something this project ships.
+of a blank screen. A declined UAC prompt (§3.2) is the same class of state and
+gets the same treatment: the helper is running but cannot read an elevated game,
+so the main view says that and offers to ask again, because the alternative is a
+client that looks broken for a reason the user chose. Exclusive-fullscreen
+detection comes with it: with Fullscreen Optimizations off a layered window will
+not appear at all, and the alternative — hooking the swapchain — is not something
+this project ships.
 
 `winit`'s `set_cursor_hittest(false)` handles click-through on all three targets,
 X11 included: winit's X11 backend sets an input shape through the X server
@@ -497,18 +529,39 @@ and no HTTP-aware middleware at all, so `tower-http` 0.7.0 supplies the body cap
 the request-body timeout that hyper's header timeout does not cover, panic
 catching, and CORS.
 
-**CORS is not optional.** The OBS overlay page at `obs.aucl.greluc.me` is a
-browser client on a different origin from whatever `serverURL` the user has set,
-and `socketioxide` ships no CORS handling of its own. Without a `CorsLayer` on
-the socket.io route the overlay breaks on day one of the server phase.
+**CORS is not on the socket.io route, and that is a consequence of dropping
+polling rather than an omission.** The OBS overlay page at `obs.aucl.greluc.me`
+is a browser client on a different origin from whatever `serverURL` the user has
+set, and while polling was on the table its handshake was an XHR that needed a
+`CorsLayer` — `socketioxide` ships no CORS handling of its own. With polling
+gone, the page connects by WebSocket upgrade, which is not a CORS request and
+needs no server-side permission; what it needs instead is
+`transports: ['websocket']` in the page itself, deployed and verified before the
+server release (§3.5, [06-security.md](06-security.md) §6.3). Do not substitute
+an `Origin` allow-list: `Origin` is a header any non-browser client sets freely,
+so it rejects nothing that matters while being the one thing that can take the
+overlay off the air. `CorsLayer` stays on the plain HTTP routes a browser really
+does fetch with XHR — `/health` and `/lobbies`.
+
+**The server is websocket-only.** The Engine.IO polling transport is not
+enabled. Both existing clients already pass `transports: ['websocket']`, so
+polling is served to nobody legitimate, and it carried
+[GHSA-r635-g3xr-vw7x](https://github.com/advisories/GHSA-r635-g3xr-vw7x) (HIGH),
+which leaves with it. It is also half the Engine.IO specification, the half the
+hand-written client in §3.3 does not implement. What that costs is a client
+population, and §3.5 names it.
 
 TLS terminates at a reverse proxy and axum binds to loopback. That keeps
 `aws-lc-rs`, ACME and certificate rotation out of the server binary, and nginx's
-`limit_req`/`limit_conn` are built in. It does **not** close the frame-size hole:
-engineioxide applies `max_payload` only on the polling transport, and the
-WebSocket path takes tungstenite's defaults — 64 MiB per message, 16 MiB per
-frame — with no configuration knob and no proxy directive that survives the
-Upgrade. That is an **accepted risk with an upstream issue filed**, not a config
+`limit_req`/`limit_conn` are built in. It does **not** close the frame-size hole,
+and dropping polling makes that hole the only case rather than one of two:
+engineioxide applies `max_payload` on the polling transport alone, so with
+polling off it now governs nothing inbound at all, and the WebSocket path takes
+tungstenite's defaults — 64 MiB per message, 16 MiB per frame — with no
+configuration knob and no proxy directive that survives the Upgrade. The inbound
+cap is therefore entirely the handlers' own, alongside the per-socket token
+bucket below, and there is no layer left that could be mistaken for covering it.
+The residue is an **accepted risk with an upstream issue filed**, not a config
 line, and the honest form of it belongs in the plan rather than a claim that a
 proxy handles it.
 
@@ -548,16 +601,31 @@ proves the toolchain, CI and release story before any of it matters.
 - **`electron-devtools-installer`, the Pug view engine, `morgan`** — replaced by
   `tracing` and a formatted string, no user-visible surface.
 - **The OBS browser overlay** (`obs.aucl.greluc.me`) stays a web page and
-  consumes the same `ObsVoiceState` payload. It is not, however, *unaffected*:
-  it is a browser client on another origin, so the server has to send it CORS
-  headers it gets for free from the Node stack today (§3.4).
-- **Mobile clients.** The project already broke compatibility with
-  socket.io 2 clients when it moved to socket.io 4; the `mobileHost` /
-  `<code>_mobile` code paths are kept as-is in the port so that any future mobile
-  client speaking the 4.x protocol still works, but they are not a constraint on
-  the design. **This promise is an open decision, not a settled one**
-  ([04-implementation-plan.md](04-implementation-plan.md) §4.10): mobile
-  `socket.io-client` defaults to `["polling","websocket"]`, so a server that
-  drops the polling transport refuses its handshake. This paragraph and the
-  polling removal cannot both hold, and whichever is dropped is amended here in
-  the same commit.
+  consumes the same `ObsVoiceState` payload. It is not, however, *unaffected*,
+  and in two ways. It is a browser client on another origin, and it has to be
+  switched to `transports: ['websocket']`, because the polling handshake it
+  gets for free from the Node stack today is not offered by either server after
+  H3 (§3.4). And
+  it is one deployment serving every client version at once, in neither
+  repository, which makes it a scheduling constraint rather than a bystander:
+  the page has to learn the post-envelope event and be deployed and verified
+  *before* the server release that enforces the envelope rules
+  ([06-security.md](06-security.md) §6.3). Not ported is not the same as not on
+  the critical path.
+- **Mobile clients, and the promise that a future one would work.** The server
+  is websocket-only (§3.4). Mobile `socket.io-client` defaults to
+  `["polling","websocket"]` and opens with a polling handshake, so a mobile
+  client written against the 4.x protocol is refused at the handshake rather
+  than degraded — and refused before any application event, so there is no
+  message the server could send it to explain why. The undertaking that used to
+  stand here, that the `mobileHost` / `<code>_mobile` paths would be kept working
+  for such a client, is withdrawn rather than qualified: it was a promise made to
+  a client that does not exist, and keeping it meant carrying the polling
+  transport and its advisory for that client's benefit alone. What replaces it is
+  nothing. Anyone who wants a mobile client afterwards is making
+  a protocol decision, not collecting on a promise already kept: either a
+  websocket-first client written against this server's events — `transports:
+  ['websocket']` is one line in `socket.io-client` and the wire format is
+  otherwise unchanged — or polling deliberately re-enabled on the server and
+  re-argued against the advisory it brings back. Both are decisions with a named
+  cost, which is the state this paragraph should have been in from the start.

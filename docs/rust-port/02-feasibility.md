@@ -32,8 +32,9 @@ consumes the same format.
 The second is created by the port. Electron spreads this work across several
 processes; a single Rust binary would put an elevated, unsandboxed process around
 the RTP parser, the Opus decoder, the image decoder and a process-memory writer
-at once. The answer is two processes rather than one, and it is a decision to
-make before the first line of the client, not after — see row 17.
+at once. The answer is two processes rather than one, and that is settled: the
+elevated helper is started on demand with a per-launch UAC prompt and there is no
+Windows service — decided 2026-08-24. Row 17 is scheduled work, not a proposal.
 
 So the recommendation is: **yes, port — but in the order given in
 [04-implementation-plan.md](04-implementation-plan.md), with a hard go/no-go gate
@@ -42,6 +43,12 @@ engine is the part that decides the project. Building it first, standalone and
 measurable, means a no-go costs one phase rather than a year. The offsets work
 starts earlier still, on the Electron client, because its format has to be proven
 before the Rust reader is written against it.
+
+**What is funded is narrower than what is feasible.** As of 2026-08-24 only the
+hardening track and `P0+`, the Rust server, are committed; the rest of the port
+is planned and priced, and whether it proceeds is decided at an explicit decision
+point after the server ships. Read this document as an assessment of the whole
+route, not as a description of work under way.
 
 ## 2.2 Component-by-component
 
@@ -65,9 +72,9 @@ reaching parity at all. Effort is for one experienced developer.
 | 13 | **AEC / NS / AGC** | `sonora` (`webrtc-audio-processing` as a Linux baseline) | **High** | 3–5 wk |
 | 14 | **Opus + jitter buffer + PLC** | `opus` + `neteq` | **High** | 4–6 wk |
 | 15 | **Web Audio graph parity** | hand-written DSP + `fft-convolver` | **High** | 5–8 wk |
-| 16 | Packaging, signing, auto-update | `cargo-dist` archives + `minisign` | **Medium** | 11 wk |
+| 16 | Packaging, update integrity, auto-update | `cargo-dist` archives + `minisign` over the update manifest; no Authenticode | **Medium** | 9.5 wk |
 | 17 | Two-process split and its IPC | length-prefixed `postcard` over a named pipe / Unix socket | **Medium** | 2 wk |
-| 18 | **Offsets trust chain** | mirror, signed bundle, embedded floor, structural validator | **High** | 6.5 wk |
+| 18 | **Offsets trust chain** | mirror we control, upstream pinned by commit, embedded floor, structural validator on every load — **no signature** | **High** | 5.5 wk |
 
 Rows 13–15 are the audio problem. Rows 1–7 are close to mechanical. Row 18 is the
 largest single risk in the document and the only one that is already live in the
@@ -77,11 +84,12 @@ The effort column is per component and the entries overlap — rows 12–15, for
 instance, are all scheduled inside one phase. Do not add the column up; the
 schedule is in [04-implementation-plan.md](04-implementation-plan.md) as extended
 by [09-technology-migration.md](09-technology-migration.md), and it comes to
-roughly 77 developer-weeks to 2.0. Treat 77 as the midpoint of a range whose low
-end is 68. That figure covers work these rows do not: nine developer-weeks of
-hardening on the Electron client and the Node server before and alongside phase
-0, and four weeks of bridge and sunset after packaging. A further three weeks of
-post-1.x cleanup sit outside the 2.0 budget.
+roughly 74 developer-weeks to 2.0. Treat 74 as the midpoint of a range whose low
+end is 65. That figure covers work these rows do not: seven and a half
+developer-weeks of hardening on the Electron client and the Node server before
+and alongside phase 0, and four weeks of bridge and sunset after packaging. A
+further three weeks of post-1.x cleanup sit outside the 2.0 budget. Of the 74,
+only 11.5 — the hardening track and the server — is committed.
 
 **Rows 13 and 14 are High partly because of a target.** `i686-pc-windows-msvc`
 exists only for the injection path, and it is what forecloses LiveKit's
@@ -95,7 +103,10 @@ explicit open decision rather than a settled one; taking it would move rows 13
 and 14 from High to Low.
 
 **Row 17 is not in the current architecture and is the one structural change this
-table asks for.** `aucl-helper` runs elevated and holds memory reading,
+table asks for. It is settled and scheduled, not proposed** — the elevated helper
+is launched on demand through UAC once per session, with no Windows service, and
+there is no `--single-process` fallback to build or test.
+`aucl-helper` runs elevated and holds memory reading,
 injection, the keyboard hook and the overlay window. `aucl-core` never runs
 elevated and holds tokio, signalling, WebRTC, audio and the GUI. The overlay
 belongs in the elevated half because UIPI blocks window manipulation across
@@ -357,12 +368,13 @@ Worth stating plainly, because the risk table above is one-sided:
 
 Honest counter-arguments, for the record:
 
-1. **It is a large project.** Roughly 77 developer-weeks to 2.0 — the midpoint of
-   a range whose low end is 68 — and parity is the bar, because this is a working
-   application with users, not a greenfield. That figure includes nine weeks of
-   hardening on the Electron client and the Node server before and alongside
-   phase 0, and four weeks of bridging the installed base afterwards; three
-   further weeks of post-1.x cleanup sit outside it. A second developer does not
+1. **It is a large project.** Roughly 74 developer-weeks to 2.0 — the midpoint of
+   a range whose low end is 65 — and parity is the bar, because this is a working
+   application with users, not a greenfield. That figure includes seven and a
+   half weeks of hardening on the Electron client and the Node server before and
+   alongside phase 0, and four weeks of bridging the installed base afterwards;
+   three further weeks of post-1.x cleanup sit outside it. Only the first 11.5
+   are committed. A second developer does not
    halve it, because the audio engine is no longer the sole critical path — the
    transport phase now rivals it. Call it well over a year with review, testing
    on real hardware, and the inevitable.

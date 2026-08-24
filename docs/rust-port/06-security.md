@@ -130,10 +130,54 @@ name to check and returns null. A user who launched elevated to match the game �
 which the README instructs — executes an unsigned downloaded binary as
 administrator, silently.
 
-The port must sign artefacts and verify a detached signature against a key
-embedded in the binary before applying an update, on both platforms. Given that
-the client may run elevated (§6.3), this is a requirement in phase 7, not a
-nice-to-have.
+Two things change that. The first has already shipped and needed no client
+release: GitHub immutable releases are enabled on the repository, so a published
+release's assets and its `latest.yml` can no longer be replaced after
+publication. That closes post-publication substitution for the *existing* 1.0.x
+fleet, which is the only item in this section that reaches users who never
+update. The second lands on the 1.x line as the elevation gate in 1.0.3
+([09-technology-migration.md](09-technology-migration.md) §2.2): the updater
+refuses to install while the process is elevated, which removes the silent
+administrator-level execution above even though it verifies nothing.
+
+For the port, update integrity is a **minisign signature over the update
+manifest**, verified in-process against a public key embedded in the binary,
+before anything is downloaded or executed. The manifest carries the artefact
+hashes, so one signature covers every file in a release. The key is held offline
+and never in CI. That is affordable here precisely because a release is a planned
+event with a person at a keyboard and no availability pressure behind it — the
+condition that does *not* hold for the offsets bundle, which is why §6.5 reaches
+the opposite answer on the same question.
+
+**There is no Authenticode signing, on either platform.** Windows artefacts ship
+unsigned and will continue to. What that does and does not cover:
+
+| | | |
+| --- | --- | --- |
+| The artefact is the one this project published | **covered** | manifest signature, checked before execution |
+| An older published build is served as if current | **covered** | rollback protection, user-bypassable for the documented 2.0 → 1.x path |
+| The release host is compromised and pushes new code | **covered** | the signing key is not on GitHub, so a valid manifest cannot be produced there |
+| SmartScreen's unknown-publisher warning | **not covered** | unchanged, on every release, for every user |
+| The OS refusing to run a tampered binary | **not covered** | nothing here is an OS-level trust decision; verification happens inside our updater or not at all |
+| `electron-updater`'s `verifySignature` on the 1.x line | **not covered** | no publisher name exists to check, so it returns null — permanently, not pending a CA |
+
+The bottom half of that table is the price, and it is a real one. Users meet an
+unknown-publisher dialog on first install and are told in the README to click
+through it, which is training for exactly the behaviour that makes the next
+hostile installer work, and no amount of documentation undoes it. What is bought
+instead is the property that matters to an auto-updater living next to a client
+that may be elevated (§6.3): the update path verifies its own input, in-process,
+against a key that an attacker holding the release host does not have. Given the
+elevation, that verification is a requirement in phase 7, not a nice-to-have.
+Authenticode would have added the OS-level half of the story; it is declined on
+cost, on eligibility — a project whose job is pattern-scanning another process's
+address space is a poor fit for a free open-source signing programme's exclusion
+clause — and because the benefit shrank while the question was open, EV
+certificates no longer buying SmartScreen reputation
+([09-technology-migration.md](09-technology-migration.md) §1.3). One consequence
+worth recording: with no CA in the picture there is no `publisherName` to get
+wrong, so the risk of bricking a fleet's updater by switching CA later goes with
+it. That is the only thing this decision makes easier.
 
 ## 6.2 What the port puts at risk
 
@@ -186,10 +230,25 @@ image decoder enters the elevated process. What is left running elevated is then
 a process with no listening socket, no HTTP client, no image decoder and no GPU
 context, and every fuzzing target named in this document runs unelevated.
 
-The cost is a launch question with no free answer — a per-launch UAC prompt or an
-installed Windows service — and an IPC lifecycle to get right on three targets.
-The scheduling is in [09-technology-migration.md](09-technology-migration.md)
-§2.5.
+The launch question is settled, so the split is a design and not a proposal.
+`aucl-core` starts the helper on demand, unelevated, and re-launches it through
+UAC only when the game's integrity level denies the read; there is no Windows
+service, and elevation is per launch and per session
+([03-target-architecture.md](03-target-architecture.md) §3.2). The service was
+the only other answer, and it is worse security than the friction it removes: a
+permanently installed `LocalSystem` component with debug-level access to
+arbitrary processes, listening on an IPC endpoint every account on the machine
+can open, resident whether or not anyone is playing, and a second thing to patch
+on a schedule nobody set. Elevation that is asked for, at a moment the user
+recognises, and that lapses when the process exits, is a smaller standing
+privilege than elevation that is installed once and kept.
+
+The prompt is the cost, and it is paid in interruptions and in a failure state:
+a declined prompt leaves a helper that cannot read an elevated game, so no
+proximity and an overlay that cannot attach, which the UI must name rather than
+present as a fault. Accepted at that price. What remains is the IPC lifecycle on
+three targets, which is ordinary work; the scheduling is in
+[09-technology-migration.md](09-technology-migration.md) §2.5.
 
 ### Young dependencies in the most sensitive path
 
@@ -337,7 +396,10 @@ Worth restating because the port does not alter it:
 - **The client reads another process's memory**, which requires the same
   privilege level as the game and, if the game runs elevated, means the client
   runs elevated. An elevated client with an auto-updater is a meaningful target,
-  which is why update signature verification in §6.1 is a requirement.
+  which is why the signed update manifest in §6.1 is a requirement. What the port
+  changes is scope rather than kind: only `aucl-helper` elevates, only when the
+  game itself is elevated, only after a UAC prompt the user answers that session,
+  and the updater is not in that process (§6.2).
 
 ### What the port inherits from 1.0.2
 
@@ -362,6 +424,33 @@ new risk and these are the other kind.
 The fixes ship on the 1.x line rather than waiting for the port, and are
 scheduled in [09-technology-migration.md](09-technology-migration.md) §3.2.
 
+Each has a client half and a server half, and the server half is enforced from
+the moment it ships. The `signal` envelope rules — `to` must be a current
+co-member of the lobby, `to != from`, a 64 KB cap — are on in the server release
+that accompanies 1.0.5, with no logging period, no rejection-rate threshold and
+no `SIGNAL_STRICT` flag held for later. That is a decision to break, at once,
+every client older than 1.0.5 that depends on addressing a room by name: those
+clients lose the OBS overlay feed and the mobile relay, permanently if they never
+update. Voice is untouched, because voice does not use the room-name path, so the
+break lands on the overlay and the relay and not on the thing people install this
+for. The reason for
+enforcing rather than measuring is that the threshold was never reachable — 1.x
+updates through `electron-updater` with no forced upgrade, so a rejection counter
+has no forcing function driving it towards a floor, and log-only mode is not a
+step towards enforcement but a place to stay.
+
+Two orderings follow, and they are prerequisites rather than preferences:
+
+- **The OBS overlay page learns the new event, and is deployed and verified,
+  before the server release.** It lives in neither repository, it is a single
+  deployment serving every client version at once, and it cannot be rolled back
+  per user. If it ships after the server, every overlay user is broken in the
+  interval; if it ships before, it is speaking a new event to a server that does
+  not yet enforce anything, which is harmless.
+- **1.0.5 is in the field before or with the server change**, because it is the
+  client release that speaks the new events. A server enforcing ahead of the
+  client release breaks every client, not merely the old ones.
+
 ## 6.4 Security checklist for the port
 
 - [ ] `cargo-deny` and `cargo-vet` blocking in CI from phase 1
@@ -379,7 +468,10 @@ scheduled in [09-technology-migration.md](09-technology-migration.md) §3.2.
       capped, parsing layer kept pure so it is fuzzable at all
 - [ ] Panic isolation per peer; a bad peer cannot take down the process
 - [ ] Two processes: elevation confined to `aucl-helper`, which holds no
-      listening socket, no HTTP client, no image decoder and no GPU context
+      listening socket, no HTTP client, no image decoder and no GPU context —
+      started on demand, elevated per launch through UAC and only when the game's
+      integrity level requires it, never installed as a service, and a declined
+      prompt handled as a named UI state
 - [ ] `.cargo/config.toml`: `-C control-flow-guard=yes` on both Windows targets,
       `-C link-arg=/CETCOMPAT` on x86_64 — both are off by default and Chromium
       ships with CFG on
@@ -389,9 +481,17 @@ scheduled in [09-technology-migration.md](09-technology-migration.md) §3.2.
 - [ ] Licence clarifications written before the first CI run, or the gate fails
       on day one: `aws-lc-sys`, `ring`, `webrtc-audio-processing`'s
       `license-file`, and MPL-2.0 `option-ext` arriving through `directories`
-- [ ] Update artefacts signed and verified on both platforms
-- [ ] Offsets bundle verified on every load including from cache, structural
-      validator after the signature, full prologue checked before any patch
+- [ ] Update manifest signed with minisign from an offline key and verified
+      in-process against an embedded public key before any download is executed,
+      on both platforms; no Authenticode, so the unknown-publisher warning stays
+      and is documented as staying (§6.1)
+- [ ] Offsets read from our own mirror at a pinned commit, with the embedded
+      bundle as a floor; structural validator run on every load including from
+      the `userData` cache; full prologue checked before any patch
+- [ ] Mirror repository treated as a security control: protected branch, no
+      direct pushes, review required from someone other than the author, write
+      list audited rather than accumulated — with no signature on the bundle it
+      *is* the trusted set (§6.5)
 - [ ] A named owner and a written watch list for the C vendored inside `-sys`
       crates, because `cargo audit` does not cover it
 - [ ] Audio-processing crates pinned exactly, bumps reviewed individually
@@ -404,12 +504,23 @@ scheduled in [09-technology-migration.md](09-technology-migration.md) §3.2.
 
 ## 6.5 The offsets supply chain
 
+The repository is ours as of 2026-08-24 — the client was moved off
+`OhMyGuus/BetterCrewlink-Offsets` and onto `greluc/AnotherCrewlink-Offsets`. That
+is the first of the five mechanisms below and the only one that needed no code
+beyond two constants. The other four are still outstanding, so everything this
+section describes about *how* the data is used remains true, and one new duty
+arrives with the fork: keeping it in sync. A mirror that lags upstream after an
+Among Us patch does not expose users to an attacker, it locks them out of the
+game, and that failure is on us rather than on someone else's schedule.
+
 The largest single risk in the project, and it is live today rather than
 introduced by the port.
 
-`src/main/offsetStore.ts` fetches `lookup.json` from an unpinned branch HEAD of a
-third-party repository with no pin, no hash, no signature and no validation,
-falling back to an unauthenticated local cache in `userData`. Every number in the
+`src/main/offsetStore.ts` fetches `lookup.json` from an unpinned branch HEAD with
+no pin, no hash, no signature and no validation,
+falling back to an unauthenticated local cache in `userData`. Three of those four
+are fixed below; the fourth, the signature, is deliberately not, and the reason is
+written out rather than left as an oversight. Every number in the
 result is then used unchecked. `player.bufferLength` sizes an allocation. The
 pointer chains that produce the player list, `hostId` and the game state are
 offsets into another process's address space that arrive over the network.
@@ -426,34 +537,85 @@ It also violates the port's own dependency rule against unpinned branch HEADs
 not be waived for the one fetch it was written for.
 
 The answer is the `H2` hardening track, written in TypeScript first so the bundle
-format is proven in the field before the Rust reader consumes it. Mirror the
-upstream tree into a repository we control and sync it by scheduled PR, so a
-human sees the diff — 81 blobs, 284,896 bytes, a review a few times a year. Build
-one canonical bundle carrying `bundle_version`, `min_acceptable_bundle_version`
-and a target minimum client version. Sign it with minisign from a key held
-offline, never in CI. Embed the build-time bundle with `include_bytes!` as a
-floor the client can always fall back to. Verify on **every** load, including
-from the cache, which is what closes tampering with the cached file that no
-network-only fix reaches. Then run a structural validator, because a signature
-answers "did we intend this" and validation answers "can this do harm", the two
-fail independently, and the common real failure is an upstream generator emitting
-garbage that is correctly delivered.
+format is proven in the field before the Rust reader consumes it. Four parts, and
+none of them is a signature:
 
-That reduces the trusted set from seven parties to two: an offline key and the
-review on the mirror PR. It closes the arbitrary-location code write, the
-unbounded `readBuffer`, and local tampering with `offsets.json`.
+- **Mirror.** The upstream tree is mirrored into a repository we control and
+  synced by scheduled pull request, so a human sees the diff before it reaches
+  anybody — 81 blobs, 284,896 bytes, a review a few times a year.
+- **Pin.** The client fetches the mirror at a commit, never at a branch HEAD.
+  This is the part that violated the plan's own dependency rule, and it is the
+  larger half of the problem: today a third party's unpinned HEAD changes under
+  every client with nobody in the loop at all.
+- **Floor.** One canonical bundle, carrying `bundle_version` and a target
+  minimum client version, is built at release time and embedded with
+  `include_bytes!`. The client can always fall back to it, so a bad or
+  unreachable remote degrades to stale offsets rather than to none. There is no
+  `min_acceptable_bundle_version` floor: signed revocation went with the
+  signature, and what replaces it is reverting the mirror plus a "reset offsets
+  to embedded" user action.
+- **Validator.** A total structural validator runs on **every** load, including
+  from the `userData` cache: bounds on `bufferLength`, ranges on every offset and
+  RVA, a required key set, and rejection of anything it cannot account for.
+  Running it on the cache path is what reaches local tampering with
+  `offsets.json`, which no network-only fix touches. The full replayed prologue
+  is checked before any patch.
 
-The cost is availability, and it is not zero. Inserting a second human between an
-Among Us update and a working client is the price, and an Among Us update is a
-burst rather than an event — the upstream history shows four cycles in one
-evening. A client that cannot verify offsets fails closed on the game read, which
-other players experience as "he cannot hear us". `G0` measures exactly that: a
-timed drill against the next real Among Us update must publish a signed bundle
-within six hours, and the validator must accept all 81 real upstream files
-unchanged, because a validator that rejects real data is a self-inflicted outage.
-`P2+`'s offsets work does not start before `G0` passes. If the drill fails, the
-retreat is auto-merge on the mirror with post-hoc review, keeping the signature;
-dropping the signature is not on the table.
+**The bundle is not signed, and that is a decision rather than an omission.** A
+minisign signature from an offline key was the first design, and it is the wrong
+trade for this one artefact, on availability. An Among Us update is a burst, not
+an event — the upstream history shows four cycles in one evening on 2026-06-06 —
+and until offsets land the game read fails closed, which other players experience
+as "he cannot hear us". Signing puts a specific person, at a specific machine,
+holding a specific key, between that burst and the users; covering their absence
+means provisioning a second signer, and a key baked into shipped binaries brings
+a revocation story of its own. Merging a reviewed pull request can be done from a
+phone in the evening; producing an offline signature cannot. The step that has to
+run four times in one evening is the step to make cheap. This is the opposite
+answer to the one §6.1 reaches on the same question, and deliberately so: a
+release is a planned event nobody is waiting on, while an offsets update is
+incident response with a lobby full of people in it.
+
+**What that leaves.** The trusted set is no longer seven parties, but it is not
+an offline key either: it is our mirror repository and everything that can write
+to it — the accounts with push access, the branch protection that is supposed to
+require the review, and the scheduled job that opens the sync PR. Whoever holds
+any of those can change what every client reads, and **the client cannot tell**.
+With no signature there is prevention and no detection: the validator answers
+"can this do harm", nothing answers "did we intend this", and a tampered bundle
+that stays inside the validator's bounds is accepted like any other. That is the
+residual risk, it is ours rather than a third party's, and the mirror's settings
+are consequently a security control on the same review cadence as the code.
+
+What the change does close, it closes completely, and it is the larger of the two
+problems: the unpinned branch HEAD of a third-party repository whose own hourly
+workflow downloads and executes a .NET binary from a 2022 release on a runner
+holding credentials ([09-technology-migration.md](09-technology-migration.md)
+§2.1). Today anyone anywhere in that chain reaches every client without
+compromising anything of ours. After `H2` they reach a pull request. The
+validator closes the rest on its own account: the arbitrary-location code write,
+the unbounded `readBuffer`, and tampering with the local cache.
+
+`G0` measures it. It loses the two criteria that belonged to the signature and
+gains one that belongs to the floor. What stays: the malicious-bundle
+corpus, each entry rejected with a distinct error; the on-disk tamper case, as
+far as a validator with no signature behind it reaches — which is the tamper that
+produces structurally impossible values, and not the tamper that stays in range,
+and the criterion says so; the validator accepting all 81 real upstream files
+unchanged, because a
+validator that rejects real data is a self-inflicted outage; and a timed drill
+against the next real Among Us update, upstream commit to published bundle within
+six hours. What goes: the signature-verification criteria and the revocation
+drill, there being nothing to verify and no key to revoke. What is new is the
+floor criterion — with the mirror unreachable the client starts on the embedded
+bundle and says which one it is using — because pinning to a mirror we own
+replaces a third party's availability with our own, and a failed fetch must
+therefore never be fatal. The full list is
+[05-regression-strategy.md](05-regression-strategy.md) §5.6. `P2+`'s offsets work
+still does not start before `G0` passes. If the drill fails, the retreat is
+auto-merge on the mirror with post-hoc review of the diff — which spends the one
+human step that remains and keeps the pin, the floor and the validator, all three
+of which are worth more than the review is.
 
 The bundle format, the gate criteria and the schedule are in
 [09-technology-migration.md](09-technology-migration.md) §2.1 and §3.2.

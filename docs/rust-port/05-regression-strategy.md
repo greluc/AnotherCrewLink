@@ -20,7 +20,7 @@ that data, and make the Rust implementation reproduce it.
 | Receive path | Electron client under emulated impairment | Latency + MOS numbers | ≤30 ms, ≤0.2 MOS |
 | Signalling | Node `socket.io-client` against both servers | Recorded event traces | exact |
 | Settings | Real 1.x `config.json` files | Fixture files | exact after migration |
-| Offsets bundle | The 81 real upstream files, plus a hand-built bad corpus | Fixture bundles | every real file accepted, every bad one rejected |
+| Offsets bundle | The 81 real upstream files, plus a hand-built bad corpus | Fixture bundles, plus the bundle embedded in the binary | every real file accepted, every malformed one rejected, the embedded floor loading with the mirror unreachable |
 | Resource use | Current Electron build, three renderer configurations | Recorded numbers per configuration | no worse than the recorded figure |
 
 ## 5.2 Test layers
@@ -39,6 +39,15 @@ because it moves logic out of places where it could not be tested:
 - VDF parsing — `vdf.test.ts` ports directly.
 - Keycode mapping — a table test that would have caught the 1.0.0 bug where the
   left-arrow key was mapped to Home and CapsLock was missing entirely.
+- Update manifest verification — a corpus shaped exactly like the offsets corpus
+  in §5.6: unsigned, signed with the wrong key, a replayed lower version, and a
+  manifest whose recorded hash does not match the artefact beside it. Each
+  rejected, with a distinct error. The two corpora are deliberately not
+  symmetrical any more. The offsets bundle is not signed and its corpus is
+  structural; the update manifest is signed and this is the only signature check
+  left in the product, because Windows artefacts ship unsigned (§7.2). It is
+  therefore the one that must have a corpus rather than a code path someone
+  believes in.
 
 Five existing test files port across essentially unchanged. That is a meaningful
 head start and they should be ported in phase 1, not later.
@@ -225,7 +234,7 @@ noise. Each becomes a named test, and the test name says what it guards.
 | `fuzz` (RTP path, game reader) | Linux, nightly toolchain | scheduled, not on pull requests |
 | Interop checklist | manual | before each milestone |
 | Audio device hot-plug checklist | manual | before `G2` sign-off |
-| Bridge rehearsal on real 1.0.2 installs | manual | before `G4` |
+| Bridge rehearsal on real 1.0.2 installs | manual | before `G4`, which blocks the 2.0 release |
 
 Actions stay pinned to commit SHAs, as they already are.
 
@@ -248,6 +257,13 @@ green `cargo-vet` means the exemptions file is current, not that anything was
 audited. Two items are worth a real human audit and should be named as such rather
 than counted as coverage: the update crate, and the `zerocopy` 0.8.27 → 0.8.56
 delta, because that is the code parsing attacker-influenced game memory.
+
+The first of those two is not discretionary. Windows artefacts are not
+Authenticode-signed and will not be, so nothing on the operating-system side
+checks who built the installer a user is about to run; the minisign verification
+over the update manifest is the only control between a substituted artefact and
+that run, and it is performed by a crate with zero audits behind it. An exemption
+there exempts the whole update path.
 
 ## 5.5 Cross-platform coverage
 
@@ -283,36 +299,72 @@ Parity is measured here, so every gate criterion is a measurement, and a
 measurement nobody has built is a criterion that gets waived at the moment it
 would have been inconvenient. What follows is the harness each gate needs and
 where in §5.2 it already lives. `G1` is unchanged. `G2` remains the
-stop-the-port gate, and the amendments below make it harder to pass, not easier.
+stop-the-port gate, and the amendments to `G2` and `G3` below make them harder to
+pass, not easier. `G0` is the one criterion list that moved in both directions: it
+lost the cases that tested a signature the offsets design no longer has, and
+gained the one the design now rests on.
 
 **`G0` — the offsets trust chain.** Five harnesses, four cheap and one that
-cannot be run on demand.
+cannot be run on demand. What they measure changed with the design. The bundle is
+**not signed**, so no criterion here verifies a key. The chain is a mirror of the
+upstream tree in a repository this project controls, synced by scheduled pull
+request so that a human sees the diff, pinned by commit rather than followed at
+branch HEAD, with a known-good bundle embedded in the binary as a floor and a
+structural validator run on every load — including a load from the cache.
 
-1. A committed malicious-bundle corpus: unsigned, signed with the wrong key, a
-   replayed lower `bundle_version`, truncated, and RVAs outside the module range.
-   Each is rejected with a **distinct** error, and the previously-held bundle is
-   still in force afterwards. Distinct errors are the point — one generic "bundle
+1. A committed malicious-bundle corpus: truncated, malformed JSON, a replayed
+   lower `bundle_version`, RVAs outside the module range, a field whose type does
+   not match the schema, and a bundle with no version key at all. Each is
+   rejected with a **distinct** error, and the previously-held bundle is still in
+   force afterwards. Distinct errors are the point — one generic "bundle
    rejected" hides which control actually fired, and the next incident is the
    wrong time to find out.
 2. An on-disk tamper test: edit the cached bundle between runs and confirm it is
-   rejected. This proves verification happens at every load and not only at
-   download, which is what closes local tampering with `offsets.json` in
-   `userData` — a class no network-only fix reaches.
+   rejected as far as the validator can see it. This proves validation happens at
+   every load and not only at download, which is what closes structural tampering
+   with `offsets.json` in `userData` — a class no network-only fix reaches. The
+   limit belongs in the test name rather than in a later post-mortem: an edit that
+   leaves the file well-formed and merely wrong — one plausible RVA moved by eight
+   bytes — passes this test and every other test in this document, and presents as
+   the reader quietly returning the wrong field. A signature over the bundle would
+   have caught exactly that, and this is the case dropping it costs. Local
+   tampering by something already running as the user is knowingly left open.
 3. The validator accepts all 81 real upstream files unchanged. A validator that
    rejects real data is a self-inflicted outage, and this half is worth as much
    as the first.
-4. A revocation drill: publish a bad bundle, supersede it, and confirm an
-   affected client returns to a good state with no client release.
-5. A timed drill against the next real Among Us update: a signed bundle published
-   within six hours, recorded. This one waits for the game to ship an update, so
-   it cannot be scheduled, and it is the criterion that decides whether inserting
-   a second human into the offsets chain is affordable at all. An Among Us update
-   arrives as a burst rather than as a single event, which is what the six hours
-   have to survive.
+4. The floor holds: with the mirror unreachable — DNS failure, a 404 on the
+   pinned commit, an empty cache — the client starts, reads the embedded bundle,
+   and says which bundle it is using rather than falling back silently. The new
+   design needs this criterion and the old one did not: pinning to a mirror we own
+   replaces a third party's availability with our own, and the answer to that is
+   that a failed fetch is never fatal. It also bounds the worst case — a client
+   cut off from the mirror runs on the offsets its own release shipped with, which
+   is stale rather than absent.
+5. A timed drill against the next real Among Us update: from the upstream commit
+   to a client in a game, within six hours, recorded. This one waits for the game
+   to ship an update, so it cannot be scheduled. What it now times is the
+   scheduled-pull-request path — sync opened, diff read by a human, merged, pin
+   moved — rather than a key ceremony, which is why six hours is a realistic
+   number instead of an aspirational one. An Among Us update arrives as a burst
+   rather than as a single event: four upstream cycles in one evening on
+   2026-06-06. The drill has to survive the burst, not one commit.
+
+That burst is the whole reason the bundle is unsigned. An offline key between four
+upstream cycles in an evening and the users is not a control, it is the thing that
+keeps clients out of the game for the rest of the night, and availability during
+an Among Us update is the property this chain exists to protect. The cost is stated
+rather than absorbed: with no signature, whoever can push to the mirror changes
+what every client reads on its next fetch, so the mirror's branch protection and
+the account that owns it are inside the trusted set — as much as any crate in §7
+is. Every criterion above is structural, and a well-formed bundle with plausible,
+wrong offsets passes all five. What the design does close is the larger of the two
+problems: the client no longer follows the unpinned branch HEAD of a third party.
 
 `P2+`'s offsets work does not start before `G0`, and `G1` must still pass
-byte-for-byte using the embedded bundle, which is what proves the bundle format
-lost no data on the way in.
+byte-for-byte using the embedded bundle — which is now also the floor from
+criterion 4, so that run proves two things at once: that the bundle format lost no
+data on the way in, and that the copy the client falls back to is one the reader
+can actually use.
 
 **`G2` criteria 5 and 6 — Opus in-band FEC recovery, and the i686 APM build.** Under a
 5 % loss profile with a **Chromium sender**, the Rust receive path reconstructs
@@ -344,6 +396,26 @@ than hanging. The architecture-selection leg is the one that is easy to skip and
 expensive to get wrong: electron-updater's `findFile` prefers a filename
 containing the literal `x64` or `ia32` and otherwise takes the first `.exe` in the
 feed, so a misnamed artefact hands every 32-bit user a 64-bit installer and
-nothing anywhere reports an error. The cost is three real installs and a staging
-feed — roughly a day of setup — and it cannot be substituted with a dev build,
+nothing anywhere reports an error. It cannot be substituted with a dev build,
 because the thing under test is what the *shipped* 1.0.2 updater does.
+
+`G4` is a prerequisite of the 2.0 release, not a checkpoint taken after it. The
+1.x wire protocol is switched off when 2.0 ships — no dated sunset, no
+open-ended dual stack — so the bridge has to have moved the fleet **before** the
+switch rather than after it. A `G4` that has not passed does not mean the fleet
+migration is deferred and 2.0 goes out as a parallel install; it means every 1.x
+user is cut off on release day. The gate blocks the release.
+
+Two things about the rehearsal changed once immutable releases were enabled, and
+both are cost. The staging feed has to be tagged releases in a repository with
+immutability on, or the rehearsal is not exercising the path the fleet will take:
+a published `latest.yml` can no longer be edited, so the manifest under test must
+be one that could not be fixed after the fact. And each iteration burns a tag —
+a wrong manifest is superseded by a new tagged release, and deleting a release
+does not free its tag, so the retry is 1.1.1 and never 1.1.0 again. Budget two
+days and a handful of spent tags rather than the one day this section previously
+carried. The compensation is that there is nothing to slow a bad step down with:
+`stagingPercentage` lives in the frozen manifest and is not available, the
+rollout is sequential tagged releases with the cohort baked in at build time, and
+the only rollback is re-marking an older release as *Latest*, which is
+all-or-nothing. The rehearsal is the last place a filename mistake is cheap.

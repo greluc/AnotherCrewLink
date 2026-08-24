@@ -52,6 +52,10 @@ Targets: `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc` (the injection path is
 memory reading, injection, the key poll and the overlay window; `aucl-core`
 never elevates and holds tokio, signalling, WebRTC, audio and the GUI. They talk
 length-prefixed `postcard` over a named pipe (Windows) or a Unix socket (Linux).
+`aucl-core` starts the helper **on demand, with a per-launch UAC prompt**. There
+is no Windows service, nothing auto-starts and nothing elevated is resident
+between sessions; the prompt is accepted friction, so do not "improve" it away
+with a scheduled task, an installed service or a cached elevation token.
 The overlay is in the helper because UIPI blocks window manipulation across
 integrity levels; it receives **pre-rasterised sprites** and never decodes an
 image, so no image decoder enters the elevated process. `aucl-game` is never
@@ -94,6 +98,27 @@ computes a buffer length itself.
 A panic in the receive path for one peer drops that peer. It must not reach the
 process. The boundary is in `aucl-net::peer`.
 
+### The offsets bundle is validated, never trusted
+
+Offsets come from `greluc/AnotherCrewLink-Offsets`, a mirror we control, synced
+from upstream by reviewed pull request. **Never fetch upstream directly, and
+never follow a third party's branch HEAD** — that is what §7.6 of the dependency
+policy forbids and it is how the 1.x client got its worst live problem.
+
+The bundle carries **no signature**, by decision: an Among Us update is a burst,
+and a human with an offline key between that burst and the users is what keeps
+players out of the game. Everything therefore rests on the structural validator.
+Run it on **every** load, including from the `userData` cache and including the
+`include_bytes!` embedded floor, before a single number reaches `aucl-game`.
+Every offset is range-checked against the module before use; `bufferLength` is a
+bound, not a hint; the full replayed prologue is compared before any patch, with
+an explicit "already patched by us" state. A validator that rejects real data is
+a self-inflicted outage, so changes to it run against the corpus of real
+upstream files as well as the malicious one — both are in `tests/`.
+
+See [docs/rust-port/09-technology-migration.md](docs/rust-port/09-technology-migration.md)
+§2.1 for the reasoning and for the residual risk this accepts.
+
 ## The bugs that must not come back
 
 The 1.0.x releases fixed a specific set of problems, and a port reintroduces
@@ -122,13 +147,27 @@ The full list is in
 
 ## Wire compatibility
 
-The Socket.IO protocol between client and server is **frozen**. A 1.x Electron
-client, a 2.x Rust client and any mobile client speaking Socket.IO 4 share
-lobbies. Changing an event name or payload shape breaks players who have not
-updated. If an event has to change, it is added alongside the old one.
+The Socket.IO protocol between client and server is **frozen** for as long as
+1.x is in the field. A 1.x Electron client and a 2.x Rust client share lobbies;
+changing an event name or payload shape breaks players who have not updated, so
+if an event has to change, it is added alongside the old one.
 
-Eleven events, one namespace: `join`, `leave`, `id`, `setHost`, `signal`, `VAD`,
-`lobby`, `remove_lobby`, `join_lobby`, `lobbybrowser`, `disconnect`.
+Thirteen events, one namespace: `join`, `leave`, `id`, `setHost`, `signal`,
+`VAD`, `lobby`, `remove_lobby`, `join_lobby`, `lobbybrowser`, `disconnect`,
+plus `obs_state` and `mobile_state`, which replaced the legacy `signal`-to-room
+overlay and mobile feeds in 1.0.5. The server enforces the envelope rules on
+`signal` — `to` must be a current co-member, `to != from`, 64 KB cap — and a
+client that addresses a room it is not in is refused, not warned.
+
+**Transport is websocket-only.** Engine.IO polling is off on the server, and
+there is no mobile client to keep it on for: the 4.x mobile promise was deleted
+in 2026-08. Do not add a polling fallback.
+
+Our server stops speaking the 1.x wire format when 2.0 ships. Third-party
+operators do not, and never will, so the client keeps its `join_lobby` ack and
+its socket lobby-browser events as permanent fallbacks for their deployments —
+they are dead code against our own server and must not be deleted for that
+reason.
 
 ## Settings
 

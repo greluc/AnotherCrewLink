@@ -8,9 +8,18 @@ Written against version 1.0.2 of the client and 1.0.0 of the server, on
 
 ## The short version
 
-**Feasible. No hard blockers. Recommended in the staged order below, with a
-go/no-go decision after the audio engine and before any GUI work — at roughly
-twice the effort first estimated here.**
+**Feasible. No hard blockers. Recommended in the staged order below, at roughly
+twice the effort first estimated here — but what is actually being built today
+is the hardening track and the Rust server, and nothing beyond them is
+committed.**
+
+**Scope, as of 2026-08-24.** `H1`–`H3` and `P0+` are funded. When the Rust
+server ships there is an explicit decision point on whether the rest of the port
+proceeds, taken on what building it actually cost rather than on this document.
+Everything below is the plan for that port and is written as such; read it as a
+route that has been surveyed, not a journey under way. The hardening track is
+unaffected either way — it runs on the shipped Electron client and the shipped
+Node server, and protects the fleet that will never see 2.x.
 
 Every component has a working Rust answer. The difficulty is concentrated almost
 entirely in one place: Chromium currently supplies the whole real-time voice
@@ -28,14 +37,18 @@ in with it, so it is written as two processes — an elevated helper holding onl
 the memory reader, the injection path, the key hook and the overlay, and an
 unelevated process holding tokio, signalling, WebRTC, audio and the GUI.
 
-So: build the audio engine first, standalone, measured against golden vectors
-captured from the current Electron build. If it reaches parity, the rest is
-schedule. If it does not, the project stops having spent one phase rather than a
-year — and the phases before it (a Rust server, a Rust game reader) are worth
-having on their own.
+So: build the server first, and decide there. It is the cheapest phase that
+produces a real Rust artefact under real load, and four weeks of it says more
+about the true cost of the sixty-odd that follow than any further estimating
+will.
+If the port continues, the audio engine is next on the critical path, built
+standalone and measured against golden vectors captured from the current
+Electron build; if it reaches parity, the rest is schedule, and if it does not,
+the project stops having spent one phase rather than a year. Both stopping
+points leave something worth having: a Rust server, and a hardened 1.x client.
 
 Two things changed after the first draft. The bill is roughly twice the original
-estimate — ~77 developer-weeks rather than 37, from work priced too low rather
+estimate — ~74 developer-weeks rather than 37, from work priced too low rather
 than scope invented since. And establishing what the port would inherit turned up
 problems in the *shipped* 1.0.2 client: an unpinned third-party offsets feed that
 drives both the pointer arithmetic and the addresses the injection stub patches,
@@ -46,27 +59,35 @@ through 1.0.5 before and alongside the first port phase.
 
 ## Effort
 
-Roughly **77 developer-weeks** to 2.0 for one developer. Treat that as the
-midpoint of a range whose low end is around 68: it is the union of independently
-priced corrections and several of them overlap. Two developers do not halve it,
-and the audio engine is no longer alone on the critical path — the transport
-phase now rivals it.
+**What the full port costs, not what has been agreed to spend.** The figure
+below is the price of everything, kept here because it is the honest one and
+because a plan that hides its total is not a plan. It is not a budget: only the
+first four rows are funded.
+
+Roughly **74 developer-weeks** to 2.0 for one developer — 77 as this plan first
+priced it, less the 3.0 weeks the decisions of 2026-08-24 took out (no
+Authenticode, no offsets signing ceremony, no staged envelope rollout). Treat it
+as the midpoint of a range whose low end is around 65: it is the union of
+independently priced corrections and several of them overlap. Two developers do
+not halve it, and the audio engine is no longer alone on the critical path — the
+transport phase now rivals it.
 
 ```
-H1  1.x emergency hardening      2.0   ships as 1.0.3
-H2  1.x offsets trust chain      4.0   ships as 1.0.4, ends at G0
-H3  1.x/Node envelope + OBS      3.0   ships as 1.0.5 plus a server release
-P0+ Server                       4.0
+H1  1.x emergency hardening      2.0   ships as 1.0.3               funded
+H2  1.x offsets trust chain      3.0   ships as 1.0.4, ends at G0   funded
+H3  1.x/Node envelope + OBS      2.5   1.0.5 + a server release     funded
+P0+ Server                       4.0   decision point at its end    funded
+--------------------------------------------------------------------------
 P1+ Foundations                  5.0
 P2+ Game reader                  6.0   G1
 P3+ Audio engine                10.0   G2
 P4+ Transport                   10.5   G3
 P5+ Platform                     6.0
 P6+ GUI                         11.5
-P7+ Packaging and signing       11.0
-P8  Bridge and sunset            4.0   G4
+P7+ Packaging and signing        9.5
+P8  Bridge and sunset            4.0   G4 — and a 2.0 release prerequisite
                                 ----
-                                77.0
+                                74.0   of which 11.5 is committed
 P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 ```
 
@@ -88,12 +109,14 @@ where it was crowding out the entire WebRTC half.
 | **The offsets supply chain** | **High** | the largest single risk in the project, and it is live in the shipped client |
 | **AEC/NS/AGC, Opus + jitter buffer, Web Audio parity** | **High** | this is the project |
 
-One decision is still open, and it would move two rows of the risk table from
-High to Low: the `i686-pc-windows-msvc` target exists only for the injection
-path, and it is what forecloses LiveKit's libwebrtc binding, puts NASM in the
-build, and creates the alignment hazard MSVC brings to the struct parsing in
-`aucl-game`. Splitting injection into a small 32-bit helper process removes all
-three. It has not been decided either way.
+The two-process split is settled: an elevated helper started on demand with a
+per-launch UAC prompt, no Windows service. One decision below it is still open,
+and it would move two rows of the risk table from High to Low. The
+`i686-pc-windows-msvc` target exists only for the injection path, and it is what
+forecloses LiveKit's libwebrtc binding, puts NASM in the build, and creates the
+alignment hazard MSVC brings to the struct parsing in `aucl-game`. Confining
+injection to a 32-bit process — the helper itself, or a third smaller one —
+removes all three. It has not been decided either way.
 
 ## Documents
 
@@ -122,17 +145,40 @@ all, which is the item both reviews rank first — 09 §2.1 is the replacement f
 paragraph it is missing. The effort, the phase map and the gate list on this page
 already reflect both. Both reviews are summarised at the top of their own documents.
 
+09 §6 also carries the maintainer's answers to the questions it raised, recorded
+against 2026-08-24. Ten are settled and are written into that document as
+decisions with their consequences followed through; five remain open and are
+marked as such. Where this page and 09 disagree about a number, 09 is the
+arithmetic and this page is the summary of it.
+
 ## The five gates
 
 | Gate | After | Criterion | If it fails |
 | --- | --- | --- | --- |
-| **G0** | 1.x offsets trust chain (H2) | A signed bundle verifies on every load including from cache; a malicious-bundle corpus is rejected with a distinct error each; the validator accepts all 81 real upstream files unchanged; a revocation drill recovers a client without a client release; a signed bundle is published within 6 hours of a real Among Us update | P2+ does not start its offsets work |
+| **G0** | 1.x offsets trust chain (H2) | A malicious-bundle corpus is rejected with a distinct error each; on-disk tampering with the cached bundle is rejected as far as the validator can catch it, proving validation at load and not only at download; the validator accepts all 81 real upstream files unchanged; the embedded floor holds with the mirror unreachable, and the client says which bundle it is using; a bundle is published within 6 hours of a real Among Us update | P2+ does not start its offsets work |
 | **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame | Bug; fix and retry |
 | **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss; and a green build of the chosen APM on `i686-pc-windows-msvc` | **Stop the port** |
 | **G3** | Transport | A 1.0.2 Electron client and a Rust client hear each other in the same lobby, direct and via TURN; the same call repeated under each impairment profile; and a three-client mixed-generation lobby with one client leaving and rejoining | No staged rollout; reconsider scope |
-| **G4** | Bridge (P8) | Real 1.0.2 installs on Windows x64, Windows ia32 and Linux each update from a staging feed to the bridge, silently, with the correct architecture selected | No fleet migration; 2.0 stays a parallel install |
+| **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64, Windows ia32 and Linux each update from a staging feed to the bridge, silently, with the correct architecture selected | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |
+
+G0 lost two criteria on 2026-08-24, both belonging to a signature the offsets
+bundle no longer carries: the signed-verification criterion and the revocation
+drill. What replaced them is a mirror we control, pinned by commit, with a
+validator that runs on every load — cheaper, faster in an emergency, and honest
+about the fact that whoever can push to the mirror can change what clients read.
+09 §2.1 states that residual risk rather than filing it away. It gained one in
+exchange: the embedded floor is now the only thing standing between an
+unreachable mirror and a client that cannot read the game, so the gate proves it
+loads. 05 §5.6 carries the harness for all five.
+
+G4 changed shape rather than criteria. It used to be able to fail into "2.0
+stays a parallel install"; with the 1.x wire format switched off at the 2.0
+release, that fallback no longer exists, and a G4 that has not passed means the
+release waits.
 
 G2 is the one that can end the project, and it is still reached well before the
 half-way mark — month eight of eighteen with the hardening track counted, rather
 than at the end. That is the entire point of the ordering. Every amendment to G2
-and G3 makes them harder to pass; none makes them easier.
+and G3 makes them harder to pass; none makes them easier. G2 is also the second
+decision point, not the first: the first is the end of P0+, and it is a
+commercial decision rather than a technical one.

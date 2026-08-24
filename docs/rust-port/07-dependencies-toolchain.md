@@ -291,14 +291,44 @@ Two exits, and the choice is made at P7+ rather than now. Track the 1.0 line and
 pin it exactly once it stabilises, with `default-features = false` and the ureq,
 rustls, github, signatures, checksums and archive features named, `no_confirm`
 set and output suppressed — the defaults block on an interactive stdin prompt a
-windowed binary cannot answer. Or write the updater: a GET of the releases API,
-a semver compare, download of artefact plus detached signature, verification
-against an embedded key using `minisign`, then `self-replace`. That is not
-writing crypto; the verification stays inside a purpose-built crate, and the
-private key stays offline rather than in a release-workflow secret. Either way
-the update path verifies against a key we hold, because without that the port is
-a lateral move from `electron-updater`: the same trust root, minus the
+windowed binary cannot answer. Note what that feature list does not buy: the
+crate's `signatures` feature verifies a signed archive, and this project ships an
+NSIS `.exe` and an AppImage, so the manifest signature below is ours to check
+either way and exit 1 does not save the work. Or write the updater: a GET of the
+releases API, a semver compare, download of artefact plus detached signature,
+verification against an embedded key using `minisign`, then `self-replace`. That
+is not writing crypto; the verification stays inside a purpose-built crate, and
+the private key stays offline rather than in a release-workflow secret. Either
+way the update path verifies against a key we hold, because without that the port
+is a lateral move from `electron-updater`: the same trust root, minus the
 differential download, plus a live advisory.
+
+What that key carries changed with the signing decision. Windows artefacts are
+**not** Authenticode-signed — no certificate is being bought, from SignPath,
+Certum or anyone else — so users keep seeing the unknown-publisher warning on
+first run, and publisher verification of the kind `NsisUpdater` performs is not
+part of the 2.x story at all. A minisign signature over the update manifest,
+verified in-process against a public key embedded in the binary before anything
+is written or executed, is therefore the whole of update integrity rather than
+the second of two controls. Say plainly what it does and does not cover: it
+proves the artefact is the one this project published, and it does nothing about
+SmartScreen, which scores reputation rather than provenance and will keep warning
+about a first-seen unsigned binary no matter how it was verified. It is also why
+the key stays offline. A release is a planned event with no availability
+pressure, which is exactly the property the offsets bundle does not have and
+exactly why that one ships unsigned instead (§5.6, `G0`); the two decisions look
+opposite and rest on the same argument.
+
+Immutable releases take one requirement off the verification path and add one to
+the release path. A published manifest can no longer be edited, so the updater
+never has to reason about a manifest that changed under a version it has already
+seen, and the freeze rules that would otherwise defend against that are not
+written — that is real work not done. In exchange there is no in-place
+correction: a wrong manifest is superseded by a new tagged release, deleting a
+release does not free its tag, and a staged rollout is a sequence of tagged
+releases each with its own build, manifest and signature rather than a percentage
+edited into a published file. `stagingPercentage` is not available to this
+updater and no code should be written expecting it.
 
 The two-process split adds one crate the tables above do not price yet:
 `postcard`, for the length-prefixed frames between `aucl-helper` and
@@ -324,24 +354,55 @@ never decodes an image, so `image` never enters the elevated process.
 
 `socketioxide` is actively maintained (updated 2026-08-07) and is the strongest
 single argument that the server port is low-risk. There is also no alternative
-crate to fall back to, and it has a bus factor of one, so two things about it
-belong in this document rather than in a commit message.
+crate to fall back to, and it has a bus factor of one, so what it does and does
+not do for us belongs in this document rather than in a commit message.
 
-CORS is not optional. The OBS overlay page is a browser client on another
-origin — the settings dialog builds a URL at `obs.aucl.greluc.me` carrying the
-server address — and socketioxide provides no CORS handling of its own. Without
-a `CorsLayer` on the socket.io route the handshake fails for every browser
-client and the overlay breaks on day one of P0+.
+The server is **websocket-only**, and that is a decision rather than a
+configuration detail. Engine.IO polling is not mounted: the socket.io route
+accepts the WebSocket upgrade and nothing else, and a client that opens with
+`transport=polling` is refused at the handshake. Both first-party clients already
+pass `transports: ['websocket']` (§7.5), so nothing this project ships notices.
+What does notice is any socket.io client that starts on polling and upgrades
+afterwards, which is the default in the browser and in every mobile socket.io
+binding. The mobile-client undertaking in 03 §3.5 is dropped for that reason
+rather than softened: a future 4.x mobile client would be refused before it sent
+a single event, and no amount of care on our side changes that while the polling
+transport is absent.
+
+The OBS overlay page is where this lands, because it is a browser client on
+another origin — the settings dialog builds a URL at `obs.aucl.greluc.me`
+carrying the server address — and it lives in neither repository, so its
+transport configuration cannot be read from here and has to be checked against
+the deployed page. It must connect with `transports: ['websocket']`, and that
+change has to be deployed and verified **before** the server release, alongside
+the event rework H3 already requires of the same page. One deployment, two
+changes, the same ordering for both, and a page that ships only the event half
+still breaks at the handshake.
+
+Dropping polling also moves CORS out of the load-bearing path, which is the
+opposite of what this section said while polling was on the table. A WebSocket
+upgrade is not subject to CORS — there is no preflight, and no `CorsLayer`
+decides whether the overlay page connects; its transport setting does.
+`tower-http`'s `CorsLayer` therefore stays on the plain HTTP routes a browser
+genuinely fetches, `/health` and `/lobbies`, and the socket.io route is left
+without an origin allow-list deliberately: `Origin` is a header, trivially set by
+anything that is not a browser, so an allow-list there rejects nothing that
+matters and breaks the overlay in the field the first time the page changes host.
+What constrains a connected client is the signal envelope rules, not where it
+says it came from.
 
 And `socketioxide`'s WebSocket path has no inbound frame cap. `max_payload` is
-applied on the polling transport and advertised in the handshake OPEN packet,
-which a hostile client ignores; on the WebSocket path tungstenite's defaults
+applied on the polling transport, which this server does not mount, and
+advertised in the handshake OPEN packet, which a hostile client ignores — so
+after the transport decision it constrains nothing at all and survives only as a
+number in an OPEN packet. On the one transport there is, tungstenite's defaults
 stand at 64 MiB per message. This cannot be fixed at a reverse proxy:
 `client_max_body_size` stops applying at the Upgrade, and neither nginx nor
 Caddy has a post-upgrade frame directive — both relay frames. The routes are an
 upstream PR exposing `WebSocketConfig::max_message_size`, or a fork. Record it
 as an accepted risk with an upstream issue filed against it, not as a
-configuration line we have not written yet.
+configuration line we have not written yet — and record that going websocket-only
+made this the whole story rather than half of it.
 
 `peerConfig.yml` becomes TOML or JSON. It holds an ICE server list — a handful
 of url, username and credential fields — and it is not worth a YAML parser whose
@@ -373,6 +434,17 @@ and workflow-name-scoped concurrency groups. CodeQL stays.
 
 Renovate or Dependabot is configured for `Cargo.toml` and for the workflow SHAs,
 grouped so that a routine bump is one review rather than twenty.
+
+Two things are absent from that table on purpose. There is no code-signing step:
+Windows artefacts ship unsigned (§7.2), so there is no `signtool` invocation, no
+certificate in a workflow secret, and no CA-specific release job to maintain or
+to break when a certificate is renewed. And the minisign signature over the
+update manifest is not produced in CI either — it is an offline step against a
+key that never enters a GitHub secret, which a planned release can afford and an
+offsets update cannot. Releases are immutable, so a workflow that publishes a
+wrong manifest is corrected by tagging another release and never by re-uploading
+an asset; the release job should not offer an overwrite path that no longer
+exists on the other end.
 
 ## 7.5 The three stale dependencies, and what to do about them
 
@@ -426,6 +498,13 @@ What remains is five Engine.IO v4 packet types, five Socket.IO v5 types, the
 packet grammar with the default namespace omitted, and one ack-id counter for
 `join_lobby` — roughly 440 lines.
 
+That deletion is now permanent on both ends rather than a client convention the
+server tolerates: the Rust server does not mount the polling transport at all
+(§7.3). No polling path is kept in the client against a future mobile binding
+either, because that undertaking is dropped. Third-party 1.x servers are the Node
+server, which accepts a direct `transport=websocket` connection exactly as ours
+does, so websocket-only costs nothing there.
+
 Five things go into the conformance suite by name, because they are how
 hand-written v4 clients fail, and all five present as "it worked until it
 didn't":
@@ -445,6 +524,18 @@ Reconnection itself is not the transport's problem: the existing reconnect
 policy is 34 lines of pure functions with no transport coupling and its tests
 port across unchanged. The transport's only obligation is to report "closed"
 honestly.
+
+Two of this client's obligations are permanent, and that is worth writing down
+here because the 1.x wire protocol is switched off when 2.0 ships and it would be
+easy to schedule their removal alongside it. The `join_lobby` ack and the socket
+lobby-browser events are what a 2.x client falls back to when the server offers
+no `GET /lobbies/{id}/code` and no `/lobbies/stream` — which is every third-party
+server, run by an operator who upgrades on their own schedule or not at all.
+Switching our server off the 1.x format reaches our server and nothing else, so
+`P9` deletes the 1.x path from the server and keeps both fallbacks in the client.
+They are not transitional code with an expiry date; they are the client's answer
+to an old server nobody here controls, and they are the only reason the answer to
+that question is yes.
 
 Two line items no line-count estimate of this job includes, and they are not
 small: Chromium
@@ -528,7 +619,10 @@ the commit that adds it, and §7.7 records it as not usable even briefly.
    are worth a real human audit rather than an exemption, and only two:
    `zerocopy` 0.8.27 → 0.8.56, because it parses attacker-influenced memory and
    both shared audit chains stop short of the pinned version, and whichever
-   crate ends up verifying update signatures.
+   crate ends up verifying update signatures. The second is not a matter of
+   thoroughness. With Windows artefacts unsigned, that verification is the only
+   control over what an update installs, so an exemption there exempts the whole
+   update path — and it is the one exemption this policy does not permit.
 8. `--locked` on every cargo invocation in CI. The lockfile is committed; a
    lockfile that CI silently regenerates is not a lockfile, and none of the pins
    above mean anything without it.

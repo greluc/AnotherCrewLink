@@ -16,48 +16,65 @@ enough, and have a beautiful shell around nothing.
 
 ```
 H1  1.x emergency hardening       ──► ships as 1.0.3               2.0 wk
-H2  1.x offsets trust chain       ──► G0: offsets trust chain      4.0 wk
-H3  1.x/Node envelope & OBS       ──► ships as 1.0.5 + server      3.0 wk
-                                                hardening subtotal 9.0 wk
+H2  1.x offsets trust chain       ──► G0: offsets trust chain      3.0 wk
+H3  1.x/Node envelope & OBS       ──► ships as 1.0.5 + server      2.5 wk
+                                                hardening subtotal 7.5 wk
 
 P0+ Server                        ──► ships independently          4.0 wk
+════ committed above ════► decision point: does the port proceed? ═══════
 P1+ Foundations & toolchain                                        5.0 wk
 P2+ Game reader                   ──► G1: parity with Electron     6.0 wk
 P3+ Audio engine (offline)        ──► G2: golden-vector parity    10.0 wk
 P4+ Transport & signalling        ──► G3: interop with 1.x        10.5 wk
 P5+ Platform layer                                                 6.0 wk
 P6+ GUI                                                           11.5 wk
-P7+ Packaging, update, rollout    ──► ships as 2.0                11.0 wk
-P8  Bridge & sunset               ──► G4: bridge rehearsal         4.0 wk
-                                                    phase subtotal 68.0 wk
-                                                            total ≈ 77 wk
+P7+ Packaging, update, rollout    ──► 2.0 build, opt-in            9.5 wk
+P8  Bridge & sunset               ──► G4, then the 2.0 release     4.0 wk
+                                                    phase subtotal 66.5 wk
+                                                            total ≈ 74 wk
 
 P9  Post-1.x cleanup                                               3.0 wk
                                               (outside the 2.0 budget)
 ```
 
+**Only the hardening track and P0+ are committed.** P0+ ships a Rust server that
+serves the existing Electron fleet, and it ends in an explicit decision point:
+whether the rest of the port proceeds at all. Everything from P1+ onward is
+planned in full and priced in full, and none of it is authorised by this
+document. The later phases stay written because a plan that stops at its first
+phase cannot say what that phase is buying, and because the ordering — riskiest
+first, most visible last — is only defensible when the whole sequence is visible.
+Read P1+ through P8 as what it would cost if the answer at the decision point is
+yes, not as a schedule anyone is currently working to.
+
+The hardening track does not depend on that answer. H1–H3 ship on the Electron
+client and the Node server, they fix defects that are in the field today, and
+they are worth doing whether the port continues, stops after P0+, or never
+starts.
+
 Phases keep their identifiers; the `+` marks one whose scope grew, and each of
-those says below, in a line, what it grew by. Treat 77 as the honest midpoint of
-a range whose low end is around 68 — it is the union of independently priced
+those says below, in a line, what it grew by. Treat 74 as the honest midpoint of
+a range whose low end is around 65 — it is the union of independently priced
 corrections, several of which overlap, and nobody should want to find out where
 the high end is.
 
-Roughly eighteen months of full-time work for one developer; call it two years
+Roughly seventeen months of full-time work for one developer; call it two years
 with review, testing on real hardware and the inevitable. Phases P2+–P5+ can
 still overlap between two developers, but two developers do not halve the total:
 P3+ is no longer the sole critical path, P4+ now rivals it, and P7+ can start on
 neither until both have landed.
 
-**Where the extra forty weeks went.** Three items account for most of it, and
-none of them is security. P4+ grows by 5.5 because `webrtc` 0.20 is a rewrite on
-a sans-IO core, which kills the premise that the 237 lines of `peer.ts` map onto
-it one-to-one. P7+ grows by 7.0 because `cargo-dist` builds neither of the two
-artefact types this project must keep producing — there is no NSIS backend and no
-AppImage backend — so both are hand-built and both must keep a CLI contract the
-installed 1.x fleet already depends on. P1+ grows by 4.0 because the Socket.IO
-client moves there out of P4, where it was quietly leaving three weeks for the
-entire WebRTC half. The rest is spread thin across an owned lobby registry, a
-signed offsets bundle, a second process, a GPU fallback chain and two spikes.
+**Where the extra thirty-seven weeks went.** Three items account for most of it,
+and none of them is security. P4+ grows by 5.5 because `webrtc` 0.20 is a rewrite
+on a sans-IO core, which kills the premise that the 237 lines of `peer.ts` map
+onto it one-to-one. P7+ grows by 5.5 because `cargo-dist` builds neither of the
+two artefact types this project must keep producing — there is no NSIS backend
+and no AppImage backend — so both are hand-built and both must keep a CLI
+contract the installed 1.x fleet already depends on. P1+ grows by 4.0 because the
+Socket.IO client moves there out of P4, where it was quietly leaving three weeks
+for the entire WebRTC half. The rest is spread thin across an owned lobby
+registry, a mirrored offsets bundle, a second process, a GPU fallback chain and
+two spikes.
 
 **The hardening track.** H1–H3 ship on the Electron client and the Node server.
 They are not 1.x maintenance running beside the real work: H2 is a hard
@@ -65,26 +82,115 @@ prerequisite for P2+, H1's cross-version single-instance lock has to be in the
 field before any 2.x beta build exists, and all three protect the fleet that will
 never see 2.x. H1 (2.0 wk) ships as 1.0.3 and is client-local or repository
 configuration throughout, so its items can ship in any order and need no server
-release. H2 (4.0 wk) ships as 1.0.4 and builds the offsets trust chain in
+release. H2 (3.0 wk) ships as 1.0.4 and builds the offsets trust chain in
 TypeScript first, because the bundle format must be proven before a Rust consumer
-is written against it; it ends at gate G0. H3 (3.0 wk) ships as 1.0.5 plus a
+is written against it; it ends at gate G0. H3 (2.5 wk) ships as 1.0.5 plus a
 server release and is the only part with a wire component, so it runs consumer
 first — the OBS overlay page serves every client generation at once and lives in
 neither repository. The per-step content is in
-[09-technology-migration.md](09-technology-migration.md) §3.2.
+[09-technology-migration.md](09-technology-migration.md) §3.2, which carries the
+same decisions: H2 is a mirror rather than a signing ceremony, and H3 ships the
+envelope rules enforced with no logging period.
 
-> **Gate G0 — the offsets trust chain is live and reversible.**
-> A committed corpus of bad bundles — unsigned, wrong key, replayed lower
-> `bundle_version`, truncated, RVAs out of module range — is rejected with a
-> distinct error each, leaving the previously held bundle in force. Editing the
-> cached bundle on disk between runs is rejected, proving verification happens at
-> load and not only at download. The validator accepts all 81 real upstream files
-> unchanged — a validator that rejects real data is a self-inflicted outage, and
-> that half matters as much as the first. A revocation drill returns an affected
-> client to a good state with no client release. And a timed drill against the
-> next real Among Us update publishes a signed bundle in under six hours.
+**H2 is a mirror, not a signature.** The offsets bundle is not signed. H2 mirrors
+the upstream offsets tree into a repository this project controls, syncs it by a
+scheduled pull request so that a human sees the diff before it reaches anyone,
+pins upstream **by commit** rather than tracking a branch, embeds a known-good
+bundle in the client as a floor, and runs the structural validator on every load
+including from the cache. There is no key ceremony, no signing xtask, no second
+designated signer and no revocation mechanism.
+
+The reason is availability, and it is worth stating rather than assuming. An
+Among Us update is a burst, not a trickle: upstream turned four cycles in a
+single evening on 2026-06-06. Anything that puts a human holding an offline key
+between that burst and the users is what keeps clients out of the game, and a
+client that cannot read the game is indistinguishable from a client that is
+broken. A pull-request merge keeps a human in the loop at a cost that can be paid
+from a phone; a key ceremony cannot.
+
+**What that leaves open, said plainly.** With no signature, whoever can push to
+the mirror can change what every client reads. The mirror's branch protection and
+the account that owns it are therefore part of this project's trusted set, and
+should be administered like one — protected branch, no force-push, review
+required on the sync PR, and the smallest possible set of people holding push.
+What the change does close is the larger of the two problems: the client no
+longer follows the unpinned branch HEAD of a repository nobody here controls.
+A compromise now requires compromising us.
+
+**H2 is 3.0 weeks, not 4.0.** The 1.0 removed is not scope trimmed to make a
+number look better: it is the key ceremony and its backup media, the signing
+xtask, the second signer's provisioning, the revocation path, and — the largest
+single item — roughly a hundred lines of minisign format parsing in
+`offsetStore.ts` that had to be byte-compatible with `minisign-verify` and came
+with cross-implementation test vectors. What remains is where the value always
+was: the mirror and its sync workflow, the bundle format, the embedded floor, the
+structural validator, the full-prologue write-side check and the "reset offsets
+to embedded" user action.
+
+> **Gate G0 — the offsets trust chain is live.**
+> A committed corpus of bad bundles — malformed, replayed lower `bundle_version`,
+> truncated, RVAs out of module range — is rejected with a distinct error each,
+> leaving the previously held bundle in force. Editing the cached bundle on disk
+> between runs is rejected **as far as the validator reaches**, proving validation
+> happens at load and not only at download. The validator accepts all 81 real
+> upstream files unchanged — a validator that rejects real data is a
+> self-inflicted outage, and that half matters as much as the first. The floor
+> holds: with the mirror unreachable — DNS failure, a 404 on the pinned commit,
+> an empty cache — the client starts, reads the embedded bundle, and says which
+> bundle it is using rather than falling back silently. And a timed
+> drill against the next real Among Us update gets a synced, pinned bundle to
+> clients in under six hours.
+>
+> The on-disk criterion has a named limit: without a signature, an edit that
+> stays structurally valid is not detectable, and the gate does not pretend
+> otherwise. It catches corruption and the obvious classes of tampering, not a
+> patient local attacker — who, having write access to the cache, has easier
+> targets on that machine anyway.
 >
 > P2+'s offsets work does not start before G0.
+
+**H3 enforces from the first release. There is no logging period.** The signal
+envelope rules — `to` must be a co-member of the sender's lobby, `to != from`, a
+size cap — and first-claimer host go on when the server release ships. No
+rejection counter watched for seven days, no 0.1% threshold, no `SIGNAL_STRICT`
+flag held back to be flipped later. The counter was never going to reach a floor:
+1.x updates through electron-updater with no forcing function, so waiting for the
+number to fall is waiting for an event with no cause.
+
+This breaks the OBS overlay feed and the mobile relay for every client older than
+1.0.5, at once, by decision. Anyone who never updates loses both permanently and
+keeps voice, which is the part they installed the app for. That is the price and
+it is being paid deliberately: the alternative is leaving every player's live
+coordinates readable by anyone who knows a six-character lobby code, for as long
+as the slowest updater takes, which is forever.
+
+Two orderings that were preferences are now hard prerequisites, because with
+enforcement on from day one there is no dual-stack window to absorb a mistake:
+
+| Order | Step | Why it cannot move |
+|---|---|---|
+| 1 | The **OBS overlay page** learns `obs_state`, is switched to `transports: ['websocket']`, and is deployed and verified alone | It lives in neither repository and serves every client version simultaneously. It is also the only browser client, so the polling removal hits it before it hits anyone else |
+| 2 | **1.0.5** is in the field | It is the client release that speaks the new events. A server enforcing ahead of it silences clients that had a working path |
+| 3 | The **server** release, with the rules already on | Last, and only after 1 and 2 are verified |
+
+H3 is 2.5 weeks, not 3.0: the seven-day watch, the threshold and the flag
+plumbing are all gone, and the client and overlay work — which is most of the
+phase — is unchanged. The rejection counter itself stays on `/health`, because
+it costs nothing and it is how the break is measured after the fact; what went
+is the idea that anything waits on it.
+
+**The server is websocket-only, and the mobile promise is dropped.** Engine.IO
+polling is removed rather than deprecated, and `03-target-architecture.md` §3.5's
+undertaking that a future 4.x mobile client keeps working is deleted with it, not
+softened. Mobile `socket.io-client` defaults to `["polling","websocket"]`, so a
+websocket-only server refuses its handshake; the two could not both hold and this
+is which one gives way. Both shipping clients already pass
+`transports: ['websocket']`, so nothing in the field regresses, and dropping
+polling also drops the advisory it carried
+([GHSA-r635-g3xr-vw7x](https://github.com/advisories/GHSA-r635-g3xr-vw7x), HIGH)
+along with base64 binary framing and the probe-and-upgrade handshake. The one
+client that does *not* already pass it is the OBS overlay page, which is why the
+transport change rides with step 1 above rather than with the server.
 
 ## 4.2 Phase 0 — Server (4 weeks)
 
@@ -93,7 +199,8 @@ piece of the system.
 
 **Why 4 and not 2:** the lobby registry is owned rather than borrowed from
 socketioxide rooms, the two HTTP endpoints the client will want are new code
-rather than a port, and CORS is a day-one requirement instead of hardening.
+rather than a port, and the signal envelope rules are enforced from the first
+commit instead of arriving later as hardening.
 
 1. `server-rs` crate: `axum` 0.8 + `socketioxide` 0.18 + `tower-http` 0.7 +
    `tokio` 1.53. None of socketioxide's features are on by default; name
@@ -120,9 +227,16 @@ rather than a port, and CORS is a day-one requirement instead of hardening.
    a 15–30 s heartbeat comment and `Last-Event-ID`, or every reverse-proxied
    deployment cuts the stream at nginx's 60 s default and the list goes silently
    stale.
-6. CORS on the socket.io route. socketioxide ships no CORS handling, and the OBS
-   overlay page is a browser client on another origin: without it the polling
-   handshake fails for every browser client and the overlay breaks on day one.
+6. Websocket transport only, and therefore **no CORS layer on the socket.io
+   route**. That requirement existed for the polling handshake, and polling is
+   gone: a browser's WebSocket upgrade is not a CORS request and needs no
+   server-side permission, so the OBS overlay page connects from its own origin
+   without one. Do not replace it with an `Origin` allow-list either — it
+   restricts only browsers, and the only browser that matters is ours, so it buys
+   nothing against a non-browser client that sets any `Origin` it likes while
+   being the one thing that can take the overlay off the air. CORS stays only on
+   the HTTP endpoints a browser actually fetches with XHR (`/lobbies`,
+   `/lobbies/stream`).
 7. Multi-stage `Dockerfile` on `rust:1.98-alpine` → `alpine:3.22`, non-root, no
    shell in the final image. TLS terminates at a reverse proxy and axum binds to
    localhost, which keeps a crypto stack out of the server binary entirely.
@@ -131,11 +245,18 @@ rather than a port, and CORS is a day-one requirement instead of hardening.
    between.
 8. Port `test/lobby.test.ts` to a Rust integration test that drives a real
    `socket.io-client` from Node against the Rust server, so the wire format is
-   verified against the reference implementation and not against itself.
+   verified against the reference implementation and not against itself. That
+   client passes `transports: ['websocket']`, as both shipping clients do; one
+   test case deliberately omits it and asserts the handshake is refused, so the
+   thing §3.5 gave up is a fact this suite states rather than an assumption.
 
-The envelope rules from H3 step 4 are written into this server from birth, but it
-ships in whatever mode the Node server it replaces is currently in. A Rust server
-that enforces ahead of the Node server is a rollout that cannot be rolled back.
+The envelope rules are written into this server from birth and **on**, because by
+the time P0+ ships H3 has already switched them on in the Node server this one
+replaces. That is what makes the replacement a like-for-like swap: the two
+servers agree about which messages they refuse, so a rollback from Rust to Node
+is a deployment change and not a behaviour change. It also means P0+ inherits
+H3's ordering — the Rust server must not reach production before 1.0.5 and the
+migrated overlay page are in the field.
 
 **Accepted risk, recorded here rather than closed.** socketioxide's WebSocket
 path applies no inbound frame cap — `max_payload` governs the outbound `emit()`
@@ -148,6 +269,24 @@ configuration line.
 **Done when:** the existing 1.0.2 Electron client connects to the Rust server,
 joins a lobby, exchanges signalling, and the lobby browser populates — with no
 client change whatsoever.
+
+> **Decision point — does the rest of the port proceed?**
+> P0+ is the last committed phase. It is deliberately the smallest useful piece
+> of the system, and it is chosen so that the answer here is informed by evidence
+> instead of by this document's estimates: after it, the toolchain, CI, the
+> release story and the cost of writing and operating a Rust component of this
+> project are all measured rather than projected. Compare the four weeks it
+> actually took against the four weeks written here, and scale accordingly —
+> that ratio is the single most useful number the project will have.
+>
+> It is also the last cheap place to stop. P1+ spends five weeks on foundations
+> that are worth nothing on their own, and from there the next thing that reaches
+> a user is the 2.0 build, fifty-eight and a half weeks later. A decision
+> deferred past this point is not deferred, it is made.
+>
+> A "no" leaves a Rust server serving the Electron fleet, the hardening track
+> completed, and nothing abandoned mid-flight. A "yes" commits the remaining
+> ~62.5 weeks, subject to G2 still being able to end it on technical grounds.
 
 ## 4.3 Phase 1 — Foundations (5 weeks)
 
@@ -188,15 +327,17 @@ de-risk the two most expensive phases are run here rather than discovered later.
    (RUSTSEC-2024-0384), both unmaintained with no fixed version, so CI would be
    red from the first commit that added it. Both existing clients already pass
    `transports: ['websocket']`, which deletes polling, the upgrade handshake and
-   base64 binary framing from the surface. Conformance-test it against the Node
-   server P0+ has just proven, and name the five failure modes as explicit tests,
-   because they are how hand-written v4 clients fail: the server sends `ping` and
-   the client replies `pong`, reversed from v3; `pingInterval`, `pingTimeout` and
-   `maxPayload` come from the OPEN packet rather than being hard-coded; the
-   Socket.IO `sid` in the CONNECT ack is not the Engine.IO `sid`; ack ids leak if
-   the server never acks `join_lobby`; and a `CONNECT_ERROR` must be
-   distinguishable from a transport close, so an auth rejection does not drive
-   the reconnect policy. `reconnectPolicy.ts` comes across with its tests
+   base64 binary framing from the surface — and after H3 the server offers
+   nothing else, so this is the contract on both sides rather than a client-side
+   simplification that a server change could invalidate. Conformance-test it
+   against the Node server P0+ has just proven, and name the five failure modes
+   as explicit tests, because they are how hand-written v4 clients fail: the
+   server sends `ping` and the client replies `pong`, reversed from v3;
+   `pingInterval`, `pingTimeout` and `maxPayload` come from the OPEN packet
+   rather than being hard-coded; the Socket.IO `sid` in the CONNECT ack is not
+   the Engine.IO `sid`; ack ids leak if the server never acks `join_lobby`; and a
+   `CONNECT_ERROR` must be distinguishable from a transport close, so an auth
+   rejection does not drive the reconnect policy. `reconnectPolicy.ts` comes across with its tests
    unchanged — it is 34 lines of pure functions with no transport coupling, and
    the transport's only obligation is to report "closed" honestly. Budget
    `rustls-platform-verifier` and a system proxy resolver as named line items on
@@ -221,9 +362,12 @@ de-risk the two most expensive phases are run here rather than discovered later.
 
 ## 4.4 Phase 2 — Game reader (6 weeks) → **Gate G1**
 
-**Why 6 and not 4:** the reader consumes a signed offsets bundle and validates
-it structurally, instead of trusting whatever an unpinned branch of a third-party
-repository returned.
+**Why 6 and not 4:** the reader consumes a mirrored, commit-pinned offsets bundle
+and validates it structurally on every load, instead of trusting whatever an
+unpinned branch of a third-party repository returned. Dropping the signature (H2)
+takes a crate call out of this phase, not a phase item — the validator, the
+malicious-bundle corpus and the full-prologue write-side check are where the two
+extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
 
 1. `ProcessMemory` trait and the Windows implementation. `OpenProcess` requests
    `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more;
@@ -241,10 +385,13 @@ repository returned.
    zerocopy's reference APIs are banned on any struct containing a 64-bit field —
    a `clippy::disallowed-method` entry, and `read_from_bytes`, which copies, at
    the call sites. Tens of bytes at 30 Hz; the copy costs nothing.
-3. Offsets bundle consumer: verify the signed bundle on **every** load, including
-   from cache, against the floor embedded at build time; run the structural
-   validator; keep the cache, the two-host retry with backoff and the request
-   timeout added in 1.0.1. The three GETs this client makes — offsets, hats,
+3. Offsets bundle consumer: re-run the structural validator on **every** load,
+   including from cache, and check the bundle against the floor embedded at build
+   time; keep the cache, the two-host retry with backoff and the request timeout
+   added in 1.0.1. The bundle carries no signature, so the validator and the
+   embedded floor are the whole of the check and neither may be skipped for a
+   cached file — a cache hit is exactly the path that would otherwise never be
+   examined again. The three GETs this client makes — offsets, hats,
    update check — go through `ureq` 3.4.0 with the `platform-verifier` feature,
    driven from `spawn_blocking`, which is a feature and not a compromise: an
    update check then cannot stall the runtime the voice path shares. On an
@@ -288,7 +435,11 @@ of larger types creates the unsoundness hazard item 2 has to lint around, in
 exactly the struct-parsing code this crate is made of. A small 32-bit helper
 talking to a 64-bit client moves rows 13 and 14 of the risk table from High to
 Low and makes the integrated audio option live again. It is not scheduled here
-because it is not decided; it should be decided rather than defaulted into.
+because it is not decided; it should be decided rather than defaulted into. It is
+cheaper than it was when it was first written down: the elevated helper is
+settled (§4.7) and P1+ already builds the IPC transport it would talk over, so a
+32-bit injection helper is another endpoint on an existing boundary rather than a
+new mechanism to invent.
 
 **Recording harness.** Before writing the reader, add a debug command to the
 *existing Electron build* that dumps, once per frame, the raw bytes of every
@@ -522,6 +673,30 @@ decoder for remotely fetched hats, the TLS stack and a process-memory writer —
 also a straight availability regression against today, where the overlay is its
 own `BrowserWindow` and a driver fault there does not drop the call.
 
+**The helper is started on demand, with a UAC prompt each launch.** There is no
+Windows service. `aucl-core` starts unelevated, and the first thing that needs
+the game — the memory reader — launches `aucl-helper` through a
+`runas` elevation, once per session. The prompt is visible friction and it is
+accepted: a service would remove it by installing a permanently resident
+process running as SYSTEM that holds a process-memory reader and a code
+injector, which is a worse thing to own than a dialog. Three consequences to
+build for rather than discover.
+
+"The user clicked No" is an ordinary state, not a startup failure. `aucl-core`
+runs without a helper and says so accurately: voice works, the game reader does
+not, and neither does the overlay. Push-to-talk must not be on that list — the
+key poll is `GetAsyncKeyState` and needs no elevation of its own, so it is the
+one helper-side item that falls back into `aucl-core` when there is no helper
+rather than disappearing with it. Losing the ability to speak because of a dialog
+is not a degradation anybody would accept.
+
+The prompt fires at a moment the user can connect to something they did — opening
+the app, or joining a lobby — never from a background timer several minutes after
+launch, which reads as malware and gets answered No for that reason alone.
+
+And because the split is settled, the `--single-process` fallback feature is not
+built and CI does not carry it.
+
 The overlay is in the **helper**, which is the counter-intuitive half. UIPI
 blocks window manipulation and out-of-context `SetWinEventHook` across integrity
 levels, so an unelevated overlay stops following an elevated game — the exact
@@ -606,11 +781,19 @@ one. Layout, spacing and control affordances will differ. What must not differ i
 what every control *does* — the settings schema is ported unchanged, including
 defaults, so that an existing `config.json` keeps working.
 
-## 4.9 Phase 7 — Packaging, update and rollout (11 weeks)
+## 4.9 Phase 7 — Packaging, update and rollout (9.5 weeks)
 
-**Why 11 and not 4:** `cargo-dist` cannot build either artefact type this project
-must keep producing, and the update path is signed end to end here rather than
-delegated to a crate that cannot verify the artefacts we ship.
+**Why 9.5 and not 4:** `cargo-dist` cannot build either artefact type this
+project must keep producing, and the update manifest is signed and verified here
+rather than delegated to a crate that cannot verify the artefacts we ship.
+
+**Why 9.5 and not 11:** there is no Authenticode code signing. That removes the
+CA application and whatever it would have cost in correspondence and rejections,
+the signing step wired into two hand-built installer pipelines, the timestamping
+and certificate-rotation runbook, and the `publisherName` question in all its
+forms. A developer-week and a half, and it was the least predictable time in the
+phase, because its schedule belonged to a certificate authority rather than to
+us.
 
 1. `cargo-dist` for Windows x64, Windows i686 and Linux x64 — for archives and
    the release job only. Its installer set is shell, PowerShell, npm, Homebrew
@@ -623,13 +806,26 @@ delegated to a crate that cannot verify the artefacts we ship.
    the 64-bit installer. Turn on `github-attestations` and `cargo-auditable`, and
    write down the exit: the output is checked-in GitHub Actions YAML, which is
    what makes a one-maintainer build tool an acceptable dependency.
-2. Code signing on Windows, with `publisherName` as an **array** of every CA
-   subject we might ever use — `NsisUpdater.verifySignature` fails closed, so
-   shipping one name and later switching CA bricks every install permanently.
-   The array must already be in the field from H1, before we know which CA
-   approves us. Reproducible builds where the toolchain allows, though the
-   attestations answer "prove this binary came from this commit" better than
-   chasing bit-for-bit output across three targets.
+2. **No Authenticode code signing.** Windows artefacts ship unsigned and users go
+   on seeing the unknown-publisher warning on every install, exactly as they do
+   with 1.0.2 today. Nothing regresses and nothing improves. The
+   `publisherName` question falls away with it: no name is configured, so
+   `NsisUpdater.verifySignature` skips rather than fails, which is the behaviour
+   the installed fleet already runs on — and the failure mode it was written to
+   avoid, bricking every install by later switching CA, cannot occur if there is
+   never a first name. Reproducible builds where the toolchain allows, with
+   `github-attestations` from item 1 doing the work that matters here: they
+   answer "prove this binary came from this commit" better than chasing
+   bit-for-bit output across three targets, and better than a certificate proves
+   who built it.
+
+   What is not covered, said plainly rather than left to be inferred: an
+   unsigned artefact means SmartScreen reputation is never accumulated, so the
+   warning stays for every user on every release forever; enterprise
+   allow-listing by publisher is unavailable; and any integrity guarantee this
+   project offers lives entirely in item 3, which protects the update path and
+   nothing else. A first download from the website is covered by TLS and by the
+   attestation of anyone who checks it, which is nobody.
 3. Auto-update, in a separate `aucl-updater` binary. `self_update` 0.44.0 is not
    shippable: its non-optional `quick-xml ^0.38` carries RUSTSEC-2026-0194 and
    RUSTSEC-2026-0195, both CVSS 7.5, both fixed only at `>= 0.41.0`, which the
@@ -645,6 +841,17 @@ delegated to a crate that cannot verify the artefacts we ship.
    while elevated. On Linux there is no separate updater process and nothing to
    install: verify then replace inside the AppImage, which is a second update
    code path this project chooses to own permanently and should say so.
+
+   **This is signed where the offsets bundle is not, and the difference is
+   availability, not importance.** A release is a planned event: it happens when
+   the maintainer decides it happens, and a key that has to be fetched from
+   somewhere safe costs nothing on a schedule of our own choosing. An offsets
+   bundle is an unplanned burst that starts when Among Us updates and ends when
+   players can hear each other again, and a human holding a key in that window is
+   the outage. Same project, same threat model, opposite answer, for a reason
+   that is about the clock and not about the crypto. The signature covers the
+   manifest and, through it, the artefact this project published; it says nothing
+   about whether Windows trusts it.
 4. Settings migration: read the existing `electron-store` `config.json` on first
    run and write it forward. Test with real files from 1.x installs. The importer
    reads once and **never writes back** — during the beta a user runs both
@@ -666,75 +873,134 @@ Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
 its CLI contract is tested against real 1.x updaters before it carries anything
 important.
 
-**Rollout.** Because G3 guarantees interop, 2.0 goes out first as a parallel
-install — different appId, different directory, config read forward, opt-in by
-download only — and sits there for a full release cycle while 1.x keeps receiving
-1.x updates. Moving the installed fleet is P8 (§4.12), and it does not begin until
-signing, the elevation gate and immutable releases are all in the field. The
-Electron client stays buildable and receives security updates until 2.0 has been
-the default for one cycle.
+**Rollout.** Because G3 guarantees interop, the 2.0 build goes out first as a
+parallel install — different appId, different directory, config read forward,
+opt-in by download only — and sits there for a full release cycle while 1.x keeps
+receiving 1.x updates. That parallel install is not the 2.0 release; it is the
+opt-in build that precedes it. Moving the installed fleet is P8 (§4.12), and it
+does not begin until the elevation gate and the minisign-verified update path are
+in the field. Immutable releases already are: they were enabled and verified
+through the API on 2026-08-24. The Electron client stays buildable and receives
+security updates until the fleet has moved.
+
+**P7+ does not end in the 2.0 release.** The 1.x wire protocol is switched off
+when 2.0 ships (§4.12), so the fleet has to be on the bridge before that release
+rather than after it. What P7+ produces is a downloadable 2.0 build and a
+migration path; what turns it into *the* release is P8 completing. Anyone reading
+this phase as the finish line will schedule the switch-off a full bridge rollout
+too early.
 
 ## 4.10 Milestones and decision points
 
 | | Milestone | Externally visible? |
 | --- | --- | --- |
 | H1 | 1.0.3 hardening in the field | Yes — ships |
-| H2 | **G0** offsets trust chain live and reversible | Yes — ships as 1.0.4 |
-| H3 | Envelope rules and the new OBS feed, logging first | Yes — ships as 1.0.5 |
-| M1 | Rust server serves 1.x clients | Yes — ships |
+| H2 | **G0** offsets trust chain live | Yes — ships as 1.0.4 |
+| H3 | Envelope rules enforced, new OBS feed live | Yes — ships as 1.0.5 |
+| M1 | Rust server serves 1.x clients | Yes — ships, then **decision point** |
 | M2 | **G1** reader parity on recorded sessions | No |
 | M3 | **G2** audio parity and impairment results | No — **go/no-go** |
 | M4 | **G3** Rust ↔ Electron in one lobby | No |
 | M5 | Rust client usable end-to-end, no GUI polish | Internal alpha |
 | M6 | Feature parity | Public beta |
-| M7 | 2.0 available as a parallel install | Yes — ships |
+| M7 | 2.0 build available as an opt-in parallel install | Yes — ships |
 | M8 | **G4** bridge rehearsal on real 1.0.2 installs | No |
-| M9 | 1.x fleet moved; 2.0 default | Yes — ships |
+| M9 | 1.x fleet moved; 2.0 released; 1.x wire format off | Yes — ships |
 
-Only M3 can end the project. G0 and G4 gate the work that follows them, not the
-port. M1 is valuable whatever happens after it. M2's output (a Rust game reader)
-is reusable from the Electron client if the port stops.
+M3 can end the project on technical grounds, and the decision point after M1 can
+end it on any grounds; those are the two exits. G0 gates the work that follows
+it. G4 no longer gates only P8 — because the 1.x wire format is switched off at
+M9, G4 is a prerequisite of the 2.0 release itself. M1 is valuable whatever
+happens after it. M2's output (a Rust game reader) is reusable from the Electron
+client if the port stops.
 
-**Decisions that must be made before phase 1.** Fifteen questions have to be
-answered before the port is committed to; the full set, with the reasoning, is in
-[09-technology-migration.md](09-technology-migration.md) §6. Five of them block
-work that starts in H1–P1+ and therefore belong here. Each is answerable yes or
-no, and leaving one unanswered is itself an answer with a cost.
+**Decisions taken before phase 1.** Fifteen questions were put to the maintainer;
+the full set, with the reasoning, is in
+[09-technology-migration.md](09-technology-migration.md) §6. Ten are settled and
+five remain open; the eight settled ones that change work in this document are
+recorded below. They are decisions, not preferences, and the phases above are
+written as though they hold.
 
-| Blocks | Decision |
-| --- | --- |
-| P0+, H3 | Is `/socket.io/` accepted as the permanent server wire protocol, with no second path, unless and until a dated 1.x sunset and a migrated OBS page both exist? |
-| P0+, H3 | Is the mobile-client promise in `03-target-architecture.md` §3.5 being kept? Mobile `socket.io-client` defaults to `["polling","websocket"]`, so a websocket-only server refuses its handshake; §3.5 and the polling removal cannot both hold. |
-| P1+, P5+ | Do we accept a per-launch UAC prompt for the elevated helper rather than installing a Windows service? A no to both collapses the two-process split, and the fallback must then be a `--single-process` feature CI builds on every commit, or it will not compile by month six. |
-| H1, P7+ | Do we enable GitHub immutable releases now, accepting that `latest.yml` becomes frozen and the staged rollout must be sequential tagged releases rather than percentage edits? |
-| everything | Do we accept ~77 developer-weeks to 2.0 instead of 37? If no, the defensible cut is written down there and lands near 60 — and the offsets trust chain, update integrity and the signal envelope are not on it. |
+| Affects | Decision | Consequence carried in |
+| --- | --- | --- |
+| everything | **Only P0+ is committed.** The 74-week plan stands as a plan; the funded work is the hardening track and the Rust server, and the rest is decided again after it ships. | §4.1, §4.2 |
+| P0+, H3 | **The mobile-client promise is dropped.** The server is websocket-only; `03-target-architecture.md` §3.5's undertaking to a future 4.x mobile client is deleted, not softened. | §4.1, §4.2 item 6 |
+| P1+, P5+ | **The elevated helper is started on demand, with a per-launch UAC prompt.** No Windows service, no `--single-process` fallback, and the two-process split is available and scheduled. | §4.7 |
+| H1, P7+, P8 | **GitHub immutable releases are on**, enabled and verified through the API on 2026-08-24. `latest.yml` is frozen once published, so `stagingPercentage` does not exist as a mechanism. | §4.9, §4.12 item 3 |
+| H2, P2+ | **The offsets bundle is not signed.** Mirror, scheduled sync PR, upstream pinned by commit, embedded floor, validator on every load. | §4.1, §4.4 item 3 |
+| H3, P0+ | **The signal envelope rules are enforced immediately.** No logging period, no threshold, no flag. Clients older than 1.0.5 lose the OBS feed and the mobile relay at once. | §4.1, §4.2 |
+| P7+, P8 | **No Authenticode code signing.** Windows artefacts stay unsigned; update integrity is a minisign signature over the manifest and nothing more. | §4.9 items 2–3 |
+| P8, P9 | **The 1.x wire protocol is switched off when 2.0 ships.** No dated sunset, no open-ended dual stack; the bridge must have migrated the fleet first. | §4.12 |
+
+One of the five that remain open bears on this document and is not resolved by
+any of the above: whether `/socket.io/` is accepted as the permanent server wire
+protocol with no second path. It no longer blocks P0+ — a second path was never going to be built
+before one existed — but it should be answered before P9 assumes it. The
+decisions above lean towards yes: the 2.x client keeps its Socket.IO fallbacks
+permanently for third-party servers (§4.12), so a second path deletes nothing
+from the client even after our own 1.x support ends.
 
 ## 4.11 Effort summary
 
-| Phase | Weeks | Parallelisable |
-| --- | ---: | --- |
-| H1 1.x emergency hardening | 2.0 | before P0+ |
-| H2 1.x offsets trust chain → G0 | 4.0 | before P2+ |
-| H3 1.x/Node envelope and OBS | 3.0 | alongside P0+–P1+ |
-| P0+ Server | 4.0 | independent |
-| P1+ Foundations | 5.0 | no |
-| P2+ Game reader | 6.0 | with P3+ |
-| P3+ Audio engine | 10.0 | critical path |
-| P4+ Transport | 10.5 | critical path |
-| P5+ Platform | 6.0 | with P4+ |
-| P6+ GUI | 11.5 | after P5+ |
-| P7+ Packaging | 11.0 | partly with P6+ |
-| P8 Bridge and sunset → G4 | 4.0 | after P7+ |
-| **Total to 2.0, one developer** | **77** | midpoint of a range whose low end is 68 |
-| **Two developers** | not half | P3+ and P4+ are both on the critical path, and P7+ waits on both |
-| P9 Post-1.x cleanup | 3.0 | outside the 2.0 budget |
+| Phase | Weeks | Status | Parallelisable |
+| --- | ---: | --- | --- |
+| H1 1.x emergency hardening | 2.0 | committed | before P0+ |
+| H2 1.x offsets trust chain → G0 | 3.0 | committed | before P2+ |
+| H3 1.x/Node envelope and OBS | 2.5 | committed | alongside P0+–P1+ |
+| P0+ Server | 4.0 | committed | independent |
+| **Committed subtotal** | **11.5** | | ends at the decision point |
+| P1+ Foundations | 5.0 | planned | no |
+| P2+ Game reader | 6.0 | planned | with P3+ |
+| P3+ Audio engine | 10.0 | planned | critical path |
+| P4+ Transport | 10.5 | planned | critical path |
+| P5+ Platform | 6.0 | planned | with P4+ |
+| P6+ GUI | 11.5 | planned | after P5+ |
+| P7+ Packaging | 9.5 | planned | partly with P6+ |
+| P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
+| **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
+| **Two developers** | not half | | P3+ and P4+ are both on the critical path, and P7+ waits on both |
+| P9 Post-1.x cleanup | 3.0 | planned | outside the 2.0 budget |
+
+**What moved, against the 77 written before these decisions.** H2 −1.0 (no key
+ceremony, no signing xtask, no minisign parser in TypeScript, no revocation
+path), H3 −0.5 (no seven-day watch, no threshold and no flag to flip), P7+ −1.5
+(no Authenticode, no CA). Nothing was re-estimated and no scope was cut to reach
+the number: three decisions deleted work that was really in the plan, and the
+total follows them down. Everything else is unchanged, including the phases
+nobody has committed to. This table, `README.md`'s effort block and
+[09-technology-migration.md](09-technology-migration.md) §3.1 carry the same
+arithmetic; 09 §3.1 is where it is derived, and any figure that still reads 77
+is from before 2026-08-24.
 
 ## 4.12 Phase 8 — Bridge and sunset (4 weeks) → **Gate G4**
 
-P7+ produces a 2.0 anyone can download. This phase moves the people who will
-never download anything, and it is the moment a large number of machines execute
-a downloaded installer. It does not start before Authenticode signing, the
-elevation gate and immutable releases are all in the field.
+P7+ produces a 2.0 build anyone can download. This phase moves the people who
+will never download anything, and it is the moment a large number of machines
+execute a downloaded installer. It does not start before the elevation gate and
+the minisign-verified update path are in the field; immutable releases already
+are.
+
+**This phase finishes before the 2.0 release, not after it.** The 1.x wire
+protocol is switched off when 2.0 ships — no dated sunset, no open-ended dual
+stack — so the bridge has to have migrated the fleet *first*. Run it the other
+way round and every 1.x user is cut off on release day, which is the same outcome
+as never having written the bridge at all, reached at greater expense. Two things
+follow. G4 is a prerequisite of the 2.0 release itself rather than a gate on this
+phase's own output. And the release is not a date somebody picks: it is whenever
+per-version join counts say the fleet has moved, which is why §4.11 gives this
+phase weeks of effort and no calendar.
+
+**Accepted risk, recorded rather than closed.** The installer this phase hands to
+a large number of machines is unsigned (§4.9 item 2), and the minisign work in
+that phase cannot help here: `electron-updater` on the installed 1.x fleet does
+not know about it. What actually protects the bridge download is the SHA-512 in
+`latest.yml` fetched over TLS from GitHub, plus the fact that immutable releases
+make that manifest unmodifiable once published. That is a real control and it is
+the whole of the control. `NsisUpdater.verifySignature` will skip rather than
+check, because no `publisherName` is configured — which is exactly what 1.0.2
+does today, so this is not a regression, but it is the largest single population
+of installer executions this project will ever cause and it deserves to be
+written down and not discovered.
 
 The mechanism is fully specified and can be read out of the installed
 `electron-updater`: `latest.yml` supplies version, path and SHA-512; `findFile`
@@ -756,13 +1022,29 @@ before anything else.
 2. No `.blockmap` asset for the bridge, or the updater attempts a differential
    download against a file that is not there.
 3. Staged rollout as sequential tagged releases — 1.1.0, 1.1.1, 1.1.2, a week
-   apart, cohort baked in at build time. `stagingPercentage` is not available: it
-   lives in `latest.yml`, which immutable releases freeze. Each step is therefore
-   its own build, Authenticode signature, minisign signature and manifest. Three
-   release ceremonies is why this phase is four weeks and not two.
+   apart, cohort baked in at build time. `stagingPercentage` is not available and
+   this is settled rather than weighed: it lives in `latest.yml`, `latest.yml` is
+   a published release asset, and immutable releases have been on since
+   2026-08-24. A published manifest cannot be edited, so a percentage cannot be
+   raised. Each step is therefore its own build, its own manifest and its own
+   minisign signature over that manifest. Three release ceremonies is why this
+   phase is four weeks and not two; dropping Authenticode makes each ceremony
+   shorter but does not remove one, and what it saves this phase spends on step 6
+   below.
 4. The first bridge installer **renames rather than deletes** the Electron
    install and its config, and 2.x ships a documented way back. Only after the
    bridge has sat at full rollout for a cycle does it begin deleting.
+5. The **migration is complete before the switch-off**, and "complete" is a
+   number agreed in advance and read off the per-version join counts below, not a
+   feeling about how long it has been. Until that number is met, 1.1.x keeps
+   going out and the 2.0 release waits. This is the step with no upper bound on
+   its duration, and pretending otherwise is how the switch-off arrives early.
+6. Only then, **the switch-off**: the server drops the 1.x event set and the
+   legacy room-addressed feed, and answers a 1.x handshake with a message the
+   1.x client displays rather than closing the socket on it. A client that has
+   not updated must be told why it stopped working, in the app, in its own
+   language — the 37 locale directories are already there. This is small work and
+   it is the difference between a sunset and an outage.
 
 **Rollback** is re-marking the 1.0.2 release as *Latest*: un-updated clients
 revert within one check interval without touching a frozen asset. It is
@@ -782,25 +1064,54 @@ signal to stop.
 > migrated config; and on Linux the old process exits within two seconds rather
 > than hanging. G3 must have passed, because during the staged rollout the same
 > lobby contains both generations, by design, for weeks.
+>
+> **G4 is a prerequisite of the 2.0 release, not of this phase's output.** The
+> 1.x wire format goes off at that release, so an unrehearsed bridge is the
+> difference between moving the fleet and stranding it. If G4 cannot be passed
+> there is no fleet migration, therefore no switch-off, therefore no 2.0
+> release: the 2.0 build stays an opt-in parallel install and the server keeps
+> speaking 1.x indefinitely. That is a worse outcome than it sounds — it is the
+> open-ended dual stack this decision exists to avoid — but it is survivable,
+> and shipping the switch-off on an unrehearsed bridge is not.
 
-**Sunset.** The binding commitment is the **server**, not the client: users who
-never update keep working for as long as the server speaks the 1.x wire format.
-Publish a dated promise, announce it in-app through the existing
-update-notification path at least two release cycles ahead, and when it arrives
-have the server return a message the 1.x client displays rather than failing
-silently. The per-step detail for this phase and for the hardening track is in
+**Sunset.** There is no dated sunset. The 1.x wire format is switched off when
+2.0 ships, and 2.0 ships when the fleet has moved — a sequence, not a calendar,
+because a date promises something the rollout cannot guarantee and a date that
+slips teaches everyone that the next one will slip too. What is still owed to
+users is warning: announce it in-app through the existing update-notification
+path at least two release cycles ahead, and when it arrives have the server
+return a message the 1.x client displays rather than failing silently (item 6).
+
+**What this decision cannot reach.** Third-party operators run their own servers
+on their own schedule, and [the README](../../README.md) invites them to. Our
+switch-off says nothing about theirs. A 2.x client therefore still has to cope
+with a server that speaks the old dialect — which is the whole reason the 2.x
+client keeps its Socket.IO `join_lobby` ack and its socket lobby-browser
+fallbacks permanently. That is 09 §6 question 15 answered yes, and it is answered
+yes for third-party servers and for no other reason: against our own server those
+fallbacks are dead code from the day of the switch-off, and they should be
+commented as such so that a later reader does not mistake them for evidence that
+our own 1.x support is still alive. The per-step detail for this phase and for
+the hardening track is in
 [09-technology-migration.md](09-technology-migration.md) §3.
 
 ## 4.13 Phase 9 — Post-1.x cleanup (3 weeks, outside the 2.0 budget)
 
 Everything here is blocked not by effort but by the existence of 1.x clients in
-the same lobby, so it is scheduled once the 1.x share is below the agreed
-threshold and it is not part of the 77 weeks.
+the same lobby, and it is not part of the 74 weeks. The switch-off (§4.12 item 6)
+is what unblocks it, and it unblocks all of it at once rather than gradually:
+after that release there is no 1.x client in any lobby of ours, so the threshold
+this phase used to wait on is the same number P8 item 5 already had to meet.
 
 Move lobby settings and the impostor radio claim to the socket, drop the data
-channel and disable SCTP, and delete the SCTP fuzz targets. Revisit a second wire
-protocol *only* if a dated `/socket.io/` sunset and a migrated OBS page both
-exist. Revisit the Opus bitrate ladder only if the impairment harness has
-actually shown self-inflicted congestion in a 12–15 player mesh — until then it
-fights the FEC loop on the same input with the opposite sign, and it is the one
-behaviour with no Electron reference to measure against.
+channel and disable SCTP, and delete the SCTP fuzz targets. A second wire
+protocol is not one of the things the switch-off unlocks, and it is worth being
+explicit about why, because half its stated precondition is now met and that
+invites the wrong conclusion: the OBS page has been migrated since H3, but the
+2.x client keeps its Socket.IO fallbacks permanently for third-party servers
+(§4.12), so the Socket.IO parser never leaves the client and a second path still
+deletes nothing. Revisit it only if that changes. Revisit the Opus bitrate ladder
+only if the impairment harness has actually shown self-inflicted congestion in a
+12–15 player mesh — until then it fights the FEC loop on the same input with the
+opposite sign, and it is the one behaviour with no Electron reference to measure
+against.
