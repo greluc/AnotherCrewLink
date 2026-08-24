@@ -1,0 +1,36 @@
+[package]
+name = "acl-game"
+description = "Reads Among Us out of process memory: the trait, the scanners, and the platform implementations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# The injection path is 32-bit Windows only and asks the operating system for the right
+# to write into another process. It is off unless someone says otherwise.
+injection = []
+
+[dependencies]
+acl-types.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_System_Diagnostics_ToolHelp",
+	"Win32_System_Threading",
+	"Win32_System_Memory",
+	"Win32_System_ProcessStatus",
+	"Win32_System_Diagnostics_Debug",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# process_vm_readv is a safe fn whose lengths derive from the slices passed in, so the
+# Linux reader contains no unsafe at all.
+nix = { version = "0.30", default-features = false, features = ["uio", "process"] }
+
+[lints]
+workspace = true
