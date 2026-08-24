@@ -10,6 +10,8 @@ pub mod injection;
 pub mod memory;
 pub mod mods;
 pub mod offsets;
+pub mod reader;
+pub mod resolve;
 pub mod scan;
 pub mod sparse;
 pub mod state;
