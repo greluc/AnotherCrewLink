@@ -11,17 +11,17 @@ AnotherCrewLink/
 ├── rust-toolchain.toml         # pinned stable toolchain
 ├── deny.toml                   # cargo-deny: licences, advisories, bans
 ├── crates/
-│   ├── aucl-types/             # AmongUsState, Player, settings, map data, mods
-│   ├── aucl-game/              # process memory, pattern scan, offsets, injection
-│   ├── aucl-audio/             # capture, APM, codec, jitter buffer, DSP graph, mix
-│   ├── aucl-net/               # socket.io client, WebRTC peers, signalling
-│   ├── aucl-platform/          # keyboard poll, overlay window, autostart, paths
-│   ├── aucl-ipc/               # helper ↔ core: postcard message types, framing
-│   ├── aucl-app/               # orchestration: state machine wiring the above
-│   ├── aucl-ui/                # egui views: main, settings, lobby browser, overlay
-│   ├── aucl-helper/            # elevated binary: game reader, injection,
+│   ├── acl-types/             # AmongUsState, Player, settings, map data, mods
+│   ├── acl-game/              # process memory, pattern scan, offsets, injection
+│   ├── acl-audio/             # capture, APM, codec, jitter buffer, DSP graph, mix
+│   ├── acl-net/               # socket.io client, WebRTC peers, signalling
+│   ├── acl-platform/          # keyboard poll, overlay window, autostart, paths
+│   ├── acl-ipc/               # helper ↔ core: postcard message types, framing
+│   ├── acl-app/               # orchestration: state machine wiring the above
+│   ├── acl-ui/                # egui views: main, settings, lobby browser, overlay
+│   ├── acl-helper/            # elevated binary: game reader, injection,
 │   │                           #   key poll, overlay window
-│   └── aucl-core/              # unelevated binary: tokio, audio, net, GUI
+│   └── acl-core/              # unelevated binary: tokio, audio, net, GUI
 ├── server/                     # separate crate (may stay its own repository)
 │   └── src/                    # socketioxide + axum
 ├── xtask/                      # build/release automation as Rust, not shell
@@ -31,10 +31,10 @@ AnotherCrewLink/
     └── interop/                # 1.x ↔ 2.x connection tests
 ```
 
-`aucl-types`, `aucl-game`, `aucl-audio` and `aucl-net` must all build and test
+`acl-types`, `acl-game`, `acl-audio` and `acl-net` must all build and test
 with no GUI dependency. That is what makes the go/no-go gates possible.
 
-Two binaries, not one — see §3.2. `aucl-ipc` is the only crate both of them
+Two binaries, not one — see §3.2. `acl-ipc` is the only crate both of them
 depend on, and it exists so that the boundary is a written type, defined in
 `P1+`, rather than something `P3` and `P4` are retrofitted into later.
 
@@ -43,9 +43,9 @@ depend on, and it exists so that the boundary is a written type, defined in
 Electron's process split (main = privileged, renderer = UI) is replaced by a
 smaller split, not by a thread split. Two processes:
 
-- **`aucl-helper`**, elevated: process memory reading, injection, the keyboard
+- **`acl-helper`**, elevated: process memory reading, injection, the keyboard
   poll, and the overlay window.
-- **`aucl-core`**, never elevated: tokio, signalling, WebRTC, audio, and the GUI.
+- **`acl-core`**, never elevated: tokio, signalling, WebRTC, audio, and the GUI.
 
 A thread boundary is not a privilege boundary. `catch_unwind` around a peer does
 not contain a memory-safety bug in the APM's C++ or in a pre-1.0 RTP parser, and
@@ -61,12 +61,12 @@ its own `BrowserWindow` and Chromium's GPU work is out-of-process, so an overlay
 fault or a driver crash does not currently take voice down with it.
 
 The helper is started on demand and elevated per launch, through UAC, with no
-Windows service anywhere in the design. On Windows `aucl-core` spawns it the
+Windows service anywhere in the design. On Windows `acl-core` spawns it the
 first time a game process appears and spawns it *unelevated*; a same-user game
 needs no privilege beyond that, which is the majority case and the one that works
 today without anybody being asked anything. If `OpenProcess` comes back denied
 because the game is running at a higher integrity level — the configuration the
-README is about — the helper exits with that status and `aucl-core` respawns it
+README is about — the helper exits with that status and `acl-core` respawns it
 through `ShellExecuteW`'s `runas` verb. That is one UAC prompt, once per session,
 paid only by the users who need it. The service was the alternative, and it buys
 the removal of that prompt at the price of a permanently installed `LocalSystem`
@@ -94,9 +94,9 @@ over the IPC and never fetches or decodes an image, so no image decoder enters
 the elevated process.
 
 ```
-┌─ aucl-helper — elevated when the game is ─────────────────────┐
+┌─ acl-helper — elevated when the game is ─────────────────────┐
 │  game thread (5 Hz, blocking)                                 │
-│    aucl-game: read process memory → AmongUsState              │
+│    acl-game: read process memory → AmongUsState              │
 │  key thread (60 ms poll): GetAsyncKeyState / XQueryKeymap     │
 │  injection (32-bit Windows only, --features injection)        │
 │  overlay window (winit: transparent, click-through, topmost)  │
@@ -105,11 +105,11 @@ the elevated process.
  + key edges   │  a named pipe (Windows) or a   │  + pre-rasterised
  (~200 B, 5 Hz)│  Unix socket (Linux)           │  sprites
 ┌──────────────▼────────────────────────────────┴───────────────┐
-│ aucl-core — never elevated                                    │
+│ acl-core — never elevated                                    │
 │                                                               │
 │  ┌─ tokio runtime (multi-thread) ────────────────────────┐    │
-│  │  aucl-net: socket.io client ─ signalling ─► WebRTC    │    │
-│  │  aucl-app: state machine, lobby settings, reconnect   │    │
+│  │  acl-net: socket.io client ─ signalling ─► WebRTC    │    │
+│  │  acl-app: state machine, lobby settings, reconnect   │    │
 │  └────┬────────────────────────────────────┬─────────────┘    │
 │       │ mix parameters (lock-free SPSC)    │ encoded frames   │
 │       ▼                                    ▼                  │
@@ -140,7 +140,7 @@ Five rules keep this honest:
    Violations are caught in CI by a debug allocator that panics if the render
    thread allocates.
 2. **`AmongUsState` is produced in exactly one place** — the helper's game thread
-   — and rebroadcast inside `aucl-core` with `tokio::sync::watch`. Consumers get
+   — and rebroadcast inside `acl-core` with `tokio::sync::watch`. Consumers get
    the latest, never a queue.
 3. **The UI is a pure function of state.** No UI thread ever writes voice state.
 4. **Real-time-safe APIs are selected by name, not assumed.** The methods the
@@ -156,7 +156,7 @@ Five rules keep this honest:
 
 ## 3.3 Crate-by-crate
 
-### `aucl-types`
+### `acl-types`
 
 Direct ports of `src/common`. `AmongUsState`, `Player`, `GameState`, `MapType`,
 `CameraLocation`, the collider tables in `ColliderMap.ts`, `AmongusMap.ts`,
@@ -165,7 +165,7 @@ Direct ports of `src/common`. `AmongUsState`, `Player`, `GameState`, `MapType`,
 The collider maps are static geometry — port them as `const` arrays and keep
 `ColliderMap.test.ts` as the parity reference; it already exists and passes.
 
-### `aucl-game`
+### `acl-game`
 
 ```rust
 pub trait ProcessMemory {
@@ -200,7 +200,7 @@ more clearly than the current JavaScript does.
 
 Injection is feature-gated (`--features injection`, on by default on Windows)
 and stays 32-bit-only, matching today's behaviour. Both it and the reader live
-in `aucl-helper`; none of this crate is linked into `aucl-core`.
+in `acl-helper`; none of this crate is linked into `acl-core`.
 
 The parsing above the trait is fuzzed through `FuzzProcess`, which is worth
 almost nothing to build once `ProcessMemory` is a trait and is the only way to
@@ -222,7 +222,7 @@ be used on a struct containing `u64`/`i64`/`f64` — `read_from_bytes`, which
 copies, costs tens of bytes at 30 Hz. Confining injection to its own 32-bit
 process would move the two highest injection-related risk rows from High to Low.
 
-### `aucl-audio`
+### `acl-audio`
 
 The crate that decides the project. Structured so each stage is independently
 testable against golden vectors:
@@ -289,7 +289,7 @@ echo-return-loss-enhancement against: it does not build on either Windows target
 is where the users are. Either way the APM sits behind the trait, so the gate can
 change the answer without changing the graph.
 
-The DSP nodes live in `aucl-audio::graph` and are deliberately *not* a general
+The DSP nodes live in `acl-audio::graph` and are deliberately *not* a general
 Web Audio implementation. They are the exact subset the app uses, each written
 against the formula in the specification, each with a golden-vector test:
 
@@ -332,7 +332,7 @@ walls, doors, vents, cameras, lights, sabotage, roles, radio) becomes a table
 test. This is the single highest-value structural change in the port: today that
 logic is 180 lines inside a React component and cannot be tested at all.
 
-### `aucl-net`
+### `acl-net`
 
 Two halves, plus the three plain HTTP GETs that have nowhere better to live.
 
@@ -392,7 +392,7 @@ kept off the audio path. Neither crate can demonstrate Chromium interop in CI,
 and Chromium interop is the whole constraint; the `P4+` spike against a real
 1.0.2 client is what answers it.
 
-### `aucl-platform`
+### `acl-platform`
 
 | Concern | Windows | Linux |
 | --- | --- | --- |
@@ -413,7 +413,7 @@ intercepts nothing. On Linux the one free improvement is to stop calling
 `XOpenDisplay`/`XCloseDisplay` per key check and hold one x11rb connection open
 from startup.
 
-The overlay window lives in `aucl-helper` (§3.2) and receives pre-rasterised
+The overlay window lives in `acl-helper` (§3.2) and receives pre-rasterised
 sprites; the ported UIPI access check becomes a first-class UI state, so a user
 whose game is elevated and whose helper is not gets an accurate message instead
 of a blank screen. A declined UAC prompt (§3.2) is the same class of state and
@@ -442,7 +442,7 @@ transparency issues are open and their known workarounds are renderer-specific,
 so this is hours of work that either confirms the design or changes it while
 changing it is still cheap.
 
-### `aucl-ui` and `aucl-core`
+### `acl-ui` and `acl-core`
 
 `egui` 0.36.1 with `eframe`, on `winit` 0.30 and `wgpu` 30.
 
@@ -467,9 +467,9 @@ Four views, matching today's three windows plus the overlay:
 | `main` | `App.tsx` + `Voice.tsx`'s UI half + `Avatar.tsx` |
 | `settings` | `Settings.tsx` (1,197 lines) |
 | `lobbies` | `LobbyBrowser/` |
-| `overlay` | `Overlay.tsx`, in its own transparent window, drawn in `aucl-helper` |
+| `overlay` | `Overlay.tsx`, in its own transparent window, drawn in `acl-helper` |
 
-Avatars are composited in `aucl-ui`: the recoloured base sprite from `image`,
+Avatars are composited in `acl-ui`: the recoloured base sprite from `image`,
 then hat-back, skin, hat-front, visor and pet as textures. The hat collection is
 still fetched at runtime, but the per-hat geometry — currently CSS strings like
 `"32%"` — is parsed once into `f32` fractions at load.

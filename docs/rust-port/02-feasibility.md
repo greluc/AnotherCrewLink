@@ -106,8 +106,8 @@ and 14 from High to Low.
 table asks for. It is settled and scheduled, not proposed** — the elevated helper
 is launched on demand through UAC once per session, with no Windows service, and
 there is no `--single-process` fallback to build or test.
-`aucl-helper` runs elevated and holds memory reading,
-injection, the keyboard hook and the overlay window. `aucl-core` never runs
+`acl-helper` runs elevated and holds memory reading,
+injection, the keyboard hook and the overlay window. `acl-core` never runs
 elevated and holds tokio, signalling, WebRTC, audio and the GUI. The overlay
 belongs in the elevated half because UIPI blocks window manipulation across
 integrity levels, so an unelevated overlay stops following an elevated game —

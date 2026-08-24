@@ -107,7 +107,7 @@ of a game behaving: a self-referential pointer chain, which loops forever, and a
 attacker-influenced array length used to size a `Vec`, which is an out-of-memory
 kill. Cap chain depth and element counts, and let the fuzzer prove the caps hold.
 
-The cost is a constraint on how `aucl-game` is written rather than on the test:
+The cost is a constraint on how `acl-game` is written rather than on the test:
 the parsing layer has to be pure — `&dyn ProcessMemory` in, `Result` out, no
 `unwrap`, no `as` truncation — or the fuzzer finds panics that are artefacts of
 the harness. That is a decision taken before the crate exists, not after.
@@ -119,7 +119,7 @@ own toolchain, outside the blocking matrix.
 ### Network emulation (receive path)
 
 The harness from §4.5(3d). It runs against both implementations so the numbers
-are comparable, and it runs in CI on every change to `aucl-audio`, because the
+are comparable, and it runs in CI on every change to `acl-audio`, because the
 failure mode it guards against — audio that degrades under loss — is invisible
 in a clean local test and is exactly what users report.
 
@@ -225,7 +225,7 @@ noise. Each becomes a named test, and the test name says what it guards.
 | `fmt` | Linux | yes |
 | `clippy -D warnings` | Linux, Windows | yes |
 | `test` (unit + golden + replay) | Linux, Windows x64, Windows i686 | yes |
-| `network-emulation` | Linux | yes on `aucl-audio` changes |
+| `network-emulation` | Linux | yes on `acl-audio` changes |
 | `cargo-deny` (advisories, bans, licenses, sources) | Linux | yes |
 | `cargo-vet` | Linux | yes |
 | `no-alloc-in-audio-callback` | Linux | yes |

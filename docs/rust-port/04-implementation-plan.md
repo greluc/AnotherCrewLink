@@ -149,6 +149,26 @@ to embedded" user action.
 >
 > P2+'s offsets work does not start before G0.
 
+> **Superseded in part, 2026-08-24.** Two of H3's three steps no longer exist.
+>
+> The **server** step is done: the Node implementation has been deleted from the
+> server repository, which is now the Rust server, and that server has enforced the
+> envelope rules and first-claimer host since its first commit. There is no Node
+> change left to write and no dual-stack window to manage — the two servers cannot
+> disagree about what they refuse, because there is only one.
+>
+> The **OBS overlay** step is not being taken either, but by a different decision:
+> the overlay and the mobile relay stay in the Electron client exactly as they are,
+> and are simply not built into the Rust client. Neither is migrated. The Rust server
+> refuses the shape both use, so both stop working when it is deployed — which is the
+> cost §4.2 already records, and it needs no client release to incur.
+>
+> That empties the ordering table below. It existed to stop a server from enforcing
+> ahead of a client that had a working path; there is no new client path to wait for,
+> and the paths that exist are ones we are deliberately ending. What is left of H3 is
+> deploying the Rust server. The paragraphs below are kept as the record of what was
+> decided and why.
+
 **H3 enforces from the first release. There is no logging period.** The signal
 envelope rules — `to` must be a co-member of the sender's lobby, `to != from`, a
 size cap — and first-claimer host go on when the server release ships. No
@@ -277,7 +297,11 @@ configuration line either.
 joins a lobby, exchanges signalling, and the lobby browser populates — with no
 client change whatsoever.
 
-**Delivered 2026-08-24**, in `AnotherCrewLink-Server` on `fix/deps-and-hardening`.
+**Delivered 2026-08-24**, in `AnotherCrewLink-Server`. It shipped as `server-rs/`
+alongside the Node server and, once it was proven, replaced it: the Node
+implementation is deleted and the crate now sits at the repository root. The
+abbreviation throughout is `acl` — binary, systemd unit, service account, log
+target.
 The acceptance criterion was met with two unmodified installed 1.0.3 clients rather
 than one: both reached `ONSTREAM`, `/health` reported `connectionCount: 2` and
 `lobbiesCount: 1`. Items 1–8 are all in, and against the estimate above the phase
@@ -361,7 +385,7 @@ de-risk the two most expensive phases are run here rather than discovered later.
    imply coverage that does not exist. Add `cargo-about` for the third-party
    attribution file GPL distribution wants, and `cargo-auditable` so
    `cargo audit bin` works on a shipped artefact months later.
-4. `aucl-types`: port `src/common` wholesale, including the collider tables.
+4. `acl-types`: port `src/common` wholesale, including the collider tables.
    Port `ColliderMap.test.ts` — it already exists and gives a free parity check
    on day one.
 5. CI skeleton: `fmt`, `clippy -D warnings`, `test`, `deny`, on Windows x64,
@@ -709,8 +733,8 @@ Port `native/electron-overlay-window/src/lib/windows.c` and `x11.c` logic
 directly rather than re-deriving it — that code already knows about the window
 managers and edge cases this needs.
 
-**Two processes, not one.** `aucl-helper` runs elevated and holds memory reading,
-injection, the keyboard hook and the overlay window. `aucl-core` is never
+**Two processes, not one.** `acl-helper` runs elevated and holds memory reading,
+injection, the keyboard hook and the overlay window. `acl-core` is never
 elevated and holds tokio, signalling, WebRTC, audio and the GUI. Length-prefixed
 `postcard` over a named pipe on Windows and a Unix socket on Linux. A thread
 boundary is not a privilege boundary, and the alternative — a single elevated,
@@ -720,19 +744,19 @@ also a straight availability regression against today, where the overlay is its
 own `BrowserWindow` and a driver fault there does not drop the call.
 
 **The helper is started on demand, with a UAC prompt each launch.** There is no
-Windows service. `aucl-core` starts unelevated, and the first thing that needs
-the game — the memory reader — launches `aucl-helper` through a
+Windows service. `acl-core` starts unelevated, and the first thing that needs
+the game — the memory reader — launches `acl-helper` through a
 `runas` elevation, once per session. The prompt is visible friction and it is
 accepted: a service would remove it by installing a permanently resident
 process running as SYSTEM that holds a process-memory reader and a code
 injector, which is a worse thing to own than a dialog. Three consequences to
 build for rather than discover.
 
-"The user clicked No" is an ordinary state, not a startup failure. `aucl-core`
+"The user clicked No" is an ordinary state, not a startup failure. `acl-core`
 runs without a helper and says so accurately: voice works, the game reader does
 not, and neither does the overlay. Push-to-talk must not be on that list — the
 key poll is `GetAsyncKeyState` and needs no elevation of its own, so it is the
-one helper-side item that falls back into `aucl-core` when there is no helper
+one helper-side item that falls back into `acl-core` when there is no helper
 rather than disappearing with it. Losing the ability to speak because of a dialog
 is not a degradation anybody would accept.
 
@@ -872,7 +896,7 @@ us.
    project offers lives entirely in item 3, which protects the update path and
    nothing else. A first download from the website is covered by TLS and by the
    attestation of anyone who checks it, which is nobody.
-3. Auto-update, in a separate `aucl-updater` binary. `self_update` 0.44.0 is not
+3. Auto-update, in a separate `acl-updater` binary. `self_update` 0.44.0 is not
    shippable: its non-optional `quick-xml ^0.38` carries RUSTSEC-2026-0194 and
    RUSTSEC-2026-0195, both CVSS 7.5, both fixed only at `>= 0.41.0`, which the
    caret cannot reach — the project's own advisory gate fails against its own

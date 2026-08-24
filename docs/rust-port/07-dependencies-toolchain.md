@@ -40,7 +40,7 @@ with FEC and DTX, RTP/RTCP and NetEQ together — whose build script maps only
 `x86_64` and `aarch64`. It puts NASM on every build machine the moment a crate
 defaults to `aws-lc-rs`, which ships prebuilt NASM objects for Windows x86-64
 only. And it carries MSVC's 4-byte alignment quirk, which is a live unsoundness
-hazard for exactly the struct parsing `aucl-game` is made of: never use
+hazard for exactly the struct parsing `acl-game` is made of: never use
 zerocopy's reference APIs (`ref_from_bytes`, `try_ref_from_bytes`) on a struct
 containing a 64-bit field on this target. `read_from_bytes` copies, and tens of
 bytes at 30 Hz costs nothing. Make it a clippy `disallowed-method` lint rather
@@ -331,9 +331,9 @@ edited into a published file. `stagingPercentage` is not available to this
 updater and no code should be written expecting it.
 
 The two-process split adds one crate the tables above do not price yet:
-`postcard`, for the length-prefixed frames between `aucl-helper` and
-`aucl-core`. Version at adoption. The helper is the elevated half and holds
-memory reading, injection, the keyboard poll and the overlay window; `aucl-core`
+`postcard`, for the length-prefixed frames between `acl-helper` and
+`acl-core`. Version at adoption. The helper is the elevated half and holds
+memory reading, injection, the keyboard poll and the overlay window; `acl-core`
 is never elevated and holds tokio, signalling, WebRTC, audio and the GUI. The
 overlay is in the helper because UIPI blocks window manipulation and
 out-of-context `SetWinEventHook` across integrity levels, which is exactly the

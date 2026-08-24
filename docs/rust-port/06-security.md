@@ -216,8 +216,8 @@ memory-safety bug in libopus, and it does nothing at all about the elevation.
 
 The answer is two processes, and it is cheap enough to be a requirement rather
 than a roadmap item; [03-target-architecture.md](03-target-architecture.md) §3.2
-now specifies them. `aucl-helper` runs elevated and holds memory reading,
-injection, the key-state poll and the overlay window. `aucl-core` never elevates
+now specifies them. `acl-helper` runs elevated and holds memory reading,
+injection, the key-state poll and the overlay window. `acl-core` never elevates
 and holds tokio, signalling, WebRTC, audio and the GUI. Between them,
 length-prefixed `postcard` over a named pipe or a Unix socket.
 
@@ -231,7 +231,7 @@ a process with no listening socket, no HTTP client, no image decoder and no GPU
 context, and every fuzzing target named in this document runs unelevated.
 
 The launch question is settled, so the split is a design and not a proposal.
-`aucl-core` starts the helper on demand, unelevated, and re-launches it through
+`acl-core` starts the helper on demand, unelevated, and re-launches it through
 UAC only when the game's integrity level denies the read; there is no Windows
 service, and elevation is per launch and per session
 ([03-target-architecture.md](03-target-architecture.md) §3.2). The service was
@@ -397,7 +397,7 @@ Worth restating because the port does not alter it:
   privilege level as the game and, if the game runs elevated, means the client
   runs elevated. An elevated client with an auto-updater is a meaningful target,
   which is why the signed update manifest in §6.1 is a requirement. What the port
-  changes is scope rather than kind: only `aucl-helper` elevates, only when the
+  changes is scope rather than kind: only `acl-helper` elevates, only when the
   game itself is elevated, only after a UAC prompt the user answers that session,
   and the updater is not in that process (§6.2).
 
@@ -467,7 +467,7 @@ Two orderings follow, and they are prerequisites rather than preferences:
       implementation of the `ProcessMemory` trait; chain depth and array lengths
       capped, parsing layer kept pure so it is fuzzable at all
 - [ ] Panic isolation per peer; a bad peer cannot take down the process
-- [ ] Two processes: elevation confined to `aucl-helper`, which holds no
+- [ ] Two processes: elevation confined to `acl-helper`, which holds no
       listening socket, no HTTP client, no image decoder and no GPU context —
       started on demand, elevated per launch through UAC and only when the game's
       integrity level requires it, never installed as a service, and a declined
