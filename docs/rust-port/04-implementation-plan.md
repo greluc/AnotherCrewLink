@@ -375,6 +375,32 @@ nothing. `socketioxide-frame-cap-upstream.md` records what was checked and puts
 the real choice — wait, or finish #762's requested changes — where it can be
 decided instead of drifting. Everything else in P0+ is done and verified.
 
+> **Answered 2026-08-24: yes, and the server waits for the client.** The port
+> proceeds. The Rust server is finished and stays undeployed until the Rust client
+> is in the field, so the swap happens once rather than twice.
+>
+> That decision has a price and it is recorded here rather than left to be
+> rediscovered: the Node server remains in production for the whole port, and with
+> it the signal relay that lets anyone holding a six-character lobby code address
+> any socket on the server. The Rust server refuses that today. Deferring the
+> deployment defers the fix, for as long as the port takes.
+>
+> It also changes what `P1+` item 6 is tested against. That item says to
+> conformance-test the hand-written Socket.IO client against the server `P0+`
+> proved, and assumes `H3` has by then made the production server websocket-only.
+> It has not and now will not: the client must be tested against the **Rust**
+> server, which is the one it will eventually talk to, and any behaviour it needs
+> from the Node server in the meantime has to be checked separately.
+>
+> The evidence the decision rests on is two phases rather than one. `P0+` was
+> estimated at 4 weeks and took days, but had a finished wire protocol to copy and
+> a reference client to check against. `H2` was estimated at 3 weeks and took
+> hours with no such template — and what cost the time there was not writing code
+> but finding out what the real data looked like: a validator built from the
+> TypeScript interface would have rejected 20 of the 44 real files. That class of
+> surprise scales with how unfamiliar the ground is, and `P3+` is the least
+> familiar ground in this document. Neither ratio should be applied to it.
+
 > **Decision point — does the rest of the port proceed?**
 > P0+ is the last committed phase. It is deliberately the smallest useful piece
 > of the system, and it is chosen so that the answer here is informed by evidence
