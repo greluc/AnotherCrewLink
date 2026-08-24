@@ -750,7 +750,14 @@ replaying those tuples through the Rust function. Every tuple must match.
 
 `cpal` device enumeration and streams, `rubato` resampling pinned `=5.0.0` and
 used through `process_into_buffer` only, APM wiring, the VAD port, `opus` encode
-with FEC and DTX, pinned `=0.3.1`.
+with FEC and DTX, pinned `=0.4.0`.
+
+> **Corrected 2026-08-24: `=0.3.1` is not usable.** That pin binds libopus through
+> `audiopus_sys`, which carries RUSTSEC-2026-0150 — implicitly unmaintained, last commit
+> five years old, and pinning a CMake version that CMake 4.0 refuses, so the build breaks
+> for anyone with a current one. `cargo-deny` fails on it, which is the gate doing its job.
+> `opus` 0.4.0, released 2026-08-23, binds through `opusic-sys` instead and builds clean.
+> The pin stands as a pin; only the number moved.
 
 The APM is `sonora` 0.2.0, behind the trait boundary the architecture already
 specifies for it. The condition attached to this — a green `i686` build, run by

@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 acl-types.workspace = true
+opus.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true

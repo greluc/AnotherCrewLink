@@ -7,6 +7,7 @@
 
 pub mod analyser;
 pub mod biquad;
+pub mod codec;
 pub mod convolver;
 pub mod fft;
 pub mod gain;

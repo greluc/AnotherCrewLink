@@ -54,6 +54,16 @@ serde = { version = "1.0", features = ["derive"] }
 # 99.8% of them are byte-identical to the one before -- so a session gzips by a factor
 # of 130. The alternative was a delta format in the recorder: more code, for less.
 flate2 = "1.1"
+# Pinned exactly, as the plan asks: the codec is the one thing on the wire that both ends
+# have to agree about byte for byte, and a patch release that changes a default would be
+# audible before it was noticed.
+#
+# 0.4.0 rather than the plan's =0.3.1. That pin was written before this release existed and
+# now points at an unmaintained transitive dependency: 0.3.1 binds libopus through
+# `audiopus_sys`, whose last commit is five years old and which carries RUSTSEC-2026-0150 —
+# it pins a CMake version that CMake 4.0 refuses, so the build breaks for anyone who has a
+# current one. 0.4.0 binds through `opusic-sys` instead.
+opus = "=0.4.0"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 serde_json = "1.0"
 thiserror = "2.0"

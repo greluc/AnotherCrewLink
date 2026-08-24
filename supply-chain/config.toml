@@ -113,6 +113,10 @@ criteria = "safe-to-deploy"
 version = "5.4.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.cmake]]
+version = "0.1.58"
+criteria = "safe-to-deploy"
+
 [[exemptions.color]]
 version = "0.3.3"
 criteria = "safe-to-deploy"
@@ -591,6 +595,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.openssl-probe]]
 version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.opus]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.opusic-sys]]
+version = "0.7.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.orbclient]]
