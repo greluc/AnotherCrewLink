@@ -86,11 +86,27 @@ export function startRecording(name: string): string | undefined {
 	}
 }
 
-/** Stops recording and closes the file. */
-export function stopRecording(): void {
+/**
+ * Stops recording and closes the file.
+ *
+ * Returns once the stream has actually flushed. A `WriteStream` buffers, and Node does
+ * not promise to drain one at exit, so a caller that quits without awaiting this loses
+ * the tail of the recording — which is the part a player recorded on purpose, because
+ * they played until they had what they wanted.
+ */
+export function stopRecording(): Promise<void> {
 	recording = false;
-	stream?.end();
+	const closing = stream;
 	stream = undefined;
+	if (!closing) {
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => {
+		// Resolve either way. A recorder that keeps the app from quitting is worse than
+		// one that loses a frame.
+		closing.end(() => resolve());
+		closing.on('error', () => resolve());
+	});
 }
 
 /**

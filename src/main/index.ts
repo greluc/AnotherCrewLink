@@ -15,7 +15,7 @@ import { HAT_COLLECTION_URL } from '../common/hatCollection';
 import { gameReader } from './hook';
 import { IpcRendererMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import { resetOffsetsToEmbedded } from './offsetStore';
-import { startRecordingIfAsked } from './recorder';
+import { isRecording, startRecordingIfAsked, stopRecording } from './recorder';
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime';
 import { protocol } from 'electron';
 import Store from 'electron-store';
@@ -318,6 +318,21 @@ if (!gotTheLock) {
 	});
 	autoUpdater.on('update-downloaded', () => {
 		autoUpdater.quitAndInstall();
+	});
+
+	// A recording is only worth having if its end reached the disk. `will-quit` is the
+	// last point at which the loop can still be held open, and `preventDefault` here is
+	// what keeps Electron from tearing the process down mid-flush.
+	let flushed = false;
+	app.on('will-quit', (event) => {
+		if (flushed || !isRecording()) {
+			return;
+		}
+		event.preventDefault();
+		void stopRecording().finally(() => {
+			flushed = true;
+			app.quit();
+		});
 	});
 
 	// quit application when all windows are closed

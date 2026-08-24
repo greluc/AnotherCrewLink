@@ -225,6 +225,52 @@ fn offsets_for(process: &dyn ProcessMemory) -> Offsets {
     serde_json::from_str(&text).expect("parses")
 }
 
+/// The recorder's own output, parsed and replayed by this harness.
+///
+/// Not a parity check — the fixture's state is written by `src/main/recorder.test.ts`,
+/// so comparing against it would only prove that both sides agree with whoever wrote the
+/// test. What it proves is narrower and is the thing that would otherwise be discovered
+/// too late: that a file the Electron recorder produces is one this harness can read.
+///
+/// The alternative is somebody playing five sessions and finding out afterwards that a
+/// field was renamed on one side of the boundary. Regenerate with
+/// `npx vitest run src/main/recorder.test.ts`.
+#[test]
+fn a_file_from_the_electron_recorder_is_one_this_harness_can_replay() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/fixtures/recording-format/one-frame.ndjson");
+    let text = std::fs::read_to_string(&path).expect("the committed format fixture");
+
+    let mut seen = 0usize;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let frame: RecordedFrame =
+            serde_json::from_str(line).expect("the recorder's format still deserialises");
+        let (process, module) =
+            replay(&frame).expect("the frame carries a module and readable regions");
+
+        // The regions really did arrive, at the addresses the recorder wrote as hex.
+        let mut first = [0u8; 2];
+        process
+            .read_exact(0x1_4000_1000, &mut first)
+            .expect("a region the fixture recorded");
+        assert_eq!(&first, b"MZ", "base64 and hex survived the round trip");
+        assert_eq!(module.base, 0x1_4000_0000);
+        assert!(frame.is64, "the fixture records a 64-bit process");
+
+        // And the state is carried as raw JSON, so a field this port does not know about
+        // still reaches the comparison rather than being dropped on the way in.
+        assert_eq!(
+            frame
+                .state
+                .get("lobbyCode")
+                .and_then(serde_json::Value::as_str),
+            Some("FORMAT")
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 1, "the fixture is one frame");
+}
+
 #[test]
 fn the_rust_reader_agrees_with_the_electron_one() {
     let files = recordings();

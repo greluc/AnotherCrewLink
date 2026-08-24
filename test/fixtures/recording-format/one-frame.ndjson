@@ -1,0 +1,1 @@
+{"frame":0,"is64":true,"module":{"name":"GameAssembly.dll","base":"0x140000000","size":"0x10000"},"reads":[{"a":"0x140001000","b":"TVoAAA=="},{"a":"0x140002000","b":"776t3g=="}],"state":{"gameState":0,"lobbyCode":"FORMAT","players":[],"isHost":false,"hostId":0,"clientId":0,"comsSabotaged":false,"currentCamera":0,"map":0,"closedDoors":[]}}
