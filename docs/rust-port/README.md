@@ -53,7 +53,18 @@ with the audio engine on the critical path throughout.
 | [05-regression-strategy.md](05-regression-strategy.md) | How parity is measured rather than asserted; the bugs that must not come back |
 | [06-security.md](06-security.md) | What improves, what gets riskier, and the checklist |
 | [07-dependencies-toolchain.md](07-dependencies-toolchain.md) | Every crate and tool at its latest stable version, with the dependency policy |
+| [08-dependency-review.md](08-dependency-review.md) | A second opinion on every crate in 07, checked against crates.io and the advisory database on 2026-08-24 |
+| [09-technology-migration.md](09-technology-migration.md) | Where to change technology rather than crate, and the phased migration for each change |
 | [CLAUDE.rust.md](CLAUDE.rust.md) | The `CLAUDE.md` the Rust workspace starts with; copy to the repository root at phase 1 |
+
+## Read 08 and 09 before acting on 07
+
+Two later reviews correct this set of documents rather than extending it. The crate
+list in 07 was checked against crates.io: one version does not exist, and the echo
+canceller 02 recommends as the conservative choice does not build on either Windows
+target. The migration review found three security problems in the **shipped 1.0.2
+client** while establishing what the port would inherit; those are hardening work for
+1.0.3, not port work. Both are summarised at the top of their own documents.
 
 ## The three gates
 
