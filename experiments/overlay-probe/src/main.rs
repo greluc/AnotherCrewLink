@@ -50,7 +50,10 @@ impl eframe::App for Experiment {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                ui.colored_label(egui::Color32::from_rgb(255, 96, 255), "ACL overlay experiment");
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 96, 255),
+                    "ACL overlay experiment",
+                );
             });
     }
 }
@@ -58,8 +61,8 @@ impl eframe::App for Experiment {
 #[cfg(target_os = "windows")]
 fn report(_ctx: &egui::Context) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-        WS_EX_TRANSPARENT,
+        FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     // By title, not `GetForegroundWindow`. A click-through window with no taskbar button
@@ -75,7 +78,11 @@ fn report(_ctx: &egui::Context) {
     let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
     println!(
         "RESULT arch={} layered={} transparent={} topmost={} toolwindow={} exstyle=0x{:08x}",
-        if cfg!(target_pointer_width = "32") { "i686" } else { "x86_64" },
+        if cfg!(target_pointer_width = "32") {
+            "i686"
+        } else {
+            "x86_64"
+        },
         ex & WS_EX_LAYERED != 0,
         ex & WS_EX_TRANSPARENT != 0,
         ex & WS_EX_TOPMOST != 0,

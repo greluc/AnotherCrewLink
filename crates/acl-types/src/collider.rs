@@ -99,6 +99,10 @@ fn crosses(path_data: &str, sight: Line) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // A test that cannot unwrap has to invent error handling for cases that cannot
+    // happen, which is noise around the thing being checked.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
     use super::*;
 
     // Ported from src/common/ColliderMap.test.ts, case for case and number for number.
