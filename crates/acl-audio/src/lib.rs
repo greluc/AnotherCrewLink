@@ -11,5 +11,6 @@ pub mod convolver;
 pub mod fft;
 pub mod gain;
 pub mod panner;
+pub mod vad;
 pub mod voice;
 pub mod wav;
