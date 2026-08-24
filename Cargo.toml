@@ -64,6 +64,13 @@ flate2 = "1.1"
 # it pins a CMake version that CMake 4.0 refuses, so the build breaks for anyone who has a
 # current one. 0.4.0 binds through `opusic-sys` instead.
 opus = "=0.4.0"
+# The same libopus the `opus` crate is already binding, taken directly for one function it
+# does not re-export: `opus_packet_has_lbrr`, which answers whether a packet actually
+# carries a redundant copy of its predecessor. Without it a decode-with-FEC call cannot be
+# distinguished from concealment -- libopus succeeds either way -- and every measurement
+# that separates the two is guesswork. Nothing new enters the build; this is already in the
+# graph beneath `opus`, and the version tracks what `=0.4.0` resolves to.
+opusic-sys = "=0.7.5"
 # Pinned exactly for the same reason as the codec: a resampler that changes its filter
 # between patch releases changes what every microphone sounds like, and it would be heard
 # before it was noticed. Used through `process_into_buffer` only — see `resample.rs`.

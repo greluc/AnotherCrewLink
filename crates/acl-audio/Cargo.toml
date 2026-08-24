@@ -17,6 +17,7 @@ acl-types.workspace = true
 cpal = { workspace = true, optional = true }
 neteq.workspace = true
 opus.workspace = true
+opusic-sys.workspace = true
 rubato.workspace = true
 
 [dev-dependencies]

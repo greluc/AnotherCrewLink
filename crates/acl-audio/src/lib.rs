@@ -10,6 +10,7 @@ pub mod biquad;
 pub mod codec;
 pub mod convolver;
 pub mod device;
+pub mod fec;
 pub mod fft;
 pub mod gain;
 pub mod impairment;

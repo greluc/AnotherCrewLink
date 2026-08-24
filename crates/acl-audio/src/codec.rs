@@ -17,7 +17,7 @@
 //! ladder's bottom rung would switch the error correction off exactly when the network is
 //! bad enough to need it — which is the opposite of what a ladder is for.
 
-use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
+use opus::{Application, Bitrate, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 
 /// The rate everything in this client runs at.
 pub const SAMPLE_RATE: u32 = 48000;
@@ -37,6 +37,33 @@ pub const FRAME_SAMPLES: usize = (SAMPLE_RATE as usize * FRAME_MS as usize) / 10
 /// Opus permits up to 1275 bytes per frame. The buffer is that size so a packet is never
 /// truncated: a truncated Opus packet is not a quieter one, it is a decode error.
 pub const MAX_PACKET: usize = 1275;
+
+/// Whether a packet carries a redundant copy of the frame before it.
+///
+/// This exists because `decode_lost` cannot answer it. `opus_decode` with `decode_fec=1`
+/// succeeds whether or not the packet holds redundancy: given none, it quietly produces
+/// concealment instead and returns the same frame size. So a receive path that calls it on
+/// every gap and counts the successes is not measuring error correction at all -- it is
+/// counting gaps, and it reports the same number whether the sender was ever told about
+/// loss or not. That is precisely the failure §3e is about, wearing the label of the fix.
+///
+/// `opus_packet_has_lbrr` is the only honest discriminator, and the `opus` crate does not
+/// re-export it -- hence the direct dependency on the sys crate underneath it.
+///
+/// A malformed packet answers `false` rather than raising: this is a byte string that
+/// arrived off the network, and "does this contain redundancy" has a perfectly good answer
+/// for rubbish.
+#[must_use]
+pub fn has_redundancy(packet: &[u8]) -> bool {
+    let Ok(len) = i32::try_from(packet.len()) else {
+        return false;
+    };
+    // SAFETY: libopus reads at most `len` bytes from `packet`, which is that slice's own
+    // length, and writes nothing through the pointer. It is documented to accept any byte
+    // string and return a negative code for one it cannot parse.
+    let answer = unsafe { opusic_sys::opus_packet_has_lbrr(packet.as_ptr(), len) };
+    answer == 1
+}
 
 /// What went wrong.
 #[derive(Debug)]
@@ -136,6 +163,26 @@ impl Encoder {
     #[must_use]
     pub const fn packet_loss(&self) -> u8 {
         self.loss_percent
+    }
+
+    /// The bitrate libopus has settled on, in bits per second.
+    ///
+    /// Nothing sets this: libopus chooses for the configuration. It is readable because
+    /// the whole error-correction path has a silent precondition — below roughly 16 kbps
+    /// there is no room for a redundant copy, so the encoder carries none however high the
+    /// loss percentage goes. A test asserts the floor, so a future change that lowers the
+    /// bitrate fails there rather than by making lossy calls quietly worse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodecError`] if libopus refuses to report it.
+    pub fn bitrate(&mut self) -> Result<u32, CodecError> {
+        Ok(match self.inner.get_bitrate()? {
+            Bitrate::Bits(bits) if bits > 0 => u32::try_from(bits).unwrap_or(u32::MAX),
+            // `Max` means as much as the packet size allows, which is far above the floor;
+            // `Auto` is not a number and libopus does not report it back in practice.
+            _ => u32::MAX,
+        })
     }
 
     /// Encodes exactly one frame.

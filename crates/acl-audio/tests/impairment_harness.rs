@@ -26,6 +26,30 @@
 //!   averaged. Not PESQ — that is a licensed algorithm and a dependency this does not
 //!   have — but it moves the same way and it is honest about being a proxy.
 //!
+//! # What "recovered" means here, after it stopped meaning anything
+//!
+//! These columns were wrong until `codec::has_redundancy` existed. `decode_lost` succeeds
+//! whether or not the packet it is given carries a redundant copy -- with none it produces
+//! concealment and returns the same frame size -- so counting its successes counted gaps,
+//! not recoveries, and reported the same figure for a sender that had been told about loss
+//! and one that never had. The buffer now asks `opus_packet_has_lbrr` before it claims
+//! anything.
+//!
+//! Correcting it exposed a threshold worth knowing:
+//!
+//! | told the encoder | frames recovered | frames concealed |
+//! | --- | --- | --- |
+//! | 1% | 0 | 7 |
+//! | 2% | 0 | 24 |
+//! | 5% | 28 | 21 |
+//! | 10% | 79 | 23 |
+//!
+//! **Below about five percent, libopus emits no usable redundancy at all.** Not a little:
+//! none. That is not a fault -- at one or two percent concealment holds quality at 0.995
+//! and 0.984, so there is nothing to protect against -- but it does mean the controller's
+//! output between one and four percent is intent without effect, and anybody reading these
+//! rows should not expect error correction to explain them.
+//!
 //! # Where the quality number lies, and it does
 //!
 //! The frames are compared in order, without aligning them in time. A profile that

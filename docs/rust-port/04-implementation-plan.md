@@ -829,7 +829,31 @@ that is why it is a G2 criterion.
 >
 > That does not rule `neteq` out. It rules out `neteq` alone meeting criterion 5, which
 > means the comparison the item asks for is now between a buffer that can recover and one
-> that cannot, and the measurement has to say what that is worth. No bitrate ladder — below roughly 16–20 kbps
+> that cannot, and the measurement has to say what that is worth.
+>
+> **Sending half done, 2026-08-24.** `acl-audio::fec` turns a receiver report into
+> `OPUS_SET_PACKET_LOSS_PERC`: it rises quickly, falls slowly, holds a dead band so a
+> settled call stops re-planning libopus's bit allocation every interval, and clamps at 25%
+> so a peer that lies degrades its own audio and nobody else's. `idle()` decays when reports
+> stop, or a peer that left would be paid for until the call ended. What remains of the
+> item is the source of those reports -- `rtc`'s `ReceiverReportInterceptor` -- which is
+> phase 4, and criterion 5's Chromium sender, which is the same.
+>
+> **Building the join found that the receiving half had been measuring nothing.**
+> `decode_lost` succeeds whether or not the packet it is handed carries a redundant copy:
+> given none it produces concealment and returns the same frame size. The buffer counted
+> those successes as recoveries, so it reported *identical* numbers for a sender that had
+> been told about loss and one that never had -- 46 frames either way -- which is the exact
+> failure this item exists to prevent, wearing the label of the fix. `codec::has_redundancy`
+> asks `opus_packet_has_lbrr` instead. With the loop closed: 37 recovered, 22 gaps. With it
+> open: 0 recovered, 59 gaps.
+>
+> The corrected classification also exposed a threshold nothing in the plan anticipated:
+> **below about 5% reported loss libopus emits no usable redundancy at all.** At 1% and 2%
+> the recovery count is zero, not small. That is defensible -- concealment holds quality at
+> 0.995 and 0.984 there -- but it means the controller's output between 1% and 4% is intent
+> without effect, and no reading of the impairment table should attribute those rows to
+> error correction. No bitrate ladder — below roughly 16–20 kbps
 libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
 loop exactly when it is needed.
 

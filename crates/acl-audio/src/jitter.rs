@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::codec::{CodecError, Decoder, FRAME_SAMPLES};
+use crate::codec::{self, CodecError, Decoder, FRAME_SAMPLES};
 
 /// How many packets to hold before playing, as a starting depth.
 ///
@@ -185,11 +185,25 @@ impl JitterBuffer {
             self.stats.played += 1;
             FrameSource::Packet
         } else if let Some(next) = self.packets.get(&sequence.wrapping_add(1)) {
-            // The packet after the gap is here, so its redundant copy of this one is too.
-            // This is the whole reason the buffer holds more than one packet.
-            self.decoder.decode_lost(next, &mut samples)?;
-            self.stats.recovered += 1;
-            FrameSource::Recovered
+            // The packet after the gap is here. Holding it long enough to look inside is
+            // the whole reason the buffer holds more than one packet -- but whether it
+            // carries a copy of this frame has to be asked, not assumed.
+            //
+            // The redundancy exists only when the sender has been told there is loss, and
+            // `decode_lost` does not complain when there is none: it produces concealment
+            // and returns the same frame size. Counting its successes therefore reported
+            // identical recovery for a sender that had been told and one that never had --
+            // 46 frames either way, measured -- which made the number meaningless in
+            // exactly the direction that hides the fault §3e is about.
+            if codec::has_redundancy(next) {
+                self.decoder.decode_lost(next, &mut samples)?;
+                self.stats.recovered += 1;
+                FrameSource::Recovered
+            } else {
+                self.decoder.conceal(&mut samples)?;
+                self.stats.concealed += 1;
+                FrameSource::Concealed
+            }
         } else if self.packets.is_empty() {
             // Nothing at all. Concealment extrapolates from what came before, but with an
             // empty buffer there is nothing to extrapolate towards and the stream has
