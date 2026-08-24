@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use acl_audio::biquad::{Biquad, FilterKind};
 use acl_audio::gain::Gain;
+use acl_audio::panner::{Panner, Position};
 use acl_audio::wav;
 use serde::Deserialize;
 
@@ -31,7 +32,7 @@ const TOLERANCE_DBFS: f64 = -80.0;
 ///
 /// Every vector for one of these is counted and reported. Emptying this list is what
 /// finishes the first criterion of gate G2.
-const UNIMPLEMENTED: [&str; 3] = ["chain", "convolver", "panner"];
+const UNIMPLEMENTED: [&str; 2] = ["chain", "convolver"];
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
@@ -145,6 +146,17 @@ fn run(vector: &Vector, input: &[f32], sample_rate: f32) -> Option<Vec<f32>> {
             let mut out = input.to_vec();
             filter.process_block(&mut out);
             Some(out)
+        }
+        "panner" => {
+            // The settings the client builds every peer with; only the position varies
+            // between vectors.
+            let panner = Panner::default();
+            let source = Position {
+                x: f64::from(number(&vector.config, "x")),
+                y: f64::from(number(&vector.config, "y")),
+                z: f64::from(number(&vector.config, "z")),
+            };
+            Some(panner.process_block(input, source))
         }
         _ => None,
     }

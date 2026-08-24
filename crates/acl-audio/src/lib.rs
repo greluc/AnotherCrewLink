@@ -7,5 +7,6 @@
 
 pub mod biquad;
 pub mod gain;
+pub mod panner;
 pub mod voice;
 pub mod wav;
