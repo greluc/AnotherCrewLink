@@ -80,6 +80,8 @@ export default class Peer {
 	/// What went wrong while gathering, deduplicated: the same relay fails identically
 	/// once per local interface, so the raw list is four copies of one fact.
 	private gatheringErrors = new Set<string>();
+	/** The STUN/TURN error codes seen while gathering, for the questions below. */
+	private gatheringErrorCodes = new Set<number>();
 
 	constructor(private options: PeerOptions = {}) {
 		this.pc = new RTCPeerConnection(options.config);
@@ -115,6 +117,7 @@ export default class Peer {
 		this.pc.onicecandidateerror = (event) => {
 			const error = event as RTCPeerConnectionIceErrorEvent;
 			this.gatheringErrors.add(`${error.url} ${error.errorCode} ${error.errorText}`);
+			this.gatheringErrorCodes.add(error.errorCode);
 		};
 
 		this.pc.ontrack = (event) => {
@@ -248,6 +251,20 @@ export default class Peer {
 	 */
 	public relayCandidates(): number {
 		return this.gathered.relay ?? 0;
+	}
+
+	/**
+	 * Whether the relay answered but had no capacity left.
+	 *
+	 * RFC 5766's 486, "Allocation Quota Reached". It matters because it is the one reason
+	 * for having no relay candidate that is nobody's fault at this end and that goes away
+	 * on its own: a relay grants a fixed number of reservations and somebody leaving frees
+	 * one. Told apart from a relay that cannot be reached, it is the difference between
+	 * "your network blocks this" and "the server needs a bigger allowance", which are
+	 * addressed by completely different people.
+	 */
+	public relayWasFull(): boolean {
+		return this.gatheringErrorCodes.has(486);
 	}
 
 	/**

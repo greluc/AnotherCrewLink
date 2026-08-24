@@ -5,6 +5,7 @@ import {
 	RECONNECT_BASE_DELAY,
 	RECONNECT_MAX_ATTEMPTS,
 	RECONNECT_MAX_DELAY,
+	RECONNECT_SLOW_DELAY,
 	initiatesReconnect,
 	reconnectDelay,
 	shouldForceRelay,
@@ -159,5 +160,26 @@ describe('shouldUseRelay', () => {
 		for (let attempt = 1; attempt <= 6; attempt += 1) {
 			expect(shouldUseRelay({ ...base, attempt })).toBe(shouldForceRelay(attempt));
 		}
+	});
+});
+
+describe('RECONNECT_SLOW_DELAY', () => {
+	it('is longer than any delay in the fast burst', () => {
+		// The burst is meant to be over by the time this takes over. If it were shorter
+		// the two would interleave and the "still trying, slowly" message would be a lie.
+		expect(RECONNECT_SLOW_DELAY).toBeGreaterThan(RECONNECT_MAX_DELAY);
+	});
+
+	it('is short enough to catch a change within a round', () => {
+		// The case it exists for: a relay with no reservations left frees one when
+		// somebody leaves the lobby. A round lasts minutes, so an interval measured in
+		// minutes would miss it.
+		expect(RECONNECT_SLOW_DELAY).toBeLessThanOrEqual(60_000);
+	});
+
+	it('leaves the burst reaching its cap first', () => {
+		// The burst has to actually finish backing off before the flat interval starts,
+		// or the escalation to the relay never happens at its intended attempt.
+		expect(reconnectDelay(RECONNECT_MAX_ATTEMPTS, true)).toBe(RECONNECT_MAX_DELAY);
 	});
 });

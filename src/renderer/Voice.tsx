@@ -20,6 +20,8 @@ import {
 	initiatesReconnect,
 	reconnectDelay,
 	shouldUseRelay,
+	RECONNECT_MAX_ATTEMPTS,
+	RECONNECT_SLOW_DELAY,
 	shouldGiveUp,
 } from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
@@ -282,6 +284,8 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const relayedPeers = useRef<Record<string, boolean>>({});
 	/// How many relay candidates each peer's last failed connection gathered.
 	const relayCandidatesSeen = useRef<Record<string, number>>({});
+	/// Peers whose relay answered but had no reservation left to give.
+	const relayWasFull = useRef<Record<string, boolean>>({});
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 	const reconnectAttempts = useRef<Record<string, number>>({});
@@ -645,6 +649,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		// reconnect because the relay is what made that connection work.
 		delete relayedPeers.current[peer];
 		delete relayCandidatesSeen.current[peer];
+		delete relayWasFull.current[peer];
 	}
 
 	function cancelAllReconnects() {
@@ -656,6 +661,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		// A new lobby is a new set of paths between people, so nothing is assumed about it.
 		relayedPeers.current = {};
 		relayCandidatesSeen.current = {};
+		relayWasFull.current = {};
 	}
 
 	function disconnectPeer(peer: string) {
@@ -1352,6 +1358,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						// gathered a relay candidate is the one fact that separates "force
 						// the relay now" from "forcing the relay would guarantee failure".
 						relayCandidatesSeen.current[peer] = connection.relayCandidates();
+						if (connection.relayWasFull()) relayWasFull.current[peer] = true;
 						console.warn('Peer connection error for', peer, error);
 					});
 					return connection;
@@ -1370,21 +1377,24 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					if (!socketClientsRef.current[peer]) return;
 
 					const attempt = (reconnectAttempts.current[peer] ?? 0) + 1;
-					if (shouldGiveUp(attempt)) {
-						// Loud, and saying which of the two situations this is. Until now the
-						// app went quiet here: the avatars still lit up, because voice activity
-						// travels over the socket rather than over the audio path, so a player
-						// with no audio at all in either direction saw a lobby that looked
-						// entirely healthy and had nothing to report but silence.
+					// Said once, when the fast burst runs out, rather than on every slow retry
+					// afterwards. Until this existed the app went quiet here: the avatars still
+					// lit up, because voice activity travels over the socket rather than over
+					// the audio path, so a player with no audio at all in either direction saw
+					// a lobby that looked entirely healthy and had nothing to report but
+					// silence.
+					if (attempt === RECONNECT_MAX_ATTEMPTS + 1) {
 						console.error(
-							`No connection to ${peer} after ${attempt - 1} attempts. Voice with this player will not work.`,
-							relayedPeers.current[peer]
-								? 'The relay was tried and did not help.'
-								: hasRelay(iceConfig)
-									? 'A relay was available but did not help.'
-									: 'This server advertises no relay, so a restrictive NAT cannot be worked around.'
+							`No connection to ${peer} after ${attempt - 1} attempts.`,
+							'Still trying, slowly.',
+							relayWasFull.current[peer]
+								? 'The relay refused with 486, Allocation Quota Reached: it is reachable and has no capacity left. That is a server setting, not this network.'
+								: relayedPeers.current[peer]
+									? 'The relay was tried and did not help.'
+									: hasRelay(iceConfig)
+										? 'A relay was available but did not help.'
+										: 'This server advertises no relay, so a restrictive NAT cannot be worked around.'
 						);
-						return;
 					}
 					reconnectAttempts.current[peer] = attempt;
 
@@ -1429,7 +1439,14 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						);
 					}
 
-					const delay = reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
+					// Past the burst the interval goes flat and long. Giving up outright is
+					// what this used to do, and it was wrong: the reasons a connection cannot
+					// be made are often not permanent -- a relay whose reservations are all
+					// taken frees one when somebody leaves, and nothing was ever going to ask
+					// again.
+					const delay = shouldGiveUp(attempt)
+						? RECONNECT_SLOW_DELAY
+						: reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
 
 					reconnectTimers.current[peer] = setTimeout(() => {
 						delete reconnectTimers.current[peer];

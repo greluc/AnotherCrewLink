@@ -95,7 +95,24 @@ export function shouldUseRelay(options: {
 	return shouldForceRelay(attempt);
 }
 
-/** True once the attempt number is past what is worth trying. */
+/** True once the fast burst of attempts is spent. */
 export function shouldGiveUp(attempt: number): boolean {
 	return attempt > RECONNECT_MAX_ATTEMPTS;
 }
+
+/**
+ * How long to wait between attempts once the fast burst is spent.
+ *
+ * The burst is six attempts over about ninety seconds, and it used to be the end: after
+ * it, that player was silent for the rest of the round however the situation changed
+ * around them. That turned out to be the difference between a bad minute and a ruined
+ * evening, because the reasons a connection cannot be made are frequently not permanent.
+ *
+ * The one that prompted this: a relay grants a limited number of reservations, and when
+ * they are all taken the next request is refused outright. Somebody leaving frees one --
+ * and nothing was ever going to ask again.
+ *
+ * Forty-five seconds is often enough to catch a change within the round and rare enough
+ * that a genuinely unreachable peer costs almost nothing to keep trying.
+ */
+export const RECONNECT_SLOW_DELAY = 45000;

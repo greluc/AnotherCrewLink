@@ -49,6 +49,18 @@ asking for permissions this app has no use for.
   showing a critical error and closing, with no way to say what it was. It now writes
   the fault to the log and tells you which folder to find it in before it exits.
 
+- **After about ninety seconds of trying, the app gave up on a player for good.** Six
+  attempts and then silence for the rest of the round, whatever changed in the meantime.
+  The reasons a connection cannot be made are often temporary — a relay with no capacity
+  left frees some the moment anybody leaves — and nothing was ever going to ask again.
+  It now keeps trying every forty-five seconds, quietly, and says so once rather than
+  filling the log.
+
+- **A relay that is simply full now says so.** It is refused with a specific code, and
+  told apart from a relay that cannot be reached it is the difference between a network
+  problem at your end and a setting on the server. Those are fixed by different people,
+  and the log used to give no way to tell which one you had.
+
 - **A missing speaker could silence one player and nothing else.** If the speaker you
   had chosen was no longer plugged in, sending a player's voice to it failed and the
   failure went nowhere — no message, no fallback, just one person you could not hear.
