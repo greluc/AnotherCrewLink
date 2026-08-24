@@ -64,6 +64,10 @@ flate2 = "1.1"
 # it pins a CMake version that CMake 4.0 refuses, so the build breaks for anyone who has a
 # current one. 0.4.0 binds through `opusic-sys` instead.
 opus = "=0.4.0"
+# Pinned exactly for the same reason as the codec: a resampler that changes its filter
+# between patch releases changes what every microphone sounds like, and it would be heard
+# before it was noticed. Used through `process_into_buffer` only — see `resample.rs`.
+rubato = "=5.0.0"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 serde_json = "1.0"
 thiserror = "2.0"
