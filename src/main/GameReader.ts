@@ -420,7 +420,12 @@ export default class GameReader {
 				players,
 				gameState: lobbyCode === 'MENU' ? GameState.MENU : state,
 				oldGameState: this.oldGameState,
-				isHost: (hostId && clientId && hostId === clientId) as boolean,
+				// `(hostId && clientId && hostId === clientId) as boolean` until 2026-08-24,
+				// which is a cast rather than a conversion: with hostId zero the expression is
+				// the number 0, and that is what went into a field declared boolean and out
+				// over IPC. Falsy either way, so nothing misbehaved -- but the Rust reader
+				// produces `false`, and gate G1 compares the two exactly.
+				isHost: hostId !== 0 && clientId !== 0 && hostId === clientId,
 				hostId: hostId,
 				clientId: clientId,
 				comsSabotaged,

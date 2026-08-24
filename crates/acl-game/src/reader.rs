@@ -8,6 +8,8 @@
 //! parity run and the fuzzer can both drive it. No `unwrap`, no `as` on a value that came
 //! out of the target, and every count bounded before it sizes anything.
 
+use acl_types::map::MapType;
+
 use crate::dotnet::read_string;
 use crate::memory::{ProcessMemory, ReadError, read_pointer, resolve_chain};
 use crate::mods::Mod;
@@ -16,6 +18,7 @@ use crate::state::{
     AmongUsState, GameState, OutfitOffsets, Player, hash_name, lobby_code_to_string, player_chain,
     read_outfit, top_level_chain,
 };
+use crate::systems::{self, SystemOffsets, Systems};
 
 /// The most players a frame will read.
 ///
@@ -178,6 +181,32 @@ pub fn read_state(
     // exists to catch.
     let lobby_code = lobby_code_for(&players, host_id, is_local_game, game_code);
 
+    // `gameState: lobbyCode === 'MENU' ? GameState.MENU : state`. The Electron reader
+    // overrides the state it read when there is no code to show, and a reader that does
+    // not differs on every frame between leaving a game and reaching the menu.
+    let game_state = if lobby_code == "MENU" {
+        GameState::Menu
+    } else {
+        game_state
+    };
+
+    // Sabotage, doors and cameras are read only during a round, as `GameReader.ts` does:
+    // the systems dictionary and the door table say nothing in a lobby or a meeting.
+    let systems = if game_state == GameState::Tasks {
+        let ship = follow(memory, base, top_level_chain(offsets, "shipStatus")).unwrap_or(0);
+        let minigame = follow(memory, base, top_level_chain(offsets, "miniGame")).unwrap_or(0);
+        systems::read_systems(
+            memory,
+            ship,
+            minigame,
+            MapType::from_game(u32::from(map)),
+            local_player.as_ref().map(|player| (player.x, player.y)),
+            &system_offsets(offsets),
+        )
+    } else {
+        Systems::default()
+    };
+
     Ok(AmongUsState {
         game_state,
         old_game_state: context
@@ -190,14 +219,21 @@ pub fn read_state(
         is_host: host_id == client_id && host_id != 0,
         client_id,
         host_id,
-        coms_sabotaged: false,
-        current_camera: 0,
+        coms_sabotaged: systems.coms_sabotaged,
+        current_camera: systems.current_camera,
         map: u32::from(map),
         light_radius,
-        // NaN compares unequal to itself, so the first frame reports a change — which is
-        // what the Electron reader does too, comparing against an absent previous state.
-        light_radius_changed: (light_radius - previous_light).abs() > f32::EPSILON,
-        closed_doors: Vec::new(),
+        // `lightRadius != this.lastState?.lightRadius` — an exact comparison, not a
+        // tolerance. A tolerance here would swallow a change the Electron reader reports,
+        // and the two would disagree on the frame the lights come back up. NaN compares
+        // unequal to itself, so the first frame reports a change, which is what comparing
+        // against an absent previous state does in JavaScript too.
+        #[allow(
+            clippy::float_cmp,
+            reason = "the Electron reader's `!=` is the specification"
+        )]
+        light_radius_changed: light_radius != previous_light,
+        closed_doors: systems.closed_doors,
         current_server: context.current_server.clone(),
         max_players: u32::from(max_players),
         mod_id: context.loaded_mod.id().to_owned(),
@@ -381,6 +417,30 @@ fn read_f32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Op
     let mut raw = [0u8; 4];
     memory.read_exact(at, &mut raw).ok()?;
     Some(f32::from_le_bytes(raw))
+}
+
+/// Gathers the offsets [`systems::read_systems`] needs out of the bundle.
+///
+/// Each is optional: a bundle for an older build may not carry all of them, and a missing
+/// one skips that reading rather than failing the frame. `playerCount` and `playerAddrPtr`
+/// are reused for the door table's length and first element, which is what
+/// `GameReader.ts` does — the door table has the same shape as the player table.
+fn system_offsets(offsets: &Offsets) -> SystemOffsets {
+    SystemOffsets {
+        systems: first_offset(offsets, "shipStatus_systems"),
+        hud_override_active: first_offset(offsets, "HudOverrideSystemType_isActive"),
+        mira_completed_consoles: first_offset(offsets, "hqHudSystemType_CompletedConsoles"),
+        decon_lower_open: first_offset(offsets, "deconDoorLowerOpen"),
+        decon_upper_open: first_offset(offsets, "deconDoorUpperOpen"),
+        all_doors: first_offset(offsets, "shipstatus_allDoors"),
+        count: first_offset(offsets, "playerCount"),
+        first_element: first_offset(offsets, "playerAddrPtr"),
+        door_is_open: first_offset(offsets, "door_isOpen"),
+        object_cache: first_offset(offsets, "objectCachePtr"),
+        current_camera: first_offset(offsets, "planetSurveillanceMinigame_currentCamera"),
+        camera_count: first_offset(offsets, "planetSurveillanceMinigame_camarasCount"),
+        filtered_rooms: first_offset(offsets, "surveillanceMinigame_FilteredRoomsCount"),
+    }
 }
 
 /// The state's `lobbyCode`, from the decoded code and the players.
