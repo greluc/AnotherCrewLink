@@ -513,6 +513,24 @@ arrives with the fork: keeping it in sync. A mirror that lags upstream after an
 Among Us patch does not expose users to an attacker, it locks them out of the
 game, and that failure is on us rather than on someone else's schedule.
 
+**The second mirror lags the first, and it does so by design.** `offsetStore.ts`
+falls back to `cdn.jsdelivr.net/gh/greluc/AnotherCrewlink-Offsets@main`, and
+jsDelivr caches a branch reference for up to twelve hours. Verified on
+2026-08-24: minutes after the fork was pushed, `raw.githubusercontent.com` served
+the new `lookup.json` while jsDelivr still served the previous one, missing the
+V2026.8.18 entry entirely. A player whose fetch falls through to the mirror
+during those hours — which happens precisely when GitHub is having a bad day,
+after a patch, when everyone is refetching at once — is handed offsets for the
+build before the one they are running. It parses, so nothing reports an error.
+The cache key saves us from the worst of it: the entry names a different
+`file`, so a client that already holds the new offsets does not overwrite them
+with the old.
+
+Purging is a GET per changed path against `purge.jsdelivr.net/gh/<repo>@main/<path>`,
+it takes about a second, and it belongs at the end of whatever publishes an
+offsets update rather than in a runbook nobody opens. Until it is automated, a
+push to the offsets repository is not finished when the push completes.
+
 The largest single risk in the project, and it is live today rather than
 introduced by the port.
 
