@@ -15,7 +15,13 @@ import {
 	type VoiceState,
 } from '../common/AmongUsState';
 import Peer, { type SignalData } from './peer';
-import { initiatesReconnect, reconnectDelay, shouldGiveUp } from './reconnectPolicy';
+import {
+	RECONNECT_RELAY_AFTER,
+	initiatesReconnect,
+	reconnectDelay,
+	shouldForceRelay,
+	shouldGiveUp,
+} from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
 import type { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
@@ -136,6 +142,19 @@ const DEFAULT_ICE_CONFIG: RTCConfiguration = {
 // The server already advertises its own relay, so only the policy needs to change.
 function forceRelay(config: RTCConfiguration): RTCConfiguration {
 	return { ...config, iceTransportPolicy: 'relay' };
+}
+
+/**
+ * Whether there is a relay to fall back to.
+ *
+ * Forcing relay mode with no relay advertised produces a connection that cannot gather
+ * any candidate at all, which fails faster and more completely than the direct attempt it
+ * replaced. Checked rather than assumed, and logged when it is missing: a lobby where
+ * nobody can reach anybody and no relay is offered is a server configuration problem, not
+ * a client one, and the two look identical from the user's side.
+ */
+function hasRelay(config: RTCConfiguration): boolean {
+	return (config.iceServers ?? []).some((server) => server.urls.toString().includes('turn:'));
 }
 
 export interface VoiceProps {
@@ -267,6 +286,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	// rather than the same line on every pass. See describeSilence.
 	const silenceReason = useRef<Record<number, string>>({});
 	// Pending rebuild of a peer connection that failed, and how many times it has been
+	// Peers whose direct path has failed often enough to be worth relaying instead. Kept
+	// per socket id because the answering end builds its connection from an incoming offer
+	// and has to agree about the policy.
+	const relayedPeers = useRef<Record<string, boolean>>({});
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 	const reconnectAttempts = useRef<Record<string, number>>({});
@@ -573,6 +596,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			delete reconnectTimers.current[peer];
 		}
 		delete reconnectAttempts.current[peer];
+		// The relay choice goes with the peer, not with the attempt counter: it is cleared
+		// here because this runs when the peer has left, and kept across a successful
+		// reconnect because the relay is what made that connection work.
+		delete relayedPeers.current[peer];
 	}
 
 	function cancelAllReconnects() {
@@ -581,6 +608,8 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		}
 		reconnectTimers.current = {};
 		reconnectAttempts.current = {};
+		// A new lobby is a new set of paths between people, so nothing is assumed about it.
+		relayedPeers.current = {};
 	}
 
 	function disconnectPeer(peer: string) {
@@ -1112,11 +1141,17 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						delete peerConnections[peer];
 						previous.destroy();
 					}
+					// Relay when the user asked for it, or when this peer's direct path has
+					// already failed twice and there is a relay to fall back to.
+					const relay = settingsRef.current.natFix || relayedPeers.current[peer] === true;
 					const connection = new Peer({
 						stream,
 						initiator,
-						config: settingsRef.current.natFix ? forceRelay(iceConfig) : iceConfig,
+						config: relay ? forceRelay(iceConfig) : iceConfig,
 					});
+					if (relay) {
+						console.log('Connecting to', peer, 'through a relay');
+					}
 
 					setPeerConnections((connections) => {
 						connections[peer] = connection;
@@ -1250,10 +1285,37 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 					const attempt = (reconnectAttempts.current[peer] ?? 0) + 1;
 					if (shouldGiveUp(attempt)) {
-						console.warn('Giving up on rebuilding the connection to', peer);
+						// Loud, and saying which of the two situations this is. Until now the
+						// app went quiet here: the avatars still lit up, because voice activity
+						// travels over the socket rather than over the audio path, so a player
+						// with no audio at all in either direction saw a lobby that looked
+						// entirely healthy and had nothing to report but silence.
+						console.error(
+							`No connection to ${peer} after ${attempt - 1} attempts. Voice with this player will not work.`,
+							relayedPeers.current[peer]
+								? 'The relay was tried and did not help.'
+								: hasRelay(iceConfig)
+									? 'A relay was available but did not help.'
+									: 'This server advertises no relay, so a restrictive NAT cannot be worked around.'
+						);
 						return;
 					}
 					reconnectAttempts.current[peer] = attempt;
+
+					// A direct path that has failed twice will keep failing: what is in the way
+					// is the network between the two ends, and waiting longer does not move it.
+					if (shouldForceRelay(attempt) && !relayedPeers.current[peer]) {
+						if (hasRelay(iceConfig)) {
+							console.log('Direct connection to', peer, 'keeps failing; switching to the relay');
+							relayedPeers.current[peer] = true;
+						} else if (attempt === RECONNECT_RELAY_AFTER) {
+							console.warn(
+								'Direct connection to',
+								peer,
+								'keeps failing and this server advertises no relay to fall back to'
+							);
+						}
+					}
 
 					const delay = reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
 

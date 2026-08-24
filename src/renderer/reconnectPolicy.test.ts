@@ -6,6 +6,7 @@ import {
 	RECONNECT_MAX_DELAY,
 	initiatesReconnect,
 	reconnectDelay,
+	shouldForceRelay,
 	shouldGiveUp,
 } from './reconnectPolicy';
 
@@ -86,5 +87,28 @@ describe('shouldGiveUp', () => {
 			total += reconnectDelay(attempt, false);
 		}
 		expect(total).toBeLessThan(5 * 60 * 1000);
+	});
+});
+
+describe('shouldForceRelay', () => {
+	it('lets the first attempt try a direct path', () => {
+		// One failure is often a lost packet or a peer that had not finished starting up.
+		// Routing a lobby through a relay it did not need costs the relay's bandwidth and
+		// adds a hop to every voice.
+		expect(shouldForceRelay(1)).toBe(false);
+	});
+
+	it('gives up on the direct path after two failures', () => {
+		// What is in the way is the network between the two ends, and waiting longer does
+		// not move it. Symmetric NAT and carrier-grade NAT are the usual reasons, and no
+		// amount of STUN gets through either.
+		expect(shouldForceRelay(2)).toBe(true);
+		expect(shouldForceRelay(3)).toBe(true);
+	});
+
+	it('still escalates on the last attempt worth making', () => {
+		// The escalation has to happen while there are attempts left to use it.
+		expect(shouldForceRelay(RECONNECT_MAX_ATTEMPTS)).toBe(true);
+		expect(shouldGiveUp(RECONNECT_MAX_ATTEMPTS)).toBe(false);
 	});
 });

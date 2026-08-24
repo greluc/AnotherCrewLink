@@ -30,7 +30,8 @@
 		"format": "biome format --write src electron.vite.config.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"golden": "electron scripts/golden-vectors/main.mjs"
 	},
 	"dependencies": {
 		"electron-overlay-window": "file:native/electron-overlay-window",
