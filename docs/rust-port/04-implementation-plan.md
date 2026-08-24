@@ -258,17 +258,58 @@ is a deployment change and not a behaviour change. It also means P0+ inherits
 H3's ordering — the Rust server must not reach production before 1.0.5 and the
 migrated overlay page are in the field.
 
-**Accepted risk, recorded here rather than closed.** socketioxide's WebSocket
-path applies no inbound frame cap — `max_payload` governs the outbound `emit()`
-and the handshake advertisement, both of which a hostile client ignores — and
-this cannot be fixed at a reverse proxy, because neither nginx nor Caddy has a
-post-upgrade frame directive. The routes are an upstream change or a fork. File
-the upstream issue in this phase and note the exposure; do not write it down as a
-configuration line.
+**Accepted risk, recorded here rather than closed.** socketioxide never applies
+`max_payload` to the WebSocket transport — it governs the outbound `emit()` and
+the handshake advertisement, both of which a hostile client ignores — so the one
+transport this server offers is bounded only by tungstenite's defaults, 64 MiB
+per message and 16 MiB per frame. That is a bound, not an absence of one: the
+exposure is a client forcing a 64 MiB allocation where the configured cap says
+64 KB, a factor of a thousand, and not unbounded memory. Our per-event size check
+runs after the frame is decoded, so it refuses the payload but does not prevent
+the allocation. This cannot be fixed at a reverse proxy, because neither nginx
+nor Caddy has a post-upgrade frame directive; the routes are an upstream change
+exposing `WebSocketConfig::max_message_size`, or a fork. File the upstream issue
+in this phase and note the exposure; do not write it down as a configuration
+line.
 
 **Done when:** the existing 1.0.2 Electron client connects to the Rust server,
 joins a lobby, exchanges signalling, and the lobby browser populates — with no
 client change whatsoever.
+
+**Delivered 2026-08-24**, in `AnotherCrewLink-Server` on `fix/deps-and-hardening`.
+The acceptance criterion was met with two unmodified installed 1.0.3 clients rather
+than one: both reached `ONSTREAM`, `/health` reported `connectionCount: 2` and
+`lobbiesCount: 1`. Items 1–8 are all in, and against the estimate above the phase
+took days rather than four weeks — that ratio is the number the decision point asks
+for, and it is worth reading with the caveat that this was the smallest piece by
+design and that the four-week figure was drawn for a human working week.
+
+What the code does that this section did not anticipate:
+
+- The lobby registry is owned as planned, and the three acceptance criteria in
+  item 2 are enforced: a 128-slot per-member channel whose overflow increments
+  `droppedFullBuffer`, one `serde_json::value::RawValue` rendered per event and
+  shared by every recipient, and no lock held across an await. `/health` reports
+  four counters — `droppedFullBuffer`, `refusedSignals`, `refusedOversize`,
+  `refusedMalformed` — where the Node server reported none.
+- The host of a lobby is the first socket to claim it, held until that socket
+  leaves. §3.4 named the two bug fixes; this is a third, found while porting: the
+  Node server let a later socket assert the role and take authority over lobby
+  settings from whoever already held it.
+- The wire test drives the reference `socket.io-client` across 22 checks, one of
+  which is item 8's deliberate omission of `transports: ['websocket']`.
+- Operational artefacts beyond item 7: a shell-less `HEALTHCHECK` built from a
+  second static binary (`docker/healthcheck.rs`) because the final image has no
+  curl to call `/health` with, a 19.8 MB image that stops in 581 ms, a systemd
+  unit under `deploy/`, `deny.toml` with a dated allow-list for duplicate majors,
+  and `.github/workflows/rust.yml` with a path filter mirrored into `build.yml`
+  so neither server's workflow runs for the other's changes.
+
+**The one item this phase leaves open is not ours to close.** The accepted risk
+above asks for an upstream issue against socketioxide about the missing inbound
+frame cap. It needs an account that is not the agent's, so the report is drafted
+at `docs/rust-port/socketioxide-frame-cap-issue.md` and filing it is a maintainer
+action. Everything else in P0+ is done and verified.
 
 > **Decision point — does the rest of the port proceed?**
 > P0+ is the last committed phase. It is deliberately the smallest useful piece
