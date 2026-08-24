@@ -52,6 +52,49 @@ export function shouldForceRelay(attempt: number): boolean {
 	return attempt >= RECONNECT_RELAY_AFTER;
 }
 
+/**
+ * Whether the next attempt to one peer should be forced through the relay.
+ *
+ * `shouldForceRelay` alone waits for two failures before it tries the relay, and each of
+ * those costs a connect timeout plus a backoff — the better part of a minute during which
+ * a player is simply missing from the conversation. Two things let it decide sooner, and
+ * both come from evidence the connection itself produced.
+ *
+ * **`relayCandidates` above zero means the relay answered.** The allocation succeeded, so
+ * the relay is reachable from this machine, and the direct path failed anyway. There is
+ * nothing to learn from failing at it a second time.
+ *
+ * **`relayCandidates` at zero means the allocation failed**, and forcing relay-only would
+ * be worse than doing nothing: with no relay candidate to offer there would be no
+ * candidate at all, so a connection that sometimes succeeds directly would stop succeeding
+ * ever. The honest answer there is that this client cannot fix it, and the log says so.
+ *
+ * **`otherPeersNeededRelay` carries the lobby's experience across peers.** What blocks a
+ * direct path is almost always the network at one end, not the pair, so the second peer to
+ * fail is evidence about the eleventh. Once one connection has needed the relay, later
+ * ones start there instead of each rediscovering it a minute at a time.
+ *
+ * `undefined` means nothing was observed — no failure yet, or a peer built before this
+ * client learned to count. It falls back to the attempt count, which is what the previous
+ * behaviour was.
+ */
+export function shouldUseRelay(options: {
+	attempt: number;
+	relayCandidates: number | undefined;
+	otherPeersNeededRelay: boolean;
+}): boolean {
+	const { attempt, relayCandidates, otherPeersNeededRelay } = options;
+
+	// Nothing gathered a relay candidate: relay-only would have no candidates at all.
+	// Checked before the lobby-wide signal, because "the relay works for somebody else"
+	// does not make it work from here.
+	if (relayCandidates === 0) return false;
+
+	if (otherPeersNeededRelay) return true;
+	if (relayCandidates !== undefined && relayCandidates > 0) return true;
+	return shouldForceRelay(attempt);
+}
+
 /** True once the attempt number is past what is worth trying. */
 export function shouldGiveUp(attempt: number): boolean {
 	return attempt > RECONNECT_MAX_ATTEMPTS;

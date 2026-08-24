@@ -192,6 +192,18 @@ export default class Peer {
 	}
 
 	/**
+	 * How many relay candidates this connection managed to gather.
+	 *
+	 * The single number that decides what to do about a failure. Above zero the relay is
+	 * reachable from this machine and a direct path lost anyway, so relay-only is worth
+	 * forcing. At zero the allocation itself failed, and relay-only would gather nothing
+	 * at all -- it would turn a connection that sometimes works into one that cannot.
+	 */
+	public relayCandidates(): number {
+		return this.gathered.relay ?? 0;
+	}
+
+	/**
 	 * A one-line summary of what this connection had to work with.
 	 *
 	 * `relay=0` is the answer to the question that has taken two rounds of guessing to

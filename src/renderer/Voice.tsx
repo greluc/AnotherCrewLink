@@ -19,7 +19,7 @@ import {
 	RECONNECT_RELAY_AFTER,
 	initiatesReconnect,
 	reconnectDelay,
-	shouldForceRelay,
+	shouldUseRelay,
 	shouldGiveUp,
 } from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
@@ -279,6 +279,8 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	// per socket id because the answering end builds its connection from an incoming offer
 	// and has to agree about the policy.
 	const relayedPeers = useRef<Record<string, boolean>>({});
+	/// How many relay candidates each peer's last failed connection gathered.
+	const relayCandidatesSeen = useRef<Record<string, number>>({});
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 	const reconnectAttempts = useRef<Record<string, number>>({});
@@ -641,6 +643,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		// here because this runs when the peer has left, and kept across a successful
 		// reconnect because the relay is what made that connection work.
 		delete relayedPeers.current[peer];
+		delete relayCandidatesSeen.current[peer];
 	}
 
 	function cancelAllReconnects() {
@@ -651,6 +654,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		reconnectAttempts.current = {};
 		// A new lobby is a new set of paths between people, so nothing is assumed about it.
 		relayedPeers.current = {};
+		relayCandidatesSeen.current = {};
 	}
 
 	function disconnectPeer(peer: string) {
@@ -1326,6 +1330,11 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						}
 					});
 					connection.on('error', (error: Error) => {
+						// Noted before the connection is torn down, because the reconnect
+						// decision is made later and by then this object is gone. Whether it
+						// gathered a relay candidate is the one fact that separates "force
+						// the relay now" from "forcing the relay would guarantee failure".
+						relayCandidatesSeen.current[peer] = connection.relayCandidates();
 						console.warn('Peer connection error for', peer, error);
 					});
 					return connection;
@@ -1362,11 +1371,27 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					}
 					reconnectAttempts.current[peer] = attempt;
 
-					// A direct path that has failed twice will keep failing: what is in the way
-					// is the network between the two ends, and waiting longer does not move it.
-					if (shouldForceRelay(attempt) && !relayedPeers.current[peer]) {
+					// A direct path that has failed will not be fixed by waiting: what is in
+					// the way is the network at one end, and it does not move. How soon to
+					// give up on it depends on what the failed attempt actually gathered --
+					// see `shouldUseRelay`, which is where the reasoning lives.
+					const relayCandidates = relayCandidatesSeen.current[peer];
+					if (
+						!relayedPeers.current[peer] &&
+						shouldUseRelay({
+							attempt,
+							relayCandidates,
+							otherPeersNeededRelay: Object.values(relayedPeers.current).some(Boolean),
+						})
+					) {
 						if (hasRelay(iceConfig)) {
-							console.log('Direct connection to', peer, 'keeps failing; switching to the relay');
+							console.log(
+								'Switching to the relay for',
+								peer,
+								relayCandidates === undefined
+									? `after ${attempt} attempts`
+									: `- it gathered ${relayCandidates} relay candidates, so the relay is reachable`
+							);
 							relayedPeers.current[peer] = true;
 						} else if (attempt === RECONNECT_RELAY_AFTER) {
 							console.warn(
@@ -1375,6 +1400,16 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 								'keeps failing and this server advertises no relay to fall back to'
 							);
 						}
+					} else if (relayCandidates === 0 && attempt === RECONNECT_RELAY_AFTER) {
+						// The case that looks like the relay is not configured and is not.
+						// Forcing relay-only here would leave the connection with no
+						// candidates at all, so it is deliberately not done.
+						console.warn(
+							'No relay candidate could be gathered for',
+							peer,
+							'- this machine cannot reach the relay, so forcing it would make things worse.',
+							'A relay reachable over TCP or TLS is what this network needs.'
+						);
 					}
 
 					const delay = reconnectDelay(attempt, initiatesReconnect(socket.id ?? '', peer));
