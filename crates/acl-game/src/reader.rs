@@ -726,11 +726,21 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_process_fails_the_frame_rather_than_inventing_one() {
-        // The client pointer is what a frame cannot do without. Everything downstream of
-        // it degrades; this does not.
+    fn an_empty_process_reads_as_a_menu_frame_rather_than_failing() {
+        // This test asserted the opposite until 2026-08-24, and the opposite was wrong.
+        // The Electron reader never fails a frame: a read that goes nowhere returns
+        // undefined, the value falls back, the lobby code comes out as "MENU" and that
+        // forces the state. A reader that gives up instead disagrees with it on every
+        // frame where the game is starting, closing or between rounds — thousands of them
+        // in a real session, and gate G1 counted every one.
         let empty = SparseProcess::new(false);
-        assert!(read_state(&empty, &offsets(), &context()).is_err());
+        let state = read_state(&empty, &offsets(), &context()).expect("a frame, not an error");
+        assert_eq!(state.game_state, GameState::Menu);
+        assert_eq!(state.lobby_code, "MENU");
+        assert!(state.players.is_empty());
+        // And the two fields that keep a starting value rather than a read one.
+        assert_eq!(state.max_players, 10);
+        assert!((state.light_radius - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -769,10 +779,15 @@ mod tests {
 
     #[test]
     fn a_self_referential_chain_is_refused_rather_than_followed_forever() {
-        // Reachable from a modded or corrupted game today.
+        // Reachable from a modded or corrupted game today. The refusal happens in
+        // `resolve_chain`, which is what stops the walk; the frame then degrades to a
+        // menu frame rather than failing, because that is what the Electron reader does
+        // with a pointer that goes nowhere.
         let offsets = offsets();
         let process = SparseProcess::new(false).with_pointer(0x1000_0000, 0x1000_0000);
-        assert!(read_state(&process, &offsets, &context()).is_err());
+        let state = read_state(&process, &offsets, &context()).expect("a frame, not an error");
+        assert_eq!(state.game_state, GameState::Menu);
+        assert!(state.players.is_empty());
     }
 
     #[test]
