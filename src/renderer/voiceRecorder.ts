@@ -11,9 +11,16 @@ import type { ILobbySettings, ISettings } from '../common/ISettings';
  * writes everything else onto live Web Audio nodes, so the answer is spread across a
  * graph. This captures both halves — the inputs, and the node state the call left behind.
  *
- * Reading the outputs back off the nodes rather than instrumenting the function's own
- * branches is deliberate. It leaves the decision untouched, and it records what actually
- * reached the graph rather than what the code meant to put there.
+ * Most outputs are read back off the nodes rather than captured inside the decision's own
+ * branches: it leaves the decision untouched, and it records what actually reached the
+ * graph rather than what the code meant to put there.
+ *
+ * The pan position is the exception, and it has to be. `setValueAtTime` *schedules* a
+ * value — `positionX.value` keeps returning the previous one until the audio thread
+ * reaches the next render quantum — so reading it back records the frame before. It is
+ * noted where it is applied instead, and left null when the decision returned before
+ * reaching that line, which is the honest answer for the three early returns: they leave
+ * the panner alone, and a leftover position is not something the call decided.
  *
  * # Turning it on
  *
@@ -55,8 +62,9 @@ interface RecordedPlayer {
 /** What the call left behind. */
 interface VoiceOutputs {
 	gain: number;
-	panX: number;
-	panY: number;
+	/** Null when the decision returned before placing the peer, which is not an answer. */
+	panX: number | null;
+	panY: number | null;
 	/** The muffle's settings if it is in the path, or null if it is not. */
 	muffle: { type: string; frequency: number; q: number } | null;
 	reverb: boolean;

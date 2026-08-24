@@ -24,6 +24,7 @@ import {
 } from './reconnectPolicy';
 import { ipcRenderer } from 'electron';
 import VAD from './vad';
+import { isVoiceRecording, noteVoice, startVoiceRecording } from './voiceRecorder';
 import type { ISettings, playerConfigMap, ILobbySettings } from '../common/ISettings';
 import { IpcRendererMessages, IpcMessages, IpcOverlayMessages, IpcHandlerMessages } from '../common/ipc-messages';
 import Typography from '@mui/material/Typography';
@@ -364,7 +365,52 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			console.log('error with applying effect: ', player.name, effectNode);
 		}
 	}
+	/**
+	 * The pan position the last decision applied, or null if it returned before doing so.
+	 *
+	 * Written by the decision at the point it reaches the panner, because that value
+	 * cannot be recovered afterwards: see the note there.
+	 */
+	let appliedPan: [number, number] | null = null;
+
+	/**
+	 * The voice decision, with its answer written down when recording.
+	 *
+	 * Gate G2's second criterion compares the Rust `voice_params` against this on every
+	 * recorded tuple, and the comparison needs both halves. The answer is not the return
+	 * value alone: pan position, the muffle's settings and whether reverb is in the path
+	 * are all written onto live nodes. They are read back off those nodes here rather
+	 * than captured inside the decision, which leaves the decision untouched and records
+	 * what actually reached the graph rather than what the code meant to put there.
+	 */
 	function calculateVoiceAudio(
+		state: AmongUsState,
+		settings: ISettings,
+		me: Player,
+		other: Player,
+		audio: AudioNodes
+	): number {
+		appliedPan = null;
+		const gain = calculateVoiceAudioInner(state, settings, me, other, audio);
+		if (isVoiceRecording()) {
+			noteVoice(state, settings, lobbySettings, me, other, maxDistanceRef.current, impostorRadioClientId.current, {
+				gain,
+				panX: appliedPan ? appliedPan[0] : null,
+				panY: appliedPan ? appliedPan[1] : null,
+				muffle: audio.muffleConnected
+					? {
+							type: audio.muffle.type,
+							frequency: audio.muffle.frequency.value,
+							q: audio.muffle.Q.value,
+						}
+					: null,
+				reverb: audio.reverbConnected === true,
+			});
+		}
+		return gain;
+	}
+
+	function calculateVoiceAudioInner(
 		state: AmongUsState,
 		settings: ISettings,
 		me: Player,
@@ -543,6 +589,13 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			panPos = [0, 0];
 		}
 
+		// Noted here rather than read back afterwards. `setValueAtTime` *schedules* a
+		// value: `positionX.value` keeps returning the previous one until the audio thread
+		// reaches the next render quantum, so reading it after the call records the frame
+		// before. Being null when this line is not reached is the other half of the
+		// signal — the three early returns leave the panner alone, and a leftover position
+		// is not an answer.
+		appliedPan = [panPos[0], panPos[1]];
 		pan.positionX.setValueAtTime(panPos[0], audioContext.currentTime);
 		pan.positionY.setValueAtTime(panPos[1], audioContext.currentTime);
 		pan.positionZ.setValueAtTime(-0.5, audioContext.currentTime);
@@ -764,6 +817,18 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		socketClientsRef.current = update(socketClientsRef.current);
 		setSocketClients(socketClientsRef.current);
 	};
+
+	// Turned on by the same ACL_RECORD that drives the memory recorder, so gate G1's
+	// frames and gate G2's tuples are captured from the same session and cannot be out of
+	// step with each other.
+	useEffect(() => {
+		ipcRenderer
+			.invoke(IpcHandlerMessages.REQUEST_VOICE_RECORDING)
+			.then((where: { userData: string; name: string } | null) => {
+				if (where) startVoiceRecording(where.userData, where.name);
+			})
+			.catch((error: unknown) => console.warn('Could not start recording voice decisions:', error));
+	}, []);
 
 	useEffect(() => {
 		if (

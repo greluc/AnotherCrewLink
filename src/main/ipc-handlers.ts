@@ -14,7 +14,7 @@ import spawn from 'cross-spawn';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { IpcMessages, type IpcOverlayMessages } from '../common/ipc-messages';
+import { IpcHandlerMessages, IpcMessages, type IpcOverlayMessages } from '../common/ipc-messages';
 
 // Listeners are fire and forget, they do not have "responses" or return values
 export const initializeIpcListeners = (): void => {
@@ -89,6 +89,13 @@ export const initializeIpcListeners = (): void => {
 // or the caller should be "await"'ing them.  If neither of these are the case
 // consider making it a "listener" instead for performance and readability
 export const initializeIpcHandlers = (): void => {
+	// The same ACL_RECORD that drives the memory recorder, so one variable turns on both
+	// halves of what gate G1 and G2 need and they cannot be captured out of step.
+	ipcMain.handle(IpcHandlerMessages.REQUEST_VOICE_RECORDING, () => {
+		const name = process.env.ACL_RECORD;
+		return name ? { userData: app.getPath('userData'), name } : null;
+	});
+
 	ipcMain.handle(IpcMessages.REQUEST_PLATFORMS_AVAILABLE, (_, customPlatforms: GamePlatformMap) => {
 		const desktop_platform = platform();
 

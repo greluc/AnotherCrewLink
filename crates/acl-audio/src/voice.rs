@@ -198,6 +198,17 @@ pub struct VoiceParams {
     pub reverb: bool,
     /// Whether the panner's `maxDistance` should be rewritten this frame.
     pub update_max_distance: bool,
+    /// Whether [`Self::pan`] is an answer or an absence.
+    ///
+    /// The Electron original returns 0 from three places without touching the graph, so
+    /// the panner keeps the position the previous frame left on it. `false` says this is
+    /// one of those: the peer is silent, and where they would have been placed is not
+    /// something this call decided.
+    ///
+    /// Audibly it makes no difference — a gain of zero is a gain of zero — but it is the
+    /// difference between comparing an answer and comparing a leftover, which is what
+    /// gate G2's tuples do.
+    pub placed: bool,
 }
 
 impl VoiceParams {
@@ -213,6 +224,7 @@ impl VoiceParams {
             muffle: None,
             reverb: false,
             update_max_distance: false,
+            placed: false,
         }
     }
 }
@@ -400,6 +412,7 @@ pub fn voice_params(
         muffle,
         reverb,
         update_max_distance: state.light_radius_changed,
+        placed: true,
     }
 }
 

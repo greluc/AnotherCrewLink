@@ -16,6 +16,7 @@ name = "acl-audio"
 version = "0.0.0"
 dependencies = [
  "acl-types",
+ "flate2",
  "serde",
  "serde_json",
 ]
