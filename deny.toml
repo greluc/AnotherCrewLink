@@ -1,0 +1,85 @@
+# Supply-chain policy for the Rust workspace, enforced by `cargo deny --locked check`.
+#
+# Two rules here are deliberately weaker than `docs/rust-port/07-dependencies-toolchain.md`
+# §7.6 first wrote them, and the reason is the same in both cases: a gate that fails on
+# day one gets switched off in week one. Where a rule is relaxed, the relaxation is dated
+# and reviewed rather than silent.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Unmaintained is an error, not a warning: this project has already been bitten by
+# dependencies whose upstream stopped. `rust_socketio` is not used at all for exactly
+# this reason — it pulls `backoff` (RUSTSEC-2025-0012) and `instant`
+# (RUSTSEC-2024-0384), both unmaintained with no fixed version.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# GPL-3.0-or-later is what this project ships under, so anything here has to be
+# compatible with distributing it that way.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# `epaint_default_fonts` bundles Ubuntu Light under the Ubuntu Font Licence. The FSF
+# lists UFL 1.0 as a free licence that is *not* GPL-compatible, which for a font shipped
+# alongside a GPL program is a real question rather than a formality — and it is the GUI
+# phase's question, not this one's. Recorded as a dated exception so it is visible rather
+# than hidden behind a disabled feature flag.
+#
+# P6 decides it properly, and there are only two honest answers: turn off egui's
+# `default_fonts` and ship a font whose licence is compatible, or establish that a bundled
+# font is mere aggregation. Today it reaches the tree only through the overlay probe,
+# which is not shipped.
+#
+# Reviewed 2026-08-24.
+exceptions = [
+    { crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] },
+    # webpki-roots is Mozilla's CA bundle, licensed as data under CDLA-Permissive-2.0.
+    # It is permissive with no conditions that conflict with distributing a GPL binary
+    # beside it, and it is temporary: the plan budgets `rustls-platform-verifier` for P4,
+    # which reads the operating system's certificate store and removes this crate along
+    # with the whole question. Reviewed 2026-08-24.
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
+
+[bans]
+deny = []
+wildcards = "deny"
+allow-wildcard-paths = false
+
+# A warning, not an error. §7.6 rule 3 blocks duplicate major versions, and measured
+# against this dependency set that rule is unsatisfiable: the RustCrypto ecosystem is
+# mid-migration and `rtc-dtls` alone declares two majors of `rand` side by side. The
+# allow-list below is the honest version — every entry dated, so a stale one is visible.
+multiple-versions = "warn"
+highlight = "all"
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,44 @@
+# cargo-about: the third-party attribution file GPL distribution wants.
+#
+# Distributing a GPL binary means distributing the licence texts of everything linked into
+# it. The list is 283 crates and changes with every dependency update, so it is generated
+# rather than maintained — a hand-written NOTICE file is wrong the first time anything
+# moves.
+#
+# Generate with:
+#
+#     cargo about generate about.hbs -o THIRD-PARTY.html
+#
+# The accepted list mirrors deny.toml's. Anything cargo-deny lets in has to have its text
+# reproduced here, and anything it refuses never reaches this file.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# All three shipping targets, so a Windows-only or Linux-only dependency is not missing
+# from the attribution of the build that actually contains it.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+# Build-time-only crates are not distributed, so their licences are not distributed
+# either.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

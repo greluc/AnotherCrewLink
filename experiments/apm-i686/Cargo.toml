@@ -1,0 +1,15 @@
+[package]
+name = "apm-i686"
+description = "P1+ experiment 2 / gate G2 precondition (a): does the chosen echo canceller build for 32-bit Windows?"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# sonora, not webrtc-audio-processing: the latter does not compile for either Windows
+# target, and Windows is where the users are. See docs/rust-port/08-dependency-review.md
+# section 2.2.
+sonora = "0.2.0"

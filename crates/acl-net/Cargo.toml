@@ -1,0 +1,23 @@
+[package]
+name = "acl-net"
+description = "Socket.IO signalling for AnotherCrewLink: the wire protocol, the session and the reconnect policy."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "process"] }
+
+[lints]
+workspace = true

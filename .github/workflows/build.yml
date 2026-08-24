@@ -6,7 +6,33 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    # The Rust workspace has its own workflow. A push that touches only it changes nothing
+    # this job builds, lints or tests, so skip it rather than rerunning the Electron build
+    # and both installers for it. rust.yml carries the mirror image of this filter.
+    # Everything else — src/, static/, package.json — still triggers a run, because
+    # paths-ignore only skips when every changed path matches.
+    paths-ignore:
+      - 'crates/**'
+      - 'experiments/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths-ignore:
+      - 'crates/**'
+      - 'experiments/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
 
 jobs:
   build:

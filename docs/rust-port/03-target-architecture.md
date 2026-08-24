@@ -16,6 +16,7 @@ AnotherCrewLink/
 │   ├── acl-audio/             # capture, APM, codec, jitter buffer, DSP graph, mix
 │   ├── acl-net/               # socket.io client, WebRTC peers, signalling
 │   ├── acl-platform/          # keyboard poll, overlay window, autostart, paths
+│   ├── acl-i18n/              # the i18next locale tree, flattened once at start-up
 │   ├── acl-ipc/               # helper ↔ core: postcard message types, framing
 │   ├── acl-app/               # orchestration: state machine wiring the above
 │   ├── acl-ui/                # egui views: main, settings, lobby browser, overlay
@@ -30,6 +31,11 @@ AnotherCrewLink/
     ├── golden/                 # vectors captured from the Electron build
     └── interop/                # 1.x ↔ 2.x connection tests
 ```
+
+`acl-i18n` was added in `P1+` and is not in the original tree. The loader has to read
+files and parse JSON, and `acl-types` is the crate that must stay free of both so the
+gates can test it in isolation. Putting the strings in the GUI crate would have been
+worse still: `P6` is the last phase, and the loader is wanted long before it.
 
 `acl-types`, `acl-game`, `acl-audio` and `acl-net` must all build and test
 with no GUI dependency. That is what makes the go/no-go gates possible.

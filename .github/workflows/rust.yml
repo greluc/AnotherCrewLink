@@ -1,0 +1,244 @@
+name: Rust
+
+concurrency:
+  # Includes the workflow name, for the reason spelled out in codeql.yml: without it every
+  # workflow on the same ref shares one group and they cancel each other.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: ['**']
+    # The Electron client is what ships today and has its own workflow. A push that
+    # touches only it must not spend minutes compiling Rust, and build.yml carries the
+    # mirror image of this filter so the reverse holds too.
+    paths:
+      - 'crates/**'
+      - 'experiments/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'experiments/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Nothing here is reused between runs, so incremental artefacts are written and thrown
+  # away.
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    # Format and lint once. They are target-independent, and running them three times
+    # would only make the same complaint three times.
+    runs-on: windows-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # rust-toolchain.toml pins 1.98.0 and names rustfmt, clippy and all three targets,
+      # so rustup installs exactly that on the first cargo invocation. Doing it in a step
+      # of its own means a toolchain problem reports itself as a toolchain problem.
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      # cargo fmt resolves no dependencies and takes no --locked; every command below that
+      # does resolve them has it.
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The collider tables are generated. If regenerating them changes the committed
+      # file, the two have drifted and the walls in the Rust client are not the walls in
+      # the Electron one.
+      - name: The generated collider tables match their source
+        run: |
+          node scripts/port-collider-data.mjs
+          git diff --exit-code crates/acl-types/src/collider_data.rs
+
+  test:
+    strategy:
+      # One target's failure must not hide another's, and i686 is the one most likely to
+      # differ.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      # eframe links against the system's windowing and GL stack. Without these the Linux
+      # leg fails at link time with an error about a missing .so rather than anything to
+      # do with this code.
+      - name: Install the Linux windowing libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-3-dev libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
+
+      - name: Build
+        run: cargo build --locked --workspace --all-targets --target ${{ matrix.target }}
+
+      # 32-bit binaries run on a 64-bit Windows host, so this is a real run rather than a
+      # cross-compile check.
+      # The conformance test drives this client against the Rust server, which is itself
+      # verified against the reference socket.io-client from Node. Checking out a second
+      # repository to run it is the price of testing against an implementation that did
+      # not come from this one.
+      - name: Check out the server
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: greluc/AnotherCrewLink-Server
+          path: server
+
+      - name: Build the server
+        working-directory: server
+        run: cargo build --locked
+
+      - name: Test
+        env:
+          ACL_SERVER_BIN: ${{ runner.os == 'Windows' && 'server/target/debug/acl-server.exe' || 'server/target/debug/acl-server' }}
+        run: cargo test --locked --workspace --target ${{ matrix.target }}
+
+  overlay-linux:
+    # The Linux leg of experiment 1. Windows answers it locally by asking the OS for the
+    # window's extended styles; here the question is narrower and still worth asking —
+    # does eframe start, get a transparent surface and exit cleanly under a software
+    # renderer, or does it take the whole process down.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install the Linux windowing libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-3-dev libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libegl1-mesa-dev xvfb
+
+      - name: Run the overlay probe under a virtual display
+        env:
+          # llvmpipe. A runner has no GPU, and the failure this experiment is looking for
+          # is renderer-specific — so naming the renderer is part of the result rather
+          # than an implementation detail.
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args='-screen 0 1280x800x24' \
+            cargo run --locked -p overlay-probe 2>&1 | tee probe.log
+          grep -q 'RESULT arch=linux' probe.log
+
+  deny:
+    # Advisories, licences, duplicate versions and crate sources — the policy is in
+    # deny.toml. Split out so a supply-chain failure is legible at a glance and does not
+    # hide behind a compile error.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      # Pinned to the version this policy was written and verified against. cargo-deny
+      # reads deny.toml and its schema moves between releases, so an unpinned install
+      # would let an upstream release turn a green gate red with nothing changed here.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Check dependencies
+        run: cargo deny --locked check
+
+      # Pinned for the same reason cargo-deny is: the store format moves between
+      # releases, and an unpinned install turns a green gate red with nothing changed
+      # here.
+      - name: Install cargo-vet
+        run: cargo install cargo-vet --locked --version 0.10.2
+
+      # This passes on exemptions rather than audits — 38 of 283 crates are covered, and
+      # supply-chain/README.md says so in as many words. What it catches is a *new*
+      # unaudited dependency arriving unnoticed.
+      - name: Check the audit store
+        run: cargo vet --locked
+
+  attribution:
+    # Distributing a GPL binary means distributing the licence texts of everything linked
+    # into it. The file is generated rather than committed, so this checks that it can
+    # still be generated — a dependency with an unrecognised licence fails here rather
+    # than at release time.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version 0.9.2 --features cli
+
+      - name: Generate the third-party attribution
+        run: cargo about generate about.hbs -o THIRD-PARTY.html
+
+      - name: It is not empty
+        run: |
+          test -s THIRD-PARTY.html
+          grep -q '<h2>' THIRD-PARTY.html
+
+  auditable:
+    # A shipped binary carries its own dependency list, so `cargo audit bin` still works
+    # against an artefact months after the tree that built it moved on. Proving that here
+    # means the release build in P7 inherits a mechanism that is known to work rather than
+    # one that was written down.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install cargo-auditable and cargo-audit
+        run: cargo install cargo-auditable cargo-audit --locked
+
+      - name: Build with an embedded dependency list
+        run: cargo auditable build --locked --release -p apm-i686
+
+      - name: The list is actually in the binary
+        run: cargo audit bin target/release/apm-i686

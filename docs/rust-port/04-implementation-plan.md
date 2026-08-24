@@ -465,6 +465,74 @@ de-risk the two most expensive phases are run here rather than discovered later.
    which is a G2 criterion and the one thing that decides whether the audio phase
    has an APM at all.
 
+**P1+ delivered 2026-08-24.** All nine items are in, in the client repository:
+`Cargo.toml`, `rust-toolchain.toml`, `.cargo/config.toml`, `deny.toml`,
+`supply-chain/`, `about.toml`, `crates/acl-types`, `crates/acl-net`,
+`crates/acl-i18n`, `crates/acl-ipc`, `experiments/` and
+`.github/workflows/rust.yml`. 58 tests, clippy silent under `-D warnings` with
+`pedantic` on, and `cargo deny` green on all four checks.
+
+**Both experiments came back positive, and both were worth running.**
+
+- A transparent, click-through, always-on-top window exists on `x86_64` and
+  `i686` Windows with identical extended styles — `WS_EX_LAYERED`,
+  `WS_EX_TRANSPARENT`, `WS_EX_TOPMOST`. The GUI phase can be planned around a
+  single-process overlay after all. The Linux leg runs in CI under llvmpipe.
+- `sonora` builds for `i686-pc-windows-msvc` and its own suite passes there: 515
+  tests in debug, 713 in release. That closes gate G2's precondition (a), which
+  this document called genuinely unproven, and it is the release number that
+  counts because that is where the SIMD paths are taken. G2's other two
+  preconditions are untouched — the A/B echo-return-loss measurement needs real
+  captures, and sonora's bus factor of one is not a thing a test run changes.
+
+**Six corrections this phase made to the document.**
+
+1. `eframe ^0.61.2` is not a version that exists. The current release is 0.36.1,
+   and its `App` trait has split `update` into `logic` and `ui` since whatever
+   this figure was taken from.
+2. The overlay probe's first result was a false negative — all three style bits
+   clear — because it read `GetForegroundWindow()`. A click-through window with
+   no taskbar button never becomes the foreground window, so it was reporting the
+   console's styles. A probe that asks the OS a question must be sure it is asking
+   about the right object.
+3. §4.8's "not one interpolation placeholder across 4,736 strings" is now off by
+   one, by H2's hand: `reset_offsets_done` carries `{{version}}`. The loader
+   carries the smallest possible substitution and nothing more.
+4. The bundle's function RVAs are placeholders — already recorded under H2, and it
+   is what decided where `acl-types`'s bounds went.
+5. `postcard`'s default feature pulls `heapless` 0.7 and through it
+   `atomic-polyfill`, unmaintained under RUSTSEC-2023-0089. Neither side of the
+   IPC boundary is `no_std`, so the feature is off. The dependency gate caught
+   that on its first real dependency, which is the argument for having it.
+6. `acl-i18n` is a crate the architecture tree did not have. See
+   [03-target-architecture.md](03-target-architecture.md) for why it is not part
+   of `acl-types`.
+
+**What cargo-vet actually buys, measured rather than claimed.** With Mozilla's,
+Google's and the Bytecode Alliance's shared sets imported: 38 of 316 crates
+covered, 278 exemptions. `sonora`, `eframe`, `egui`, `winit`, `x11rb`,
+`windows-sys`, `kurbo`, `serde_json`, `tokio-tungstenite` and `webpki-roots` have
+no audit in any shared set; `postcard` does. The count moved from 283 when the
+WebSocket transport landed, and the gate failed until the new crates were written
+down. §8 asked that this be said plainly instead of letting a
+supply-chain table imply coverage that does not exist, and `supply-chain/README.md`
+says it.
+
+**Item 6's conformance test found two bugs, both mine.** It asserted the two
+session ids differ — true of the Node implementation, false of socketioxide,
+which reuses one value. A client that wrongly addressed itself by the transport id
+would therefore pass against our server and break against a Node one. And it
+called `join` with three arguments where the server deserialises four into a
+tuple, counts a short one as malformed and disconnects. Two implementations
+meeting in the middle is the only arrangement where either would have shown up.
+
+**Still open from item 6, and named rather than absorbed:** certificate
+verification uses webpki's bundled roots rather than the platform store, and there
+is no proxy resolution. Chromium supplied both for free. They are budgeted here as
+`P4` line items and the symptom of not having them — a user behind a
+TLS-inspecting corporate proxy cannot connect at all — is written into
+`transport.rs` where someone will meet it.
+
 ## 4.4 Phase 2 — Game reader (6 weeks) → **Gate G1**
 
 **Why 6 and not 4:** the reader consumes a mirrored, commit-pinned offsets bundle
