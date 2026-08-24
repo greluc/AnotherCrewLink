@@ -273,7 +273,18 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const [socketClients, setSocketClients] = useState<SocketClientMap>({});
 	const [playerConfigs] = useState<playerConfigMap>(settingsRef.current.playerConfigMap);
 	const socketClientsRef = useRef(socketClients);
-	const [peerConnections, setPeerConnections] = useState<PeerConnections>({});
+	// A ref, not state, and deliberately. Nothing renders from this map: it is how the
+	// socket handlers find the connection a signal belongs to, and those handlers are
+	// registered once, in an effect with no dependencies.
+	//
+	// It was `useState`, and it worked only by accident. The updater mutated the object and
+	// returned it rather than building a new one, so React never saw a change and never
+	// replaced the object -- which meant the empty object those handlers captured on the
+	// first render stayed the live map. Anybody correcting that to the immutable update
+	// React actually asks for would have severed every one of those closures at once, and
+	// the symptom would have been connections that never complete: a network bug, to look
+	// at, with nothing in the diff to suggest otherwise.
+	const peerConnections = useRef<PeerConnections>({});
 	// Last reason a player was inaudible, per client id, so the log records the change
 	// rather than the same line on every pass. See describeSilence.
 	const silenceReason = useRef<Record<number, string>>({});
@@ -666,17 +677,14 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 	function disconnectPeer(peer: string) {
 		console.log('Disconnect peer: ', peer);
-		const connection = peerConnections[peer];
+		const connection = peerConnections.current[peer];
 		if (!connection) {
 			return;
 		}
 		// Drop it from the map before destroying it. destroy() emits close synchronously,
 		// and that handler treats a connection still listed here as one that broke on its
 		// own and schedules a rebuild, which is wrong for a teardown we asked for.
-		setPeerConnections((connections) => {
-			delete connections[peer];
-			return connections;
-		});
+		delete peerConnections.current[peer];
 		connection.destroy();
 		disconnectAudioElement(peer);
 		// Set when a stream arrives and never taken back, so a player whose connection
@@ -701,7 +709,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	// Emit lobby settings to connected peers
 	useEffect(() => {
 		if (hostRef.current.isHost !== true) return;
-		Object.values(peerConnections).forEach((peer) => {
+		Object.values(peerConnections.current).forEach((peer) => {
 			try {
 				console.log('sendxx > ', JSON.stringify(settings.localLobbySettings));
 				peer.send(JSON.stringify(settings.localLobbySettings));
@@ -955,7 +963,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		impostorRadioClientId.current = pressing ? myPlayer.clientId : -1;
 		for (const player of otherPlayers.filter((o) => o.isImpostor && !o.bugged && !o.isDead)) {
 			const peer = playerSocketIdsRef.current[player.clientId];
-			const connection = peerConnections[peer];
+			const connection = peerConnections.current[peer];
 			if (connection?.writable)
 				connection?.send(JSON.stringify({ impostorRadio: connectionStuff.current.impostorRadio }));
 		}
@@ -1186,7 +1194,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					setOtherTalking({});
 					if (lobbyCode === 'MENU') {
 						cancelAllReconnects();
-						Object.keys(peerConnections).forEach((k) => {
+						Object.keys(peerConnections.current).forEach((k) => {
 							disconnectPeer(k);
 						});
 						updateSocketClients(() => ({}));
@@ -1207,9 +1215,9 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					disconnectClient(client);
 					// Replacing an entry without destroying the previous instance leaked it and
 					// left it able to fire close for a peer it no longer owns.
-					const previous = peerConnections[peer];
+					const previous = peerConnections.current[peer];
 					if (previous) {
-						delete peerConnections[peer];
+						delete peerConnections.current[peer];
 						previous.destroy();
 					}
 					// Relay when the user asked for it, or when this peer's direct path has
@@ -1224,10 +1232,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						console.log('Connecting to', peer, 'through a relay');
 					}
 
-					setPeerConnections((connections) => {
-						connections[peer] = connection;
-						return connections;
-					});
+					peerConnections.current[peer] = connection;
 
 					connection.on('connect', () => {
 						// The connection came up, so the next failure starts its backoff from
@@ -1347,7 +1352,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						// Only tear down if this is still the live connection. On offer glare a
 						// replacement is created for the same peer, and the old instance closing
 						// afterwards used to destroy that replacement, permanently muting the pair.
-						if (peerConnections[peer] === connection) {
+						if (peerConnections.current[peer] === connection) {
 							disconnectPeer(peer);
 							scheduleReconnect(peer);
 						}
@@ -1454,7 +1459,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						if (!client || currentLobby === '' || currentLobby === 'MENU') return;
 						// The other end got there first, or the socket is down and rejoining the
 						// lobby will produce a fresh connection anyway.
-						if (peerConnections[peer]) return;
+						if (peerConnections.current[peer]) return;
 						if (!socket.connected) return;
 						console.log('Rebuilding the connection to', peer, '- attempt', attempt);
 						createPeerConnection(peer, true, client);
@@ -1494,7 +1499,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 					// Only signals carrying a `type` used to be forwarded, so trickled ICE
 					// candidates, which have no type, were dropped outright. Connections then
 					// depended on whatever candidates happened to be in the initial SDP.
-					const existing = peerConnections[from];
+					const existing = peerConnections.current[from];
 					const isOffer = 'type' in data && data.type === 'offer';
 					if (isOffer) {
 						connection = createPeerConnection(from, false, client);
@@ -1521,7 +1526,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			hostRef.current.mobileRunning = false;
 			cancelAllReconnects();
 			socket.emit('leave');
-			Object.keys(peerConnections).forEach((k) => {
+			Object.keys(peerConnections.current).forEach((k) => {
 				disconnectPeer(k);
 			});
 			connectionStuff.current.socket?.close();
@@ -1734,7 +1739,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			// On change from a game to menu, exit from the current game properly
 			hostRef.current.mobileRunning = false; // On change from a game to menu, exit from the current game properly
 			connectionStuff.current.socket?.emit('leave');
-			Object.keys(peerConnections).forEach((k) => {
+			Object.keys(peerConnections.current).forEach((k) => {
 				disconnectPeer(k);
 			});
 			setOtherDead({});
