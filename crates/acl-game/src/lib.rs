@@ -6,6 +6,7 @@
 //! recorded frames and a fuzzer explore the same code without a game running.
 
 pub mod memory;
+pub mod scan;
 pub mod sparse;
 
 #[cfg(target_os = "linux")]
