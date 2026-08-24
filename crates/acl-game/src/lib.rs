@@ -5,10 +5,14 @@
 //! takes a `&dyn ProcessMemory` and returns a `Result`, which is what lets gate G1 replay
 //! recorded frames and a fuzzer explore the same code without a game running.
 
+pub mod dotnet;
+pub mod injection;
 pub mod memory;
+pub mod mods;
 pub mod offsets;
 pub mod scan;
 pub mod sparse;
+pub mod state;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -17,3 +21,4 @@ pub mod windows;
 
 pub use memory::{MAX_CHAIN_DEPTH, MAX_ELEMENTS, Module, ProcessMemory, ReadError};
 pub use sparse::{Region, SparseProcess};
+pub use state::{AmongUsState, GameState, Player};
