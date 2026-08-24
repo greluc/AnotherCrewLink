@@ -16,7 +16,7 @@
 use acl_types::map::MapType;
 
 use crate::dotnet::read_dictionary;
-use crate::memory::{ProcessMemory, read_pointer};
+use crate::memory::{ProcessMemory, read_pointer, resolve_chain};
 
 /// The Electron reader's `CameraLocation.NONE`, which is a value rather than an absence.
 pub const CAMERA_NONE: u32 = 7;
@@ -78,34 +78,39 @@ impl Default for Systems {
 /// Passed as a struct rather than threaded through thirteen arguments, and every field is
 /// optional because a bundle for an older build may not carry all of them — a missing
 /// offset means that one reading is skipped, not that the frame fails.
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// Each is a **chain**, not a single offset. Six of these are two steps long in the real
+/// bundles — `hqHudSystemType_CompletedConsoles`, both decontamination doors, the camera
+/// count and the filtered-room count — and reading only the first step lands on a pointer
+/// rather than on the value it points at.
+#[derive(Debug, Clone, Default)]
 pub struct SystemOffsets {
     /// `shipStatus_systems`, the dictionary of sabotage systems.
-    pub systems: Option<i64>,
+    pub systems: Option<Vec<i64>>,
     /// `HudOverrideSystemType_isActive`, on every map but Mira HQ.
-    pub hud_override_active: Option<i64>,
+    pub hud_override_active: Option<Vec<i64>>,
     /// `hqHudSystemType_CompletedConsoles`, Mira HQ's counter.
-    pub mira_completed_consoles: Option<i64>,
+    pub mira_completed_consoles: Option<Vec<i64>>,
     /// `deconDoorLowerOpen`.
-    pub decon_lower_open: Option<i64>,
+    pub decon_lower_open: Option<Vec<i64>>,
     /// `deconDoorUpperOpen`.
-    pub decon_upper_open: Option<i64>,
+    pub decon_upper_open: Option<Vec<i64>>,
     /// `shipstatus_allDoors`.
-    pub all_doors: Option<i64>,
+    pub all_doors: Option<Vec<i64>>,
     /// `playerCount`, which the door table reuses as its length field.
-    pub count: Option<i64>,
+    pub count: Option<Vec<i64>>,
     /// `playerAddrPtr`, which the door table reuses as its first element.
-    pub first_element: Option<i64>,
+    pub first_element: Option<Vec<i64>>,
     /// `door_isOpen`.
-    pub door_is_open: Option<i64>,
+    pub door_is_open: Option<Vec<i64>>,
     /// `objectCachePtr`, which says whether a minigame is actually open.
-    pub object_cache: Option<i64>,
+    pub object_cache: Option<Vec<i64>>,
     /// `planetSurveillanceMinigame_currentCamera`.
-    pub current_camera: Option<i64>,
+    pub current_camera: Option<Vec<i64>>,
     /// `planetSurveillanceMinigame_camarasCount`.
-    pub camera_count: Option<i64>,
+    pub camera_count: Option<Vec<i64>>,
     /// `surveillanceMinigame_FilteredRoomsCount`.
-    pub filtered_rooms: Option<i64>,
+    pub filtered_rooms: Option<Vec<i64>>,
 }
 
 /// Reads the sabotage systems, the cameras and the door table.
@@ -138,7 +143,7 @@ fn read_sabotage(
     offsets: &SystemOffsets,
     into: &mut Systems,
 ) {
-    let Some(systems_ptr) = at(memory, ship, offsets.systems, read_ptr) else {
+    let Some(systems_ptr) = at(memory, ship, offsets.systems.as_ref(), read_ptr) else {
         return;
     };
     if systems_ptr == 0 {
@@ -159,18 +164,28 @@ fn read_sabotage(
         if key == SYSTEM_COMMS {
             into.coms_sabotaged = if map == MapType::MiraHq {
                 // Mira HQ counts consoles instead of carrying a flag.
-                at(memory, value, offsets.mira_completed_consoles, read_u32)
-                    .is_some_and(|done| done < MIRA_CONSOLES_FOR_CLEAR)
+                at(
+                    memory,
+                    value,
+                    offsets.mira_completed_consoles.as_ref(),
+                    read_u32,
+                )
+                .is_some_and(|done| done < MIRA_CONSOLES_FOR_CLEAR)
             } else {
-                at(memory, value, offsets.hud_override_active, read_u32) == Some(1)
+                at(
+                    memory,
+                    value,
+                    offsets.hud_override_active.as_ref(),
+                    read_u32,
+                ) == Some(1)
             };
         } else if key == SYSTEM_DECONTAMINATION && map == MapType::MiraHq {
             // A decontamination door counts as a closed door for the collider, and the
             // two halves are reported separately.
-            if at(memory, value, offsets.decon_lower_open, read_i32) == Some(0) {
+            if at(memory, value, offsets.decon_lower_open.as_ref(), read_i32) == Some(0) {
                 into.closed_doors.push(0);
             }
-            if at(memory, value, offsets.decon_upper_open, read_i32) == Some(0) {
+            if at(memory, value, offsets.decon_upper_open.as_ref(), read_i32) == Some(0) {
                 into.closed_doors.push(1);
             }
         }
@@ -188,7 +203,7 @@ fn read_camera(
 ) {
     // A minigame pointer outlives the minigame it described, which is why the cache
     // pointer is checked: it is what says the console is open now rather than last used.
-    let open = at(memory, minigame, offsets.object_cache, read_ptr).unwrap_or(0) != 0;
+    let open = at(memory, minigame, offsets.object_cache.as_ref(), read_ptr).unwrap_or(0) != 0;
     let Some(position) = local_position else {
         return;
     };
@@ -198,8 +213,8 @@ fn read_camera(
 
     match map {
         MapType::Polus | MapType::Airship => {
-            let camera = at(memory, minigame, offsets.current_camera, read_u32);
-            let count = at(memory, minigame, offsets.camera_count, read_u32);
+            let camera = at(memory, minigame, offsets.current_camera.as_ref(), read_u32);
+            let count = at(memory, minigame, offsets.camera_count.as_ref(), read_u32);
             // The count check rejects a stale or half-initialised minigame, whose camera
             // index would otherwise be believed.
             if let Some(camera) = camera
@@ -212,7 +227,7 @@ fn read_camera(
         // The Skeld's minigame carries no camera index — there is one console, so
         // standing at it is the test.
         MapType::TheSkeld | MapType::TheSkeldApril
-            if at(memory, minigame, offsets.filtered_rooms, read_u32)
+            if at(memory, minigame, offsets.filtered_rooms.as_ref(), read_u32)
                 == Some(SKELD_FILTERED_ROOMS) =>
         {
             let dx = position.0 - SKELD_CAMERA.0;
@@ -236,14 +251,21 @@ fn read_doors(
     if map == MapType::MiraHq {
         return;
     }
-    let Some(all_doors) = at(memory, ship, offsets.all_doors, read_ptr) else {
+    let Some(all_doors) = at(memory, ship, offsets.all_doors.as_ref(), read_ptr) else {
         return;
     };
-    let Some(count) = at(memory, all_doors, offsets.count, read_i32) else {
+    let Some(count) = at(memory, all_doors, offsets.count.as_ref(), read_i32) else {
         return;
     };
     let count = count.clamp(0, MAX_DOORS);
-    let Some(first) = offsets.first_element else {
+    // Used as arithmetic rather than as a chain: it names where the array starts, and
+    // the element index is added to it.
+    let Some(first) = offsets
+        .first_element
+        .as_ref()
+        .and_then(|c| c.first())
+        .copied()
+    else {
         return;
     };
     let stride = if memory.is_64bit() { 8 } else { 4 };
@@ -257,7 +279,7 @@ fn read_doors(
         };
         // Only a door that reads as explicitly open is open. An unreadable one counts as
         // shut, which errs towards blocking audio rather than leaking it through a wall.
-        if at(memory, door, offsets.door_is_open, read_i32) != Some(1)
+        if at(memory, door, offsets.door_is_open.as_ref(), read_i32) != Some(1)
             && let Ok(index) = u32::try_from(index)
         {
             into.closed_doors.push(index);
@@ -271,17 +293,18 @@ fn element(base: u64, first: i64, index: i32, stride: i64) -> Option<u64> {
     base.checked_add_signed(first.checked_add(step)?)
 }
 
-/// Reads through an optional offset, or gives `None` if the bundle does not carry it.
+/// Walks an optional chain and reads what it lands on, or gives `None` if the bundle does
+/// not carry the field.
 fn at<T>(
     memory: &dyn ProcessMemory,
     base: u64,
-    offset: Option<i64>,
+    chain: Option<&Vec<i64>>,
     read: fn(&dyn ProcessMemory, u64) -> Option<T>,
 ) -> Option<T> {
     if base == 0 {
         return None;
     }
-    read(memory, base.checked_add_signed(offset?)?)
+    read(memory, resolve_chain(memory, base, chain?).ok()?)
 }
 
 fn read_ptr(memory: &dyn ProcessMemory, address: u64) -> Option<u64> {
@@ -342,20 +365,22 @@ mod tests {
     }
 
     fn offsets() -> SystemOffsets {
+        // Single-step chains, because the layout below is hand-built. The real bundles
+        // give six of these as two steps, which is what `resolve_chain` is here for.
         SystemOffsets {
-            systems: Some(0x30),
-            hud_override_active: Some(0x8),
-            mira_completed_consoles: Some(0xc),
-            decon_lower_open: Some(0x10),
-            decon_upper_open: Some(0x14),
-            all_doors: Some(0x40),
-            count: Some(0x8),
-            first_element: Some(0x10),
-            door_is_open: Some(0x14),
-            object_cache: Some(0x4),
-            current_camera: Some(0x20),
-            camera_count: Some(0x24),
-            filtered_rooms: Some(0x28),
+            systems: Some(vec![0x30]),
+            hud_override_active: Some(vec![0x8]),
+            mira_completed_consoles: Some(vec![0xc]),
+            decon_lower_open: Some(vec![0x10]),
+            decon_upper_open: Some(vec![0x14]),
+            all_doors: Some(vec![0x40]),
+            count: Some(vec![0x8]),
+            first_element: Some(vec![0x10]),
+            door_is_open: Some(vec![0x14]),
+            object_cache: Some(vec![0x4]),
+            current_camera: Some(vec![0x20]),
+            camera_count: Some(vec![0x24]),
+            filtered_rooms: Some(vec![0x28]),
         }
     }
 

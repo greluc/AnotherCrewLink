@@ -132,13 +132,14 @@ pub fn read_state(
         }
     }
 
+    // `lightRadius` is a two-step chain in every bundle in the corpus.
     let light_radius = local_player
         .as_ref()
         .and_then(|player| {
-            read_f32_at(
+            read_f32_chain(
                 memory,
                 player.object_ptr,
-                first_offset(offsets, "lightRadius"),
+                top_level_chain(offsets, "lightRadius"),
             )
         })
         .unwrap_or(-1.0);
@@ -241,6 +242,113 @@ pub fn read_state(
     })
 }
 
+/// Walks a chain the bundle may not have.
+fn follow(
+    memory: &dyn ProcessMemory,
+    base: u64,
+    chain: Option<Vec<i64>>,
+) -> Result<u64, ReadError> {
+    let chain = chain.ok_or(ReadError::Chain {
+        step: 0,
+        reason: "this build's offsets do not have the field",
+    })?;
+    let at = resolve_chain(memory, base, &chain)?;
+    read_pointer(memory, at)
+}
+
+fn read_u32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<u32> {
+    let at = base.checked_add_signed(offset?)?;
+    let mut raw = [0u8; 4];
+    memory.read_exact(at, &mut raw).ok()?;
+    Some(u32::from_le_bytes(raw))
+}
+
+fn read_i32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<i32> {
+    // The lobby code is stored as a signed value and read as one; reinterpreting the bits
+    // is the point rather than a conversion.
+    read_u32_at(memory, base, offset).map(|value| i32::from_ne_bytes(value.to_ne_bytes()))
+}
+
+fn read_u8_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<u8> {
+    let at = base.checked_add_signed(offset?)?;
+    let mut raw = [0u8; 1];
+    memory.read_exact(at, &mut raw).ok()?;
+    raw.first().copied()
+}
+
+/// Walks a chain and reads a float from where it lands.
+///
+/// The single-offset readers beside this one are for fields the bundles really do give as
+/// one step. Everything with a longer chain has to come through here: resolving only the
+/// first step of `[140, 16]` reads the pointer, not the value.
+fn read_f32_chain(memory: &dyn ProcessMemory, base: u64, chain: Option<Vec<i64>>) -> Option<f32> {
+    let at = resolve_chain(memory, base, &chain?).ok()?;
+    let mut bytes = [0u8; 4];
+    memory.read_exact(at, &mut bytes).ok()?;
+    Some(f32::from_le_bytes(bytes))
+}
+
+/// The byte offset of a named member of the player struct, and how wide it is.
+///
+/// `objectPtr`, `taskPtr`, `outfitsPtr`, `rolePtr`, `disconnected`, `dead` and `id` are
+/// **not** fields of `offsets.player`. They are entries of `offsets.player.struct`, a
+/// structron layout the Electron reader parses out of the record buffer, and until
+/// 2026-08-24 this reader looked for them in the wrong place. `player_chain` returned
+/// `None` for every one of them, `follow` turned that into an error, and `read_player`
+/// returned `None` for every record — so against any real bundle the player list came out
+/// empty. No test caught it because no test had ever populated one.
+///
+/// The layout is sequential, as structron builds it: `SKIP` advances by its `skip`, and a
+/// typed member occupies its own width. Across all 44 bundles in the corpus only three
+/// types appear — `SKIP`, `UINT` and `BYTE` — but the widths of structron's whole set are
+/// here so an older or newer bundle is laid out rather than silently mismeasured.
+fn struct_member(offsets: &Offsets, name: &str) -> Option<(i64, usize)> {
+    let mut at: i64 = 0;
+    for field in &offsets.player.fields {
+        let width = match field.kind.as_str() {
+            "SKIP" => field.skip.unwrap_or(0),
+            "BYTE" | "CHAR" => 1,
+            "SHORT" | "SHORT_BE" | "USHORT" | "USHORT_BE" => 2,
+            // INT, UINT, FLOAT and their big-endian twins.
+            _ => 4,
+        };
+        if field.kind != "SKIP" && field.name == name {
+            return Some((at, usize::try_from(width).ok()?));
+        }
+        at = at.checked_add(width)?;
+    }
+    None
+}
+
+/// Reads a named member of the player struct as an unsigned integer of its declared width.
+fn struct_value(
+    memory: &dyn ProcessMemory,
+    record: u64,
+    offsets: &Offsets,
+    name: &str,
+) -> Option<u32> {
+    let (offset, width) = struct_member(offsets, name)?;
+    let address = record.checked_add_signed(offset)?;
+    let mut bytes = [0u8; 4];
+    memory.read_exact(address, bytes.get_mut(..width)?).ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+/// Reads a named member of the player struct as a pointer.
+///
+/// The struct declares these as `UINT` even in a 64-bit bundle, and the Electron reader
+/// re-reads them at the same offset as pointers when the game is 64-bit. This does the
+/// same: the offset comes from the layout, the width from the process.
+fn struct_pointer(
+    memory: &dyn ProcessMemory,
+    record: u64,
+    offsets: &Offsets,
+    name: &str,
+) -> Option<u64> {
+    let (offset, _) = struct_member(offsets, name)?;
+    read_pointer(memory, record.checked_add_signed(offset)?).ok()
+}
+
 /// Reads one player record.
 ///
 /// Returns `None` rather than an error: a record that cannot be read is a slot the game
@@ -251,14 +359,16 @@ fn read_player(
     record: u64,
     local_client_id: u32,
 ) -> Option<Player> {
-    let object_ptr = follow(memory, record, player_chain(offsets, "objectPtr")).ok()?;
-    let task_ptr = follow(memory, record, player_chain(offsets, "taskPtr")).unwrap_or(0);
-    let outfits_ptr = follow(memory, record, player_chain(offsets, "outfitsPtr")).unwrap_or(0);
-    let role_ptr = follow(memory, record, player_chain(offsets, "rolePtr")).unwrap_or(0);
+    let object_ptr = struct_pointer(memory, record, offsets, "objectPtr")?;
+    let task_ptr = struct_pointer(memory, record, offsets, "taskPtr").unwrap_or(0);
+    let outfits_ptr = struct_pointer(memory, record, offsets, "outfitsPtr").unwrap_or(0);
+    let role_ptr = struct_pointer(memory, record, offsets, "rolePtr").unwrap_or(0);
 
+    // The in-game player id, which meetings and votes are keyed by. Carried as zero for
+    // every player until 2026-08-24.
+    let id = struct_value(memory, record, offsets, "id").unwrap_or(0);
     let client_id = read_u32_at(memory, object_ptr, first_player_offset(offsets, "clientId"))?;
-    let disconnected =
-        read_u8_at(memory, record, first_player_offset(offsets, "disconnected")).unwrap_or(0) != 0;
+    let disconnected = struct_value(memory, record, offsets, "disconnected").unwrap_or(0) != 0;
     let is_local = client_id == local_client_id && !disconnected;
 
     // The local player's position lives in a different field from everyone else's: theirs
@@ -268,8 +378,11 @@ fn read_player(
     } else {
         ("remoteX", "remoteY")
     };
-    let x = read_f32_at(memory, object_ptr, first_player_offset(offsets, x_field)).unwrap_or(0.0);
-    let y = read_f32_at(memory, object_ptr, first_player_offset(offsets, y_field)).unwrap_or(0.0);
+    // Two steps in most bundles and four in some, so taking only the first lands on a
+    // pointer rather than on the coordinate it points at. Positions are what proximity
+    // chat is, which makes this the most expensive place in the reader to get wrong.
+    let x = read_f32_chain(memory, object_ptr, player_chain(offsets, x_field)).unwrap_or(0.0);
+    let y = read_f32_chain(memory, object_ptr, player_chain(offsets, y_field)).unwrap_or(0.0);
 
     let current_outfit = read_u32_at(
         memory,
@@ -310,21 +423,26 @@ fn read_player(
 
     Some(Player {
         ptr: record,
-        id: 0,
+        id: u8::try_from(id).unwrap_or(u8::MAX),
         client_id,
         name_hash: hash_name(&name),
         name,
         color_id: outfit.color_id,
         hat_id: outfit.hat_id,
-        pet_id: 0,
+        // Only the eight pre-outfit bundles carry a pet in the struct; on every other
+        // build the Electron reader leaves it unset. Zero either way.
+        pet_id: struct_value(memory, record, offsets, "pet").unwrap_or(0),
         skin_id: outfit.skin_id,
         visor_id: outfit.visor_id,
         disconnected,
-        // The role team is what the game calls the impostor side. A build without the
-        // field reports crewmate, which is the safe direction: it does not reveal anyone.
-        is_impostor: role_team.is_some_and(|team| team != 0),
-        is_dead: read_u8_at(memory, record, first_player_offset(offsets, "isDead")).unwrap_or(0)
-            != 0,
+        // `data.impostor == 1`, and the Electron reader assigns the role team to that
+        // field. Exactly one, not merely non-zero: a modded role on a third team would
+        // otherwise be announced as an impostor. Eight bundles in the corpus carry
+        // `impostor` in the struct instead, from before roles existed, and those win.
+        is_impostor: struct_value(memory, record, offsets, "impostor")
+            .or(role_team)
+            .is_some_and(|team| team == 1),
+        is_dead: struct_value(memory, record, offsets, "dead").unwrap_or(0) != 0,
         task_ptr,
         object_ptr,
         is_local,
@@ -378,47 +496,6 @@ fn outfit_offset(offsets: &Offsets, field: &str) -> i64 {
         .unwrap_or(-1)
 }
 
-/// Walks a chain the bundle may not have.
-fn follow(
-    memory: &dyn ProcessMemory,
-    base: u64,
-    chain: Option<Vec<i64>>,
-) -> Result<u64, ReadError> {
-    let chain = chain.ok_or(ReadError::Chain {
-        step: 0,
-        reason: "this build's offsets do not have the field",
-    })?;
-    let at = resolve_chain(memory, base, &chain)?;
-    read_pointer(memory, at)
-}
-
-fn read_u32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<u32> {
-    let at = base.checked_add_signed(offset?)?;
-    let mut raw = [0u8; 4];
-    memory.read_exact(at, &mut raw).ok()?;
-    Some(u32::from_le_bytes(raw))
-}
-
-fn read_i32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<i32> {
-    // The lobby code is stored as a signed value and read as one; reinterpreting the bits
-    // is the point rather than a conversion.
-    read_u32_at(memory, base, offset).map(|value| i32::from_ne_bytes(value.to_ne_bytes()))
-}
-
-fn read_u8_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<u8> {
-    let at = base.checked_add_signed(offset?)?;
-    let mut raw = [0u8; 1];
-    memory.read_exact(at, &mut raw).ok()?;
-    raw.first().copied()
-}
-
-fn read_f32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Option<f32> {
-    let at = base.checked_add_signed(offset?)?;
-    let mut raw = [0u8; 4];
-    memory.read_exact(at, &mut raw).ok()?;
-    Some(f32::from_le_bytes(raw))
-}
-
 /// Gathers the offsets [`systems::read_systems`] needs out of the bundle.
 ///
 /// Each is optional: a bundle for an older build may not carry all of them, and a missing
@@ -427,19 +504,19 @@ fn read_f32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Op
 /// `GameReader.ts` does — the door table has the same shape as the player table.
 fn system_offsets(offsets: &Offsets) -> SystemOffsets {
     SystemOffsets {
-        systems: first_offset(offsets, "shipStatus_systems"),
-        hud_override_active: first_offset(offsets, "HudOverrideSystemType_isActive"),
-        mira_completed_consoles: first_offset(offsets, "hqHudSystemType_CompletedConsoles"),
-        decon_lower_open: first_offset(offsets, "deconDoorLowerOpen"),
-        decon_upper_open: first_offset(offsets, "deconDoorUpperOpen"),
-        all_doors: first_offset(offsets, "shipstatus_allDoors"),
-        count: first_offset(offsets, "playerCount"),
-        first_element: first_offset(offsets, "playerAddrPtr"),
-        door_is_open: first_offset(offsets, "door_isOpen"),
-        object_cache: first_offset(offsets, "objectCachePtr"),
-        current_camera: first_offset(offsets, "planetSurveillanceMinigame_currentCamera"),
-        camera_count: first_offset(offsets, "planetSurveillanceMinigame_camarasCount"),
-        filtered_rooms: first_offset(offsets, "surveillanceMinigame_FilteredRoomsCount"),
+        systems: top_level_chain(offsets, "shipStatus_systems"),
+        hud_override_active: top_level_chain(offsets, "HudOverrideSystemType_isActive"),
+        mira_completed_consoles: top_level_chain(offsets, "hqHudSystemType_CompletedConsoles"),
+        decon_lower_open: top_level_chain(offsets, "deconDoorLowerOpen"),
+        decon_upper_open: top_level_chain(offsets, "deconDoorUpperOpen"),
+        all_doors: top_level_chain(offsets, "shipstatus_allDoors"),
+        count: top_level_chain(offsets, "playerCount"),
+        first_element: top_level_chain(offsets, "playerAddrPtr"),
+        door_is_open: top_level_chain(offsets, "door_isOpen"),
+        object_cache: top_level_chain(offsets, "objectCachePtr"),
+        current_camera: top_level_chain(offsets, "planetSurveillanceMinigame_currentCamera"),
+        camera_count: top_level_chain(offsets, "planetSurveillanceMinigame_camarasCount"),
+        filtered_rooms: top_level_chain(offsets, "surveillanceMinigame_FilteredRoomsCount"),
     }
 }
 
