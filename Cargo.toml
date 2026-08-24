@@ -68,6 +68,10 @@ opus = "=0.4.0"
 # between patch releases changes what every microphone sounds like, and it would be heard
 # before it was noticed. Used through `process_into_buffer` only — see `resample.rs`.
 rubato = "=5.0.0"
+# Not pinned exactly, unlike the codec and the resampler: this one is behind a trait
+# precisely so it can be replaced, and `cubeb` is the documented fallback. See
+# `acl-audio::device` for the trigger conditions.
+cpal = "0.18"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 serde_json = "1.0"
 thiserror = "2.0"

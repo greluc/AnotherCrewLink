@@ -6,8 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = ["cpal-backend"]
+# The system audio backend. Off in a build that only measures the DSP against golden
+# vectors, which is every test in CI and needs no sound card.
+cpal-backend = ["dep:cpal"]
+
 [dependencies]
 acl-types.workspace = true
+cpal = { workspace = true, optional = true }
 opus.workspace = true
 rubato.workspace = true
 
