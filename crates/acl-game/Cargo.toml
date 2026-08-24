@@ -7,11 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-# The injection path is 32-bit Windows only and asks the operating system for the right
-# to write into another process. It is off unless someone says otherwise.
-injection = []
-
 [dependencies]
 acl-types.workspace = true
 serde.workspace = true

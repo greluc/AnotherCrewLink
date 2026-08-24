@@ -5,6 +5,20 @@
 #include "process.h"
 #include "memoryjs.h"
 
+
+// The rights this module opens a process with.
+//
+// PROCESS_ALL_ACCESS until 2026-08-24. That includes the right to write the target's
+// memory, allocate executable pages in it and create threads in it -- every one of which
+// this process then held for as long as Among Us was running, whether or not anything
+// used them. AnotherCrewLink reads; the write path that once justified them wrote a
+// version stamp into the game's menu and was removed with them.
+//
+// PROCESS_QUERY_LIMITED_INFORMATION rather than PROCESS_QUERY_INFORMATION: it is what
+// IsWow64Process and QueryFullProcessImageName need, and it is granted in cases where the
+// wider right is not.
+#define MEMORYJS_READ_RIGHTS (PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION)
+
 process::process() {}
 process::~process() {}
 
@@ -22,7 +36,7 @@ process::Pair process::openProcess(const char* processName, const char** errorMe
   for (std::vector<PROCESSENTRY32>::size_type i = 0; i != processes.size(); i++) {
     // Check to see if this is the process we want.
     if (!strcmp(processes[i].szExeFile, processName)) {
-      handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processes[i].th32ProcessID);
+      handle = OpenProcess(MEMORYJS_READ_RIGHTS, FALSE, processes[i].th32ProcessID);
       process = processes[i];
       break;
     }
@@ -48,7 +62,7 @@ process::Pair process::openProcess(DWORD processId, const char** errorMessage) {
   for (std::vector<PROCESSENTRY32>::size_type i = 0; i != processes.size(); i++) {
     // Check to see if this is the process we want.
     if (processId == processes[i].th32ProcessID) {
-      handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processes[i].th32ProcessID);
+      handle = OpenProcess(MEMORYJS_READ_RIGHTS, FALSE, processes[i].th32ProcessID);
       process = processes[i];
       break;
     }

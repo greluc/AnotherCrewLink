@@ -5,12 +5,13 @@
 //! This asks for `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing else.
 //! The C++ it replaces opens the game with `PROCESS_ALL_ACCESS`, which includes the right
 //! to write its memory, allocate in it, and create threads in it — every one of which
-//! this process then holds for as long as the game is running, whether or not it ever
+//! that process then holds for as long as the game is running, whether or not it ever
 //! uses them.
 //!
-//! `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` are added only under the `injection`
-//! feature, and `PROCESS_CREATE_THREAD` is never requested at all. The plan calls this the
-//! cheapest security improvement in the port, and it is: the diff is one constant.
+//! There is no way to ask for more from here. The write rights had a home behind an
+//! `injection` feature until 2026-08-24, when the path they served was removed: it wrote
+//! shellcode into the game to draw a version stamp in the menu, and the one real feature
+//! it had been built for was already commented out. This client reads.
 //!
 //! # Enumeration
 //!
@@ -37,17 +38,10 @@ use crate::memory::{Module, ProcessMemory, ReadError};
 /// the `injection` feature and by nothing else.
 const READ_RIGHTS: u32 = PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION;
 
-#[cfg(feature = "injection")]
-const WRITE_RIGHTS: u32 = windows_sys::Win32::System::Threading::PROCESS_VM_WRITE
-    | windows_sys::Win32::System::Threading::PROCESS_VM_OPERATION;
-
-#[cfg(not(feature = "injection"))]
-const WRITE_RIGHTS: u32 = 0;
-
 /// The rights actually requested.
 #[must_use]
 pub const fn requested_rights() -> u32 {
-    READ_RIGHTS | WRITE_RIGHTS
+    READ_RIGHTS
 }
 
 /// A handle to a running process, and what is loaded in it.
@@ -267,9 +261,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn asks_for_reading_and_nothing_else_by_default() {
-        // The point of the whole module. If this ever gains a bit, it should be because
-        // somebody chose to, and this test is where they say so.
+    fn asks_for_reading_and_nothing_else() {
+        // The point of the whole module, and now unconditional: there is no feature that
+        // adds a bit. If this ever gains one, it should be because somebody chose to, and
+        // this test is where they say so.
         assert_eq!(requested_rights() & PROCESS_VM_READ, PROCESS_VM_READ);
         assert_eq!(
             requested_rights() & PROCESS_QUERY_LIMITED_INFORMATION,

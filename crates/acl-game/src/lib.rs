@@ -6,7 +6,6 @@
 //! recorded frames and a fuzzer explore the same code without a game running.
 
 pub mod dotnet;
-pub mod injection;
 pub mod memory;
 pub mod mods;
 pub mod offsets;

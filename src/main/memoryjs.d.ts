@@ -1,4 +1,9 @@
 declare module 'memoryjs' {
+	// writeMemory, writeBuffer and virtualAllocEx were declared here until 2026-08-24. The
+	// native module still exports them, but this client opens processes with
+	// PROCESS_VM_READ only, so calling one would fail — silently, as it happens:
+	// writeBuffer ignores WriteProcessMemory's return value and reports success either way.
+	// Not declaring them is what stops that being discovered the hard way.
 	type Callback<T> = (error: unknown, value: T) => void;
 
 	// Processes
@@ -73,9 +78,7 @@ declare module 'memoryjs' {
 
 	export function getProcessPath(handle: number): string;
 
-	export function writeMemory<T>(handle: number, address: number, value: T, dataType: DataType): void;
 
-	export function writeBuffer(handle: number, address: number, buffer: Buffer): void;
 
 	export function findPattern(
 		handle: number,

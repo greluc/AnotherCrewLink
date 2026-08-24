@@ -8,16 +8,12 @@ const {
 	readBuffer,
 	readMemory: readMemoryRaw,
 	findPattern: findPatternRaw,
-	virtualAllocEx,
-	writeBuffer,
-	writeMemory,
 	getProcessPath,
 } = memoryjs;
 import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
 import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
-import { isAddressInModule } from './offsetsValidator';
 import { endFrame, isRecording, noteRead } from './recorder';
 import Errors from '../common/Errors';
 
@@ -48,17 +44,6 @@ const SIZE_OF: Record<string, number> = {
 	double: 8,
 };
 
-const DETOUR_LENGTH = 5;
-
-/**
- * How far past an allocation a detour may point and still be one of ours.
- *
- * A page, not the 0x60 bytes actually requested: `VirtualAllocEx` rounds a commit up to
- * the page granularity, and this code relies on that — the second stub lives at
- * `shellCodeAddr + 0x300`, well past the requested size and well inside the page. One
- * recorded base therefore covers both stubs.
- */
-const SHELLCODE_PAGE_SIZE = 0x1000;
 import { CameraLocation, MapType } from '../common/AmongusMap';
 import { GenerateAvatars, numberToColorHex } from './avatarGenerator';
 import { RainbowColorId } from '../common/playerColors';
@@ -66,14 +51,6 @@ import { platform } from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { type AmongusMod, modList } from '../common/Mods';
-import { app } from 'electron';
-
-let appVersion = '';
-if (process.env.NODE_ENV !== 'production') {
-	appVersion = 'DEV';
-} else {
-	appVersion = app.getVersion();
-}
 
 interface ValueType<T> {
 	read(buffer: BufferSource, offset: number): T;
@@ -101,7 +78,6 @@ export default class GameReader {
 	sendIPC: Electron.WebContents['send'];
 	offsets: IOffsets | undefined;
 	PlayerStruct: Struct | undefined;
-	initializedWrite = false;
 	writtenPingMessage = true;
 	menuUpdateTimer = 20;
 	lastPlayerPtr = 0;
@@ -118,11 +94,7 @@ export default class GameReader {
 	colorsInitialized = false;
 	rainbowColor = -9999;
 	gameCode = 'MENU';
-	shellcodeAddr = -1;
-	/** Every page this process has allocated in the game, so its own detours are recognisable. */
-	shellcodePages: number[] = [];
 	currentServer = '';
-	disableWriting = false;
 	pid = -1;
 	loadedMod = modList[0];
 	gamePath = '';
@@ -305,7 +277,6 @@ export default class GameReader {
 				}
 				this.warnAboutDuplicatePlayers(players);
 				if (localPlayer) {
-					this.fixPingMessage();
 					lightRadius = this.readMemory<number>('float', localPlayer.objectPtr, this.offsets.lightRadius, -1);
 				}
 				const gameOptionsPtr = this.readMemory<number>(
@@ -502,17 +473,12 @@ export default class GameReader {
 			// Nothing is attached, so the next attach will read them fresh anyway.
 			return;
 		}
-		this.initializedWrite = false;
-		this.shellcodePages = [];
 		await this.initializeoffsets();
 	}
 
 	async initializeoffsets(): Promise<void> {
 		console.log('INITIALIZEOFFSETS???');
 		this.is_64bit = this.isX64Version();
-		this.shellcodeAddr = -1;
-		this.initializedWrite = false;
-		this.disableWriting = false;
 
 		const offsetLookups = (await fetchOffsetLookup()) as IOffsetsLookup;
 		let broadcastVersionAddr: number | undefined;
@@ -551,7 +517,6 @@ export default class GameReader {
 			); // can't find file for this client, return default
 		}
 
-		this.disableWriting = this.offsets.disableWriting;
 		this.oldMeetingHud = this.offsets.oldMeetingHud;
 
 		const innerNetClient = this.findPattern(
@@ -672,367 +637,6 @@ export default class GameReader {
 				.replace(/"\{/g, '{')
 				.replace(/\}"/g, '}')
 		);
-		this.initializeWrites();
-	}
-
-	initializeWrites(): void {
-		if (this.is_64bit || !this.offsets || !this.amongUs || !this.gameAssembly || this.disableWriting || this.is_linux) {
-			//not supported atm
-			return;
-		}
-
-		// Shellcode to join games when u press join..
-		const shellCodeAddr = virtualAllocEx(this.amongUs.handle, null, 0x60, 0x00001000 | 0x00002000, 0x40);
-		this.shellcodePages.push(shellCodeAddr);
-		const compareAddr = shellCodeAddr + 0x30;
-
-		const compareAddr1 = (compareAddr & 0xff000000) >> 24;
-		const compareAddr2 = (compareAddr & 0x00ff0000) >> 16;
-		const compareAddr3 = (compareAddr & 0x0000ff00) >> 8;
-		const compareAddr4 = compareAddr & 0x000000ff;
-
-		//(DESTINATION_RVA - CURRENT_RVA (E9) - 5)
-		const connectFunc = this.gameAssembly.modBaseAddr + this.offsets.connectFunc;
-		const relativeConnectJMP = connectFunc - (shellCodeAddr + 0x18) - 0x4;
-
-		const fixedUpdateFunc = this.gameAssembly!.modBaseAddr + this.offsets.fixedUpdateFunc;
-		const relativefixedJMP = fixedUpdateFunc + 0x5 - (shellCodeAddr + 0x24) - 0x4;
-
-		const relativeShellJMP = shellCodeAddr - (fixedUpdateFunc + 0x1) - 0x4;
-
-		const shellcode = [
-			0x80, // cmp byte ptr [ShellcodeAddr + 0x30], 0x0,
-			0x3d,
-			compareAddr4, // 0x0
-			compareAddr3, // 0x0
-			compareAddr2, // 0xA3
-			compareAddr1, // 0x0
-			0x00,
-			0x74, // je 0x13
-			0x13,
-			0xc6, // mov byte ptr [ShellcodeAddr + 0x30], 0x00
-			0x05,
-			compareAddr4, // 0x0
-			compareAddr3, // 0x0
-			compareAddr2, // 0xA3
-			compareAddr1, // 0x0
-			0x00, // write 0x0
-			0xc7, // mov [ebp - 0x4], 0x1
-			0x45,
-			0xfc,
-			0x01,
-			0x00,
-			0x00,
-			0x00,
-			0xe9, // jmp innerNet.InnerNetClient.Connect
-			relativeConnectJMP & 0x000000ff,
-			(relativeConnectJMP & 0x0000ff00) >> 8,
-			(relativeConnectJMP & 0x00ff0000) >> 16,
-			(relativeConnectJMP & 0xff000000) >> 24,
-			0x55, // original 5 bytes && (je 0x13 endpoint)
-			0x8b,
-			0xec,
-			0x56,
-			0x8b,
-			0x75,
-			0x08,
-			0xe9, // jmp innerNet.InnerNetClient.FixedUpdate + 0x5
-			relativefixedJMP & 0x000000ff,
-			(relativefixedJMP & 0x0000ff00) >> 8,
-			(relativefixedJMP & 0x00ff0000) >> 16,
-			(relativefixedJMP & 0xff000000) >> 24,
-		];
-
-		const shellcodeJMP = [
-			// jmp ShellcodeRelativeAddress
-			0xe9,
-			relativeShellJMP & 0x000000ff,
-			(relativeShellJMP & 0x0000ff00) >> 8,
-			(relativeShellJMP & 0x00ff0000) >> 16,
-			(relativeShellJMP & 0xff000000) >> 24,
-		];
-
-		const modManagerLateUpdate = this.gameAssembly!.modBaseAddr + this.offsets.modLateUpdateFunc;
-		const shellCodeAddr_1 = shellCodeAddr + 0x300;
-		const relativeShellJMP_1 = shellCodeAddr_1 - (modManagerLateUpdate + 0x1) - 0x4;
-		const relativefixedJMP_1 = modManagerLateUpdate + 0x5 - (shellCodeAddr_1 + 0x1c) - 0x4;
-		const showModStampFunc = this.gameAssembly!.modBaseAddr + this.offsets.showModStampFunc;
-		const relativeShowModStamp = showModStampFunc + 0x6 - (shellCodeAddr_1 + 0x12) - 0x4;
-
-		const _compareAddr = shellCodeAddr + 0x44;
-
-		const _compareAddr1 = (_compareAddr & 0xff000000) >> 24;
-		const _compareAddr2 = (_compareAddr & 0x00ff0000) >> 16;
-		const _compareAddr3 = (_compareAddr & 0x0000ff00) >> 8;
-		const _compareAddr4 = _compareAddr & 0x000000ff;
-
-		const shellcode_modIcon = [
-			0x80, // cmp byte ptr [ShellcodeAddr + 0x30], 0x0,
-			0x3d,
-			_compareAddr4, // 0x0
-			_compareAddr3, // 0x0
-			_compareAddr2, // 0xA3
-			_compareAddr1, // 0x0
-			0x00,
-			0x74, // je 0x13
-			0x0c,
-			0xc6, // mov byte ptr [ShellcodeAddr + 0x30], 0x00
-			0x05,
-			_compareAddr4, // 0x0
-			_compareAddr3, // 0x0
-			_compareAddr2, // 0xA3
-			_compareAddr1, // 0x0
-			0x00, // write 0x0
-			0xe9,
-			relativeShowModStamp & 0x000000ff,
-			(relativeShowModStamp & 0x0000ff00) >> 8,
-			(relativeShowModStamp & 0x00ff0000) >> 16,
-			(relativeShowModStamp & 0xff000000) >> 24,
-			0x53,
-			0x8b,
-			0xdc,
-			0x83,
-			0xec,
-			0x08,
-			0xe9, // jmp innerNet.InnerNetClient.FixedUpdate + 0x5
-			relativefixedJMP_1 & 0x000000ff,
-			(relativefixedJMP_1 & 0x0000ff00) >> 8,
-			(relativefixedJMP_1 & 0x00ff0000) >> 16,
-			(relativefixedJMP_1 & 0xff000000) >> 24,
-		];
-
-		const shellcodeJMP_1 = [
-			// jmp ShellcodeRelativeAddress
-			0xe9,
-			relativeShellJMP_1 & 0x000000ff,
-			(relativeShellJMP_1 & 0x0000ff00) >> 8,
-			(relativeShellJMP_1 & 0x00ff0000) >> 16,
-			(relativeShellJMP_1 & 0xff000000) >> 24,
-			0x90,
-		];
-
-		//MMOnline
-		this.writeString(shellCodeAddr + 0x70, 'OnlineGame');
-		this.writeString(shellCodeAddr + 0x95, 'MMOnline');
-
-		this.writeString(
-			shellCodeAddr + 0xd5,
-			`<size=85%><color=#BA68C8>AnotherCrewLink v${appVersion}</color></size>\n<size=60%><color=#BA68C8>aucl.greluc.me</color></size><size=85%>\nPing: {0}ms</size>`
-		);
-
-		// Nothing above this point has touched the game. Both detours are checked before
-		// either is written, so a refusal leaves the process exactly as it was found
-		// rather than half patched.
-		const fixedUpdateSite = this.inspectDetourSite(fixedUpdateFunc, 'InnerNetClient.FixedUpdate');
-		const lateUpdateSite = this.inspectDetourSite(modManagerLateUpdate, 'ModManager.LateUpdate');
-		if (fixedUpdateSite === 'refuse' || lateUpdateSite === 'refuse') {
-			// Refusing costs the join button and the mod stamp. Writing anyway, into
-			// bytes we did not recognise, costs the player their game.
-			console.error('Refusing to patch: the game does not look the way these offsets describe');
-			this.disableWriting = true;
-			return;
-		}
-		if (fixedUpdateSite === 'already-ours' && lateUpdateSite === 'already-ours') {
-			// A second client attached to the same game, or this one restarted without the
-			// game restarting. The detours are already in place and rewriting them would
-			// point them at a shellcode page that is about to be allocated a second time.
-			console.warn('The game is already patched; leaving both detours alone');
-			this.initializedWrite = true;
-			return;
-		}
-
-		writeBuffer(this.amongUs!.handle, shellCodeAddr, Buffer.from(shellcode));
-		writeBuffer(this.amongUs!.handle, fixedUpdateFunc, Buffer.from(shellcodeJMP));
-
-		writeBuffer(this.amongUs!.handle, shellCodeAddr_1, Buffer.from(shellcode_modIcon));
-		writeBuffer(this.amongUs!.handle, modManagerLateUpdate, Buffer.from(shellcodeJMP_1));
-
-		this.shellcodeAddr = shellCodeAddr;
-		this.writtenPingMessage = false;
-		this.initializedWrite = true;
-	}
-
-	/**
-	 * What is at a detour site, before anything is written to it.
-	 *
-	 * The offsets arrive over the network, and on 32-bit Windows four of them decide where
-	 * a five-byte `E9 rel32` lands inside the game. The address itself is not read from the
-	 * bundle — `findPattern` produces it — but the *signature* that steers that scan is,
-	 * so a hostile bundle picks the address by choosing bytes that match somewhere useful.
-	 * This is the check that stands between such a match and a write.
-	 *
-	 * Three answers, because two are not enough. A site that is already carrying our own
-	 * detour is not an error and must not be rewritten; a site that carries something else,
-	 * or that cannot be read at all, is not ours to touch.
-	 */
-	inspectDetourSite(address: number, what: string): 'ready' | 'already-ours' | 'refuse' {
-		if (!this.amongUs || !this.gameAssembly) return 'refuse';
-
-		if (!isAddressInModule(address, this.gameAssembly.modBaseAddr, this.gameAssembly.modBaseSize)) {
-			// A signature that matched nothing returns 0, and a hostile one can resolve
-			// anywhere. Either way this is not an address inside GameAssembly.dll.
-			console.error(
-				`${what}: 0x${address.toString(16)} is outside GameAssembly.dll ` +
-					`(0x${this.gameAssembly.modBaseAddr.toString(16)} + 0x${this.gameAssembly.modBaseSize.toString(16)})`
-			);
-			return 'refuse';
-		}
-
-		let prologue: Buffer;
-		try {
-			prologue = readBuffer(this.amongUs.handle, address, DETOUR_LENGTH);
-		} catch (error) {
-			console.error(`${what}: could not read the prologue:`, error);
-			return 'refuse';
-		}
-		if (!prologue || prologue.length < DETOUR_LENGTH) {
-			console.error(`${what}: the prologue is not readable`);
-			return 'refuse';
-		}
-
-		if (prologue[0] === 0xe9) {
-			// Something already jumps out of here. If the destination is one of our own
-			// shellcode pages it is our detour from an earlier run; if not, another tool
-			// owns this function and overwriting it would break whatever it is doing.
-			const relative = prologue.readInt32LE(1);
-			const destination = address + DETOUR_LENGTH + relative;
-			if (this.ownsShellcodeAt(destination)) {
-				return 'already-ours';
-			}
-			console.error(
-				`${what}: already detoured to 0x${destination.toString(16)}, which is not ours — refusing to overwrite it`
-			);
-			return 'refuse';
-		}
-
-		// Unmapped or freshly zeroed memory reads as all zeros, which is not code and is
-		// the one non-jump case worth naming: it means the address is wrong, not that the
-		// function is unusual.
-		if (prologue.every((byte) => byte === 0x00)) {
-			console.error(`${what}: the prologue is all zeros, so 0x${address.toString(16)} is not code`);
-			return 'refuse';
-		}
-
-		return 'ready';
-	}
-
-	/** Whether an address falls inside a shellcode page this process allocated. */
-	ownsShellcodeAt(destination: number): boolean {
-		return this.shellcodePages.some((page) => destination >= page && destination < page + SHELLCODE_PAGE_SIZE);
-	}
-
-	writeString(address: number, text: string): void {
-		const innerNetClient = this.readMemory<number>(
-			'ptr',
-			this.gameAssembly!.modBaseAddr,
-			this.offsets!.innerNetClient.base
-		);
-		const stringBase = this.readMemory<number>('int', innerNetClient, [0x80, 0x0]); // mainMenuScene just a random string where we can base our string off
-
-		const connectionString = [
-			stringBase & 0x000000ff,
-			(stringBase & 0x0000ff00) >> 8,
-			(stringBase & 0x00ff0000) >> 16,
-			(stringBase & 0xff000000) >> 24,
-			0x00,
-			0x00,
-			0x00,
-			0x00,
-			text.length, // length
-			0x00,
-			0x00,
-			0x00,
-		];
-		for (let index = 0; index < text.length; index++) {
-			connectionString.push(text.charCodeAt(index));
-			connectionString.push(0x0);
-		}
-		writeBuffer(this.amongUs!.handle, address, Buffer.from(connectionString));
-	}
-	skipPingMessage = 25;
-	fixPingMessage() {
-		if (
-			!this.offsets ||
-			!this.gameAssembly ||
-			!this.initializedWrite ||
-			this.writtenPingMessage ||
-			this.skipPingMessage-- > 0
-		) {
-			return;
-		}
-		writeMemory(this.amongUs!.handle, this.shellcodeAddr + 0x44, 1, 'int32'); // enable ModIcon
-
-		this.skipPingMessage = 25;
-		this.writtenPingMessage = true;
-		for (let index = 0; index < 3; index++) {
-			const stringOffset = this.findPattern(
-				this.offsets.signatures.pingMessageString.sig,
-				this.offsets.signatures.pingMessageString.patternOffset,
-				this.offsets.signatures.pingMessageString.addressOffset,
-				false,
-				false,
-				index
-			);
-			const stringPtr = this.readMemory<number>('int', this.gameAssembly.modBaseAddr, stringOffset);
-			const pingstring = this.readString(stringPtr);
-			if (pingstring.includes('Ping') || pingstring.includes('<color=#BA68C8')) {
-				writeMemory(
-					this.amongUs!.handle,
-					this.gameAssembly!.modBaseAddr + stringOffset,
-					this.shellcodeAddr + 0xd5,
-					'int32'
-				);
-				break;
-			}
-		}
-	}
-
-	joinGame(_code: string, _server: string): boolean {
-		return false;
-		// if (
-		// 	!this.amongUs ||
-		// 	!this.initializedWrite ||
-		// 	server.length > 15 ||
-		// 	!this.offsets ||
-		// 	this.is_64bit
-		// 	// || this.loadedMod.id === 'POLUS_GG'
-		// ) {
-		// 	return false;
-		// }
-		// const innerNetClient = this.readMemory<number>(
-		// 	'ptr',
-		// 	this.gameAssembly!.modBaseAddr,
-		// 	this.offsets!.innerNetClient.base
-		// );
-		// this.writeString(this.shellcodeAddr + 0x40, server);
-		// writeMemory(
-		// 	this.amongUs.handle,
-		// 	innerNetClient + this.offsets.innerNetClient.networkAddress,
-		// 	this.shellcodeAddr + 0x40,
-		// 	'int32'
-		// );
-		// writeMemory(
-		// 	this.amongUs.handle,
-		// 	innerNetClient + this.offsets.innerNetClient.onlineScene,
-		// 	this.shellcodeAddr + 0x70,
-		// 	'int32'
-		// );
-		// writeMemory(
-		// 	this.amongUs.handle,
-		// 	innerNetClient + this.offsets.innerNetClient.mainMenuScene,
-		// 	this.shellcodeAddr + 0x95,
-		// 	'int32'
-		// );
-		// writeMemory(this.amongUs.handle, innerNetClient + this.offsets.innerNetClient.networkPort, 22023, 'int32');
-		// writeMemory(this.amongUs.handle, innerNetClient + this.offsets.innerNetClient.gameMode, 1, 'int32');
-		// writeMemory(
-		// 	this.amongUs.handle,
-		// 	innerNetClient + this.offsets.innerNetClient.gameId,
-		// 	this.gameCodeToInt(code),
-		// 	'int32'
-		// );
-		// writeMemory(this.amongUs.handle, this.shellcodeAddr + 0x30, 1, 'int32'); // call connect function
-		// return true;
 	}
 
 	loadColors(): void {
