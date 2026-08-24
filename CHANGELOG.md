@@ -1,8 +1,62 @@
 # AnotherCrewLink Changelog
 
-## Unreleased
+## v1.0.4
+
+Connections that used to fail quietly now recover, say why when they cannot, and stop
+asking for permissions this app has no use for.
+
+### Fixed
+
+- **Some players could not hear anyone, and nobody could hear them, while everything
+  else looked fine.** The avatars still lit up when people spoke, because that travels
+  over a different connection than the voice does — so from the inside the lobby looked
+  perfectly healthy and there was nothing to report but silence. Several things
+  contributed and all of them are addressed below.
+
+- **A connection that stalled was left to rot for half a minute.** When the network
+  path between two players goes bad, the connection enters a state that often heals by
+  itself within a second or two — and when it does not, it takes fifteen to thirty
+  seconds before anything notices. This app was not watching that state at all. It now
+  waits four seconds and then rebuilds the network path in place, keeping the call
+  rather than starting over.
+
+- **The fallback relay was only offered over UDP.** Some networks — school and office
+  networks especially, and some mobile providers — block outgoing UDP entirely, and
+  those are exactly the networks that need a relay in the first place. Relays are now
+  also tried over TCP, and a relay offered over TLS is recognised as one, which it was
+  not before.
+
+- **When a direct connection failed, it took a minute per player to try the relay.**
+  In a ten-person lobby, a player whose network needs the relay used to rediscover that
+  nine more times over. The client now decides from what the failed attempt actually
+  found: if the relay answered, it switches at once; if the relay could not be reached
+  at all, it says so plainly instead of forcing a setting that would leave the
+  connection with nothing to try.
+
+- **Every player was asking the relay for twice what they needed.** Two entries in the
+  server's list named the same relay, and the client added a third. Each entry costs a
+  reservation on the relay for as long as the call lasts.
+
+- **Writing to the game could fail silently.** The library the app used to read Among
+  Us never checked whether a write succeeded — it reported success either way. Nothing
+  depends on it any more, and those functions have been removed so nothing can start.
+
+- **A crash on startup left nothing behind to look at.** Two players reported the app
+  showing a critical error and closing, with no way to say what it was. It now writes
+  the fault to the log and tells you which folder to find it in before it exits.
+
+- **A missing speaker could silence one player and nothing else.** If the speaker you
+  had chosen was no longer plugged in, sending a player's voice to it failed and the
+  failure went nowhere — no message, no fallback, just one person you could not hear.
+  It now falls back to the system default and says so in the log.
+
+- **A failed connection now says why.** It reports what it managed to find — including
+  whether the relay could be reached at all — and the app writes down which relays the
+  server offered. Two reports of this problem had to be diagnosed by guessing, because
+  the log recorded that a connection failed and nothing whatsoever about the reason.
 
 ### Changed
+
 
 - **AnotherCrewLink no longer writes anything into Among Us, and no longer asks for
   permission to.** Until now it opened the game with full access — the right to
@@ -23,11 +77,15 @@
   long before this fork existed and never worked. The code is now shown to you to
   type or paste, which is what already happened in practice.
 
-### Fixed
+- **The library that watches for your push-to-talk key was replaced.** The old one
+  carried no licence at all — not a restrictive one, none — which is not something to
+  ship inside an installer other people are asked to trust. Your shortcuts are stored
+  by name and did not need changing, and two things got slightly better on the way:
+  a shortcut typed in lower case now works, where before it silently did nothing, and
+  binding plain Shift, Ctrl or Alt again matches either the left or the right key.
 
-- **Writing to the game could fail silently.** The library the app used to read Among
-  Us never checked whether a write succeeded — it reported success either way. Nothing
-  depends on it now, and the functions have been removed so nothing can start.
+  The new one is also told not to report mouse movement at all, so the app never
+  receives your cursor position.
 
 ## v1.0.3
 

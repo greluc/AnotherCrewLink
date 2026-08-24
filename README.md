@@ -46,10 +46,12 @@ least proves you have the same bytes the build produced. Compare it with the val
 [release page](https://github.com/greluc/AnotherCrewLink/releases):
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\AnotherCrewLink-Setup-1.0.3.exe
+Get-FileHash -Algorithm SHA256 .\AnotherCrewLink-Setup-1.0.4.exe
 ```
 
-For 1.0.3 that is `744766e9304437c5f9e27206d7840c9f505d25cb62e0f3708adacf963f8d34ad`.
+The value to compare it against is on the release itself. It is not repeated here: a
+checksum written in two places is a checksum that will disagree with itself one release
+from now, and the wrong half is the one people would trust.
 
 ## Server
 

@@ -1280,8 +1280,24 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						audio.setAttribute('autoplay', '');
 						audio.srcObject = dest.stream;
 						if (settingsRef.current.speaker.toLowerCase() !== 'default') {
-							audio.setSinkId(settingsRef.current.speaker);
+							// A saved speaker that is no longer plugged in rejects here. Left
+							// unhandled it is an unhandled rejection in the renderer and a
+							// player who cannot hear one specific person for no visible
+							// reason; caught, the element keeps the system default, which is
+							// the outcome anybody would have chosen.
+							audio.setSinkId(settingsRef.current.speaker).catch((error: unknown) => {
+								console.warn(`Could not send ${peer} to the chosen speaker, using the default instead:`, error);
+							});
 						}
+						// `autoplay` is a request, not a guarantee. A stream from a peer
+						// connection is exempt from Chromium's autoplay policy today, and if
+						// that ever stops being true the symptom is a connection that reports
+						// itself healthy and plays nothing -- which is the hardest report to
+						// act on and has now been received twice. Asking explicitly costs
+						// nothing and turns silence into a line in the log.
+						audio.play().catch((error: unknown) => {
+							console.error(`Audio for ${peer} would not start playing:`, error);
+						});
 
 						audioElements.current[peer] = {
 							dummyAudioElement: dummyAudio,
