@@ -1,5 +1,34 @@
 # AnotherCrewLink Changelog
 
+## Unreleased
+
+### Changed
+
+- **AnotherCrewLink no longer writes anything into Among Us, and no longer asks for
+  permission to.** Until now it opened the game with full access — the right to
+  change its memory, allocate executable memory inside it, and start threads in it —
+  and held that for as long as the game was running. It used a little of it: it
+  patched two of the game's functions so its name and address showed in the corner of
+  the main menu. That stamp is what you will notice missing. Nothing else about the
+  app changes; the whole point of reading the game is to know where everyone is, and
+  reading is all it does now. It asks the operating system for permission to read,
+  and nothing more.
+
+  If you have ever wondered whether a proximity chat mod could be mistaken for a
+  cheat, this is the honest answer to it: there is now no code in this app that can
+  change the game, and no permission held that would let it.
+
+- **A second feature went with it.** Clicking a lobby in the browser was once meant to
+  make the game join by itself, by writing the code into it. That was switched off
+  long before this fork existed and never worked. The code is now shown to you to
+  type or paste, which is what already happened in practice.
+
+### Fixed
+
+- **Writing to the game could fail silently.** The library the app used to read Among
+  Us never checked whether a write succeeded — it reported success either way. Nothing
+  depends on it now, and the functions have been removed so nothing can start.
+
 ## v1.0.3
 
 A security release. Update it.

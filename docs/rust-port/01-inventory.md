@@ -4,6 +4,14 @@ A measured inventory of everything a Rust port would have to replace. Figures ar
 from the `fix/bugs-and-deps-224r05` branch at version 1.0.2 and from
 `greluc/AnotherCrewLink-server` at 1.0.0.
 
+> **Read as of its date.** This document measures the client as it stood at 1.0.2.
+> The injection path it describes — the executable page in the game, the two
+> `E9 rel32` detours, the swapped string pointer — was removed on 2026-08-24,
+> along with the `PROCESS_ALL_ACCESS` handle that made it possible. The
+> assessment is left as written, because rewriting it to match what happened
+> afterwards would destroy the record of why it happened. See §4.4 item 6 of
+> [04-implementation-plan.md](04-implementation-plan.md) for the decision.
+
 ## 1.1 Size
 
 | Part | Language | Lines | Notes |

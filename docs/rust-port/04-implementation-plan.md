@@ -548,10 +548,14 @@ malicious-bundle corpus and the full-prologue write-side check are where the two
 extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
 
 1. `ProcessMemory` trait and the Windows implementation. `OpenProcess` requests
-   `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more;
-   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` go behind `--features injection` and
-   `PROCESS_CREATE_THREAD` is never requested. Today's C++ opens the game with
-   `PROCESS_ALL_ACCESS`; this is the cheapest security improvement in the port.
+   `PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION` and nothing more.
+   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` were to go behind `--features
+   injection`; item 6 was dropped instead, so there is no feature and no write
+   right at all, and `PROCESS_CREATE_THREAD` is never requested. This was written
+   as the cheapest security improvement in the port, and it turned out to be
+   cheaper still: `native/memoryjs` opened the game with `PROCESS_ALL_ACCESS`
+   until 2026-08-24 and now asks for the same two rights this line does, so the
+   improvement landed in 1.x rather than waiting for 2.0. **Delivered.**
    Process enumeration is roughly 25 lines of Toolhelp32 on Windows and a `/proc`
    scan on Linux — a direct transliteration of code already in `native/` — rather
    than a crate that costs 25 dependencies and drags `winapi` 0.3.9 in with it,
@@ -586,12 +590,14 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
    and a short read is an error; and Yama `ptrace_scope=1` is the Ubuntu and
    Debian default and blocks reading a non-descendant process, which no crate
    choice fixes and which the packaging phase has to document.
-6. Injection module, 32-bit Windows, feature-gated. Verify the **full replayed
-   prologue**, not just the five bytes the patch overwrites — the instruction at
-   +4 straddles the boundary — and carry an explicit "already patched by us"
-   third state, because the initialisation path can re-run against a live
-   patched process and a naive check then kills the mod stamp until the user
-   restarts the game.
+6. ~~Injection module, 32-bit Windows, feature-gated.~~ **Dropped 2026-08-24, and
+   removed from the Electron client with it.** The full-replayed-prologue check
+   and the "already patched by us" third state were both real requirements — the
+   instruction at +4 straddles the five-byte boundary, and the initialisation path
+   can re-run against a live patched process — but they were requirements of a
+   feature that drew a version stamp in the menu corner and nothing else. The
+   note below §4.4's item list prices it. Nothing replaced this item; the phase is
+   six items.
 7. A `FuzzProcess` implementation of `ProcessMemory`, backed by arbitrary bytes
    answering from a sparse map, so `AmongUsState::read_from` is fuzzable for
    almost nothing on top of the trait that already exists. Two hazards are
@@ -747,7 +753,10 @@ used through `process_into_buffer` only, APM wiring, the VAD port, `opus` encode
 with FEC and DTX, pinned `=0.3.1`.
 
 The APM is `sonora` 0.2.0, behind the trait boundary the architecture already
-specifies for it, conditional on the green i686 build P1+ ran and G2 confirms.
+specifies for it. The condition attached to this — a green `i686` build, run by
+P1+ and confirmed by G2 — lapsed on 2026-08-24 with the target itself. The trait
+boundary is what matters now, because LiveKit's `libwebrtc` binding is reachable
+again and P3 should weigh it against `sonora` before committing.
 `webrtc-audio-processing` `=2.1.0` stays in the tree as a **Linux-only test
 baseline**, not as the shipping canceller: it does not build on either Windows
 target, PR #102 "Support MSVC targets" has been open and unmerged since
@@ -817,8 +826,13 @@ Run the same impairments through the Electron client for reference numbers.
 >    recovers Opus in-band FEC — `decode(..., fec: true)` on the following
 >    packet, driven by the jitter buffer's loss signal — and `getStats()` on the
 >    Electron peer shows `fecPacketsSent` climbing in both directions.
-> 6. A green `cargo build --target i686-pc-windows-msvc` of whichever APM is
->    shipping, and its test suite passing there.
+> 6. ~~A green `cargo build --target i686-pc-windows-msvc` of whichever APM is
+>    shipping, and its test suite passing there.~~ **Struck 2026-08-24.** The
+>    `i686` target existed only for the injection path, which no longer exists.
+>    The criterion is not weakened, it is unreachable: there is no such build to
+>    be green. This also removes the constraint that ruled `libwebrtc` out, so
+>    the APM choice in §4.5 is open again on wider grounds than when it was
+>    made.
 >
 > Criterion 3's 30 ms latency budget and the NACK target-delay decision are made
 > **jointly**, not independently: a buffer deep enough to make a retransmission

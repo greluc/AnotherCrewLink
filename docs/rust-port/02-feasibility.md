@@ -1,5 +1,17 @@
 # 2. Feasibility
 
+> **Read as of its date.** This document measures the client as it stood at 1.0.2.
+> The injection path it describes — the executable page in the game, the two
+> `E9 rel32` detours, the swapped string pointer — was removed on 2026-08-24,
+> along with the `PROCESS_ALL_ACCESS` handle that made it possible. The
+> assessment is left as written, because rewriting it to match what happened
+> afterwards would destroy the record of why it happened. See §4.4 item 6 of
+> [04-implementation-plan.md](04-implementation-plan.md) for the decision.
+
+> Row 4 of §2.3 and the `i686` discussion below are the parts this affects: that
+> work is not deferred, it is gone, and with it the 32-bit target that forecloses
+> LiveKit's `libwebrtc` binding. The foreclosure no longer applies.
+
 ## 2.1 Verdict
 
 **A full port to Rust with a native Rust GUI is technically possible. There is no

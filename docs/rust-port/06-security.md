@@ -216,8 +216,8 @@ memory-safety bug in libopus, and it does nothing at all about the elevation.
 
 The answer is two processes, and it is cheap enough to be a requirement rather
 than a roadmap item; [03-target-architecture.md](03-target-architecture.md) §3.2
-now specifies them. `acl-helper` runs elevated and holds memory reading,
-injection, the key-state poll and the overlay window. `acl-core` never elevates
+now specifies them. `acl-helper` runs elevated and holds memory reading, the
+key-state poll and the overlay window. `acl-core` never elevates
 and holds tokio, signalling, WebRTC, audio and the GUI. Between them,
 length-prefixed `postcard` over a named pipe or a Unix socket.
 
@@ -281,19 +281,23 @@ is right and unsound if it is not, and the compiler cannot check the length
 against a remote address space. Every read goes through one checked helper that
 takes a `&mut [u8]` and passes `buf.len()`; no call site computes a length.
 
-### Injection is still injection
+### Injection is still injection — so it is gone
 
 `VirtualAllocEx` with `PAGE_EXECUTE_READWRITE` followed by `WriteProcessMemory`
 of hand-assembled shellcode and two `JMP` patches into a running process is the
 same operation whichever language issues the syscall. Rust does not make it
-safer. What the port should do:
+safer. This section listed four things the port should do about that:
+feature-gate it, keep it 32-bit-only, document the stubs beside their bytes, and
+verify the target bytes before patching.
 
-- keep it feature-gated and off by default in any build that does not need it;
-- keep it 32-bit-Windows-only, as today;
-- document precisely what the two stubs do, in the code, next to the bytes —
-  the current arrays have partial comments and are otherwise opaque;
-- verify the target bytes before patching, so an unexpected game build fails
-  closed instead of writing a `JMP` into the middle of an instruction.
+> **Resolved 2026-08-24 by removing the path instead.** Asked what the operation
+> bought, the answer was a version stamp in the game's menu corner — the
+> join-by-lobby-click feature it also served had been commented out for longer
+> than anyone could date. Neither the shipping client nor the port does any of
+> this now, and `native/memoryjs` no longer holds the handle that would allow it.
+> The four mitigations below are moot. They are kept because they are the correct
+> mitigations if this is ever proposed again, and the fourth in particular
+> describes a real defect in code that shipped for years.
 
 That last point is a real improvement available for free: the current code
 computes relative jumps from pattern-scan results and writes them without
@@ -456,12 +460,14 @@ Two orderings follow, and they are prerequisites rather than preferences:
 - [ ] `cargo-deny` and `cargo-vet` blocking in CI from phase 1
 - [ ] `unsafe_op_in_unsafe_fn = "deny"`, safety comment on every `unsafe` block
 - [ ] One checked helper for all remote reads; no call site computes a length
-- [ ] `OpenProcess` with least privilege — `PROCESS_VM_READ |
-      PROCESS_QUERY_LIMITED_INFORMATION` for the reader, `PROCESS_VM_WRITE |
-      PROCESS_VM_OPERATION` only under `--features injection`,
-      `PROCESS_CREATE_THREAD` never, and never `PROCESS_ALL_ACCESS` as the
-      current C++ does
-- [ ] Injection feature-gated, 32-bit only, verifies target bytes before patching
+- [x] `OpenProcess` with least privilege — `PROCESS_VM_READ |
+      PROCESS_QUERY_LIMITED_INFORMATION` and nothing else. No write right, no
+      allocation right, `PROCESS_CREATE_THREAD` never, and never
+      `PROCESS_ALL_ACCESS` as the C++ did until 2026-08-24. Done in the Rust
+      reader **and** in `native/memoryjs`, verified against a live process: the
+      read succeeds and the write leaves the bytes unchanged
+- [x] ~~Injection feature-gated, 32-bit only, verifies target bytes before
+      patching~~ — removed outright instead, so there is nothing to gate
 - [ ] `cargo-fuzz` over RTP → jitter buffer → decode, in CI, corpus committed
 - [ ] `cargo-fuzz` over the game reader too, through a `FuzzProcess`
       implementation of the `ProcessMemory` trait; chain depth and array lengths
@@ -563,12 +569,13 @@ written out rather than left as an oversight. Every number in the
 result is then used unchecked. `player.bufferLength` sizes an allocation. The
 pointer chains that produce the player list, `hostId` and the game state are
 offsets into another process's address space that arrive over the network.
-`fixedUpdateFunc` and `modLateUpdateFunc` become the RVAs at which the injection
-path writes a five-byte `E9 rel32` into `GameAssembly.dll`, and `disableWriting`
-is the flag that gates that write — so whoever controls the file also controls
-its own safety check. The write half is 32-bit-Windows-only, as injection is
-everywhere else in this document, so it reaches a shrinking minority; the read
-half reaches everyone. The client doing either may be running elevated, and none
+`fixedUpdateFunc` and `modLateUpdateFunc` were the RVAs at which the injection
+path wrote a five-byte `E9 rel32` into `GameAssembly.dll`, and `disableWriting`
+was the flag that gated that write — so whoever controlled the file also
+controlled its own safety check. **That half of the threat is gone:** nothing
+writes any more, and the five fields are still parsed and bounds-checked but
+never resolved against a live process. The read half, which reaches everyone,
+is unchanged and is what the validator exists for. The client doing either may be running elevated, and none
 of it requires compromising any infrastructure of ours.
 
 It also violates the port's own dependency rule against unpinned branch HEADs
