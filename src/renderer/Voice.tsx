@@ -145,6 +145,18 @@ function forceRelay(config: RTCConfiguration): RTCConfiguration {
 }
 
 /**
+ * Whether one advertised server is a relay.
+ *
+ * `turn:` and `turns:` both are, and checking only for `turn:` misses the TLS one —
+ * `'turns:host'.includes('turn:')` is false, because the `s` sits between the word and
+ * the colon. A deployment that offers only `turns:` would have been treated as having no
+ * relay at all, which is the configuration a cautious admin is most likely to choose.
+ */
+function isRelayUrl(urls: RTCIceServer['urls']): boolean {
+	return [].concat(urls as never).some((url) => String(url).startsWith('turn:') || String(url).startsWith('turns:'));
+}
+
+/**
  * Whether there is a relay to fall back to.
  *
  * Forcing relay mode with no relay advertised produces a connection that cannot gather
@@ -154,7 +166,7 @@ function forceRelay(config: RTCConfiguration): RTCConfiguration {
  * a client one, and the two look identical from the user's side.
  */
 function hasRelay(config: RTCConfiguration): boolean {
-	return (config.iceServers ?? []).some((server) => server.urls.toString().includes('turn:'));
+	return (config.iceServers ?? []).some((server) => isRelayUrl(server.urls));
 }
 
 export interface VoiceProps {
@@ -941,10 +953,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				return;
 			}
 
-			if (
-				clientPeerConfig.forceRelayOnly &&
-				!clientPeerConfig.iceServers.some((server) => server.urls.toString().includes('turn:'))
-			) {
+			if (clientPeerConfig.forceRelayOnly && !clientPeerConfig.iceServers.some((server) => isRelayUrl(server.urls))) {
 				alert('Server has forced relay mode enabled but provides no relay servers. Default config will be used.');
 				return;
 			}

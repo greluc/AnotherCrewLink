@@ -61,7 +61,11 @@ pub fn read_state(
 ) -> Result<AmongUsState, ReadError> {
     let base = context.module_base;
 
-    let inner_net = follow(memory, base, offsets_chain(offsets, "innerNetClient.base"))?;
+    // Not `?`. The Electron reader never fails a frame: a read that goes nowhere returns
+    // undefined, the value falls back, and the frame goes out as a menu frame. A reader
+    // that gives up instead disagrees with it on every frame where the game is starting,
+    // closing or between rounds — which in a real session is thousands of them.
+    let inner_net = follow(memory, base, offsets_chain(offsets, "innerNetClient.base")).unwrap_or(0);
     // Whether an in-game frame is a discussion is a second reading, of the meeting hud.
     // The cache pointer is what says a meeting is actually open rather than last used, and
     // 4 is the value the Electron reader falls back to for "no meeting".
@@ -114,20 +118,31 @@ pub fn read_state(
 
     let mut players = Vec::new();
     let mut local_player: Option<Player> = None;
+    // Whether the block below ran at all. Two fields keep a starting value rather than a
+    // read value when it does not, and the two are different numbers.
+    let mut read_players = false;
 
     if !game_code.is_empty() || is_local_game {
-        let all_players_ptr = follow(memory, base, top_level_chain(offsets, "allPlayersPtr"))?;
+        // Same again: a player table that cannot be reached is an empty lobby, not a
+        // failed frame. The Electron reader walks a garbage pointer, gets nothing back
+        // and pushes no players.
+        let all_players_ptr =
+            follow(memory, base, top_level_chain(offsets, "allPlayersPtr")).unwrap_or(0);
         let all_players = follow(
             memory,
             all_players_ptr,
             top_level_chain(offsets, "allPlayers"),
-        )?;
+        )
+        .unwrap_or(0);
         let count = read_u32_at(
             memory,
             all_players_ptr,
             first_offset(offsets, "playerCount"),
         )
         .unwrap_or(0) as usize;
+        // `&& playerCount` is part of the Electron condition, so a lobby the reader can
+        // reach but which reports nobody leaves the two starting values standing.
+        read_players = count > 0;
 
         let stride = memory.pointer_size() as u64;
         let mut entry =
@@ -159,16 +174,22 @@ pub fn read_state(
     }
 
     // `lightRadius` is a two-step chain in every bundle in the corpus.
-    let light_radius = local_player
-        .as_ref()
-        .and_then(|player| {
+    // `let lightRadius = 1;` — overwritten only inside the player block, and only when
+    // there is a local player to read it from. A reader that falls back to -1 in all three
+    // cases reports a blackout on every menu frame, and `lightRadiusChanged` with it.
+    let light_radius = if read_players {
+        local_player.as_ref().map_or(1.0, |player| {
             read_f32_chain(
                 memory,
                 player.object_ptr,
                 top_level_chain(offsets, "lightRadius"),
             )
+            // The read's own default, not the starting value: `readMemory(..., -1)`.
+            .unwrap_or(-1.0)
         })
-        .unwrap_or(-1.0);
+    } else {
+        1.0
+    };
 
     // The game options pointer does not resolve on every build: on Among Us 17.4.0 x86 it
     // comes back as zero, and every read through it is undefined. That went out as an
@@ -177,12 +198,18 @@ pub fn read_state(
     // build. ShipStatus carries the same value from a different signature.
     let options_ptr =
         follow(memory, base, top_level_chain(offsets, "gameoptionsData")).unwrap_or(0);
-    let max_players = read_u8_at(
-        memory,
-        options_ptr,
-        first_offset(offsets, "gameOptions_MaxPLayers"),
-    )
-    .unwrap_or(0);
+    // `let maxPlayers = 10;`, overwritten by `read ?? 0` inside the player block. Outside
+    // it the ten stands, which is why a menu frame reports ten rather than nobody.
+    let max_players = if read_players {
+        read_u8_at(
+            memory,
+            options_ptr,
+            first_offset(offsets, "gameOptions_MaxPLayers"),
+        )
+        .unwrap_or(0)
+    } else {
+        10
+    };
     let map = read_u8_at(
         memory,
         options_ptr,
