@@ -48,6 +48,12 @@ export const PEER_CONNECT_TIMEOUT = 20000;
  * the wait for `failed`. An ICE restart re-gathers -- including a fresh relay allocation --
  * and keeps the connection, its tracks and its DTLS session in place, which is a far
  * cheaper repair than the rebuild that a `failed` triggers.
+ *
+ * That it renegotiates at all was measured rather than assumed, against two real peer
+ * connections wired the way this class wires them: `onnegotiationneeded` fires a second
+ * time, the ICE credentials in the local description change, and the connection stays
+ * `connected` throughout. A repair that quietly did nothing would look exactly like the
+ * fault it is meant to fix, which is the worst way for an assumption to be wrong.
  */
 export const ICE_RESTART_AFTER_DISCONNECTED = 4000;
 
