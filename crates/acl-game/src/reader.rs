@@ -68,7 +68,10 @@ pub fn read_state(
     } else {
         read_i32_at(memory, inner_net, inner_client_offset(offsets, "gameId")).unwrap_or(-1)
     };
-    let lobby_code = if game_state == GameState::Menu {
+    // `GameReader.gameCode`, not yet the state's `lobbyCode`. The two differ: a local
+    // game overwrites this from the host's name hash further down, and the state field
+    // falls back to the literal "MENU" when this is empty.
+    let game_code = if game_state == GameState::Menu {
         String::new()
     } else {
         lobby_code_to_string(lobby_code_int)
@@ -83,7 +86,7 @@ pub fn read_state(
     let mut players = Vec::new();
     let mut local_player: Option<Player> = None;
 
-    if !lobby_code.is_empty() || is_local_game {
+    if !game_code.is_empty() || is_local_game {
         let all_players_ptr = follow(memory, base, top_level_chain(offsets, "allPlayersPtr"))?;
         let all_players = follow(
             memory,
@@ -167,6 +170,13 @@ pub fn read_state(
         .previous
         .as_ref()
         .map_or(f32::NAN, |state| state.light_radius);
+
+    // A local game has no code to decode -- `lobby_code_int` is the sentinel 32 -- so the
+    // Electron reader shows the host's name hash instead, and players read it to each
+    // other. Reproduced rather than skipped: without it the two readers disagree on
+    // `lobbyCode` for every LAN game, which is precisely the sort of divergence gate G1
+    // exists to catch.
+    let lobby_code = lobby_code_for(&players, host_id, is_local_game, game_code);
 
     Ok(AmongUsState {
         game_state,
@@ -373,11 +383,99 @@ fn read_f32_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Op
     Some(f32::from_le_bytes(raw))
 }
 
+/// The state's `lobbyCode`, from the decoded code and the players.
+///
+/// Two Electron behaviours live here, and both were missing from this port until
+/// 2026-08-24.
+///
+/// A local game has no code to decode — `lobbyCodeInt` is the sentinel 32 — so the
+/// Electron reader shows the host's name hash instead, and players read that to each
+/// other. Without it the two readers disagree on `lobbyCode` for every LAN game.
+///
+/// And the empty string never reaches the state: `state !== MENU ? this.gameCode ||
+/// 'MENU' : 'MENU'` ends at the literal on both branches.
+fn lobby_code_for(
+    players: &[Player],
+    host_id: u32,
+    is_local_game: bool,
+    game_code: String,
+) -> String {
+    let code = if is_local_game {
+        players
+            .iter()
+            .find(|player| player.client_id == host_id)
+            // JavaScript's `%` takes the sign of the dividend, and so does Rust's, so a
+            // negative hash gives a negative code on both sides.
+            .map_or(game_code, |host| (host.name_hash % 99_999).to_string())
+    } else {
+        game_code
+    };
+    if code.is_empty() {
+        "MENU".to_owned()
+    } else {
+        code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::*;
+
+    fn player(client_id: u32, name: &str) -> Player {
+        Player {
+            client_id,
+            name: name.to_owned(),
+            name_hash: crate::state::hash_name(name),
+            ..Player::default()
+        }
+    }
+
+    #[test]
+    fn an_ordinary_game_keeps_its_decoded_code() {
+        let players = vec![player(1, "Player1")];
+        assert_eq!(
+            lobby_code_for(&players, 1, false, "ABCDEF".to_owned()),
+            "ABCDEF"
+        );
+    }
+
+    #[test]
+    fn an_empty_code_becomes_the_literal_menu() {
+        // `this.gameCode || 'MENU'`. An empty string never reaches the state, so a reader
+        // that leaves it empty differs from the Electron one on every menu frame.
+        assert_eq!(lobby_code_for(&[], 0, false, String::new()), "MENU");
+    }
+
+    #[test]
+    fn a_local_game_shows_the_hosts_name_hash() {
+        // What players read to each other on a LAN, because there is no code to decode.
+        let expected = (crate::state::hash_name("Player1") % 99_999).to_string();
+        let players = vec![player(3, "Someone"), player(7, "Player1")];
+        assert_eq!(
+            lobby_code_for(&players, 7, true, "whatever".to_owned()),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_local_game_without_its_host_keeps_what_it_had() {
+        // The host can be missing from the table for a frame. The Electron reader leaves
+        // `gameCode` as it was rather than blanking it, so this does too.
+        let players = vec![player(3, "Someone")];
+        assert_eq!(lobby_code_for(&players, 7, true, "kept".to_owned()), "kept");
+    }
+
+    #[test]
+    fn a_negative_name_hash_gives_a_negative_code() {
+        // JavaScript's `%` takes the sign of the dividend. A Cyrillic name overflows into
+        // the top bit, so this is reachable rather than theoretical.
+        let name = "\u{43d}\u{435}\u{433}\u{43e}\u{434}\u{44f}\u{439}";
+        assert!(crate::state::hash_name(name) < 0);
+        let code = lobby_code_for(&[player(1, name)], 1, true, String::new());
+        assert!(code.starts_with('-'), "got {code}");
+    }
     use crate::sparse::SparseProcess;
 
     fn offsets() -> Offsets {
@@ -488,8 +586,9 @@ mod tests {
 
         let state = read_state(&process, &offsets, &context()).expect("a frame");
         assert_eq!(state.game_state, GameState::Menu);
-        // In the menu there is no lobby code, whatever the field happens to hold.
-        assert_eq!(state.lobby_code, "");
+        // In the menu the Electron reader reports the literal "MENU" rather than an
+        // empty string, and the state field is compared exactly.
+        assert_eq!(state.lobby_code, "MENU");
         assert_eq!(state.lobby_code_int, -1);
         assert!(state.players.is_empty());
         // And the map is never absent, because an undefined map is what made the collider

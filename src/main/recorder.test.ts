@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GameState, type AmongUsState } from '../common/AmongUsState';
+import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 
 // The recorder asks Electron where userData lives. Point it at a temporary directory so
 // the test writes real files through the real stream — the point of this file is the
@@ -13,7 +13,8 @@ vi.mock('electron', () => ({
 	app: { getPath: () => userData },
 }));
 
-const { endFrame, isRecording, noteRead, startRecording, stopRecording } = await import('./recorder');
+const { endFrame, isRecording, noteRead, noteString, startRecording, startRecordingIfAsked, stopRecording } =
+	await import('./recorder');
 
 /** Where the committed format fixture lives, shared with the Rust side. */
 const FIXTURE_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), '../../test/fixtures/recording-format');
@@ -32,6 +33,22 @@ function state(overrides: Partial<AmongUsState> = {}): AmongUsState {
 		closedDoors: [],
 		...overrides,
 	} as AmongUsState;
+}
+
+function player(overrides: Partial<Player> = {}): Player {
+	return { id: 1, clientId: 1, name: 'Player1', nameHash: 0, colorId: 0, ...overrides } as Player;
+}
+
+/** `GameReader.hashCode`, to check the recorder kept the derived field in step. */
+function hashCode(text: string): number {
+	let h = 0;
+	for (let i = 0; i < text.length; i++) h = (Math.imul(31, h) + text.charCodeAt(i)) | 0;
+	return h;
+}
+
+/** The bytes of a .NET string's character payload, as readString would have read them. */
+function nameBytes(name: string): Buffer {
+	return Buffer.from(name, 'utf16le');
 }
 
 function frames(path: string): Record<string, unknown>[] {
@@ -140,5 +157,96 @@ describe('recorder', () => {
 		mkdirSync(FIXTURE_DIRECTORY, { recursive: true });
 		writeFileSync(join(FIXTURE_DIRECTORY, 'one-frame.ndjson'), readFileSync(path));
 		expect(frames(path)).toHaveLength(1);
+	});
+
+	describe('scrubbing names', () => {
+		it('replaces the name in the state and in the bytes it came from', async () => {
+			// The property the gate rests on. Changing one side only would make the Rust
+			// reader disagree with the recorded state and report a bug that is not there.
+			const path = startRecording('scrub') as string;
+			noteString(0x2000, nameBytes('Player1'));
+			endFrame({ ...state(), players: [player({ name: 'Player1', nameHash: hashCode('Player1') })] }, false);
+			await stopRecording();
+
+			const [written] = frames(path);
+			const recorded = (written.state as { players: { name: string; nameHash: number }[] }).players[0];
+			expect(recorded.name).not.toBe('Player1');
+
+			const region = (written.reads as { a: string; b: string }[]).find((read) => read.a === '0x2000');
+			const decoded = Buffer.from(region?.b ?? '', 'base64')
+				.toString('utf16le')
+				.replace(/\0/g, '');
+			expect(decoded).toBe(recorded.name);
+			expect(recorded.nameHash).toBe(hashCode(recorded.name));
+		});
+
+		it('keeps the length, so no offset or length field shifts', async () => {
+			// The .NET string's length field is not re-read on replay; it is whatever the
+			// recorded region said. A shorter stand-in would leave a stale length.
+			const path = startRecording('length') as string;
+			for (const name of ['Ab', 'Player1', 'Krümelmonster', '😀😀']) {
+				noteString(0x3000, nameBytes(name));
+				endFrame({ ...state(), players: [player({ name, nameHash: hashCode(name) })] }, false);
+			}
+			await stopRecording();
+
+			for (const written of frames(path)) {
+				const recorded = (written.state as { players: { name: string }[] }).players[0];
+				const region = (written.reads as { a: string; b: string }[])[0];
+				const bytes = Buffer.from(region.b, 'base64');
+				expect(recorded.name.length * 2).toBe(bytes.length);
+			}
+		});
+
+		it('gives one player the same stand-in in every frame', async () => {
+			// A recording where somebody changes identity between frames is not a
+			// recording of a game.
+			const path = startRecording('stable') as string;
+			for (let i = 0; i < 3; i++) {
+				noteString(0x4000, nameBytes('Player1'));
+				endFrame({ ...state(), players: [player({ name: 'Player1', nameHash: hashCode('Player1') })] }, false);
+			}
+			await stopRecording();
+
+			const names = frames(path).map((written) => (written.state as { players: { name: string }[] }).players[0].name);
+			expect(new Set(names).size).toBe(1);
+		});
+
+		it('recomputes the lobby code of a local game', async () => {
+			// A LAN game has no code to decode, so GameReader shows the host's name hash.
+			// Leaving it stale would make the Rust reader disagree on lobbyCode.
+			const path = startRecording('local') as string;
+			noteString(0x5000, nameBytes('Host'));
+			endFrame(
+				{
+					...state(),
+					lobbyCodeInt: 32,
+					hostId: 4,
+					lobbyCode: (hashCode('Host') % 99999).toString(),
+					players: [player({ clientId: 4, name: 'Host', nameHash: hashCode('Host') })],
+				},
+				false
+			);
+			await stopRecording();
+
+			const [written] = frames(path);
+			const recorded = written.state as { lobbyCode: string; players: { nameHash: number }[] };
+			expect(recorded.lobbyCode).toBe((recorded.players[0].nameHash % 99999).toString());
+			expect(recorded.lobbyCode).not.toBe((hashCode('Host') % 99999).toString());
+		});
+
+		it('keeps real names when asked to', async () => {
+			process.env.ACL_RECORD = 'keep';
+			process.env.ACL_RECORD_KEEP_NAMES = '1';
+			startRecordingIfAsked();
+			noteString(0x6000, nameBytes('Player1'));
+			endFrame({ ...state(), players: [player({ name: 'Player1', nameHash: hashCode('Player1') })] }, false);
+			await stopRecording();
+			delete process.env.ACL_RECORD;
+			delete process.env.ACL_RECORD_KEEP_NAMES;
+
+			const [written] = frames(join(userData, 'recordings', 'keep.ndjson'));
+			expect((written.state as { players: { name: string }[] }).players[0].name).toBe('Player1');
+		});
 	});
 });

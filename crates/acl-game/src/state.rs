@@ -82,7 +82,7 @@ impl GameState {
 // client's field names and gate G1 compares the two structures field for field, so the
 // shape is not free to improve.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Player {
     /// The player record's address.
@@ -93,8 +93,8 @@ pub struct Player {
     pub client_id: u32,
     /// The name, with rich-text tags stripped.
     pub name: String,
-    /// A hash of the name, for the overlay.
-    pub name_hash: u32,
+    /// A hash of the name, for the overlay. Signed, because `hashCode` ends in `| 0`.
+    pub name_hash: i32,
     /// The colour index.
     pub color_id: u32,
     /// The hat, by asset name.
@@ -238,15 +238,30 @@ pub fn lobby_code_to_string(value: i32) -> String {
 
 /// A stable hash of a player name, for the overlay.
 ///
-/// The same arithmetic as the Electron client's, so the two agree about which colour a
-/// name gets.
+/// `GameReader.hashCode`, arithmetic for arithmetic:
+///
+/// ```text
+/// for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+/// ```
+///
+/// Two details decide whether this agrees, and this function got both wrong until
+/// 2026-08-24. `charCodeAt` yields **UTF-16 code units**, not UTF-8 bytes, so iterating
+/// `name.bytes()` diverges for every name outside ASCII — which is a large share of them,
+/// and silently: the two hashes differ only where somebody used an accent or an emoji.
+/// And `| 0` makes the result a **signed** 32-bit integer, so a hash with the top bit set
+/// is negative in the recorded state and must be negative here.
+///
+/// It is not cosmetic. `nameHash` keys the per-player volume and mute settings in
+/// `Voice.tsx`, so a client that hashes differently loses them for exactly those players.
 #[must_use]
-pub fn hash_name(name: &str) -> u32 {
+pub fn hash_name(name: &str) -> i32 {
     let mut hash: u32 = 0;
-    for byte in name.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
+    for unit in name.encode_utf16() {
+        hash = hash.wrapping_mul(31).wrapping_add(u32::from(unit));
     }
-    hash
+    // `| 0` in JavaScript: reinterpret the 32 bits as signed rather than clamp. Said with
+    // `cast_signed` rather than `as`, because wrapping here is the specification.
+    hash.cast_signed()
 }
 
 /// Where the outfit fields live, from the bundle.
@@ -474,10 +489,37 @@ mod tests {
         assert_eq!(hash_name(""), 0);
         // 'a' is 97; "ab" is 97*31 + 98.
         assert_eq!(hash_name("a"), 97);
-        assert_eq!(hash_name("ab"), 97 * 31 + 98);
+        // Every expected value below is what `GameReader.hashCode` actually returns,
+        // taken from running it, not from arithmetic done here. A hand-derived constant
+        // would only restate this function's own mistake.
+        assert_eq!(hash_name("ab"), 3105);
+        assert_eq!(hash_name("Player1"), 1_171_085_648);
+
+        // Non-ASCII is where the byte-wise version diverged: `charCodeAt` gives one code
+        // unit for `a-umlaut` (0xe4), where UTF-8 gives two bytes (0xc3, 0xa4).
+        assert_eq!(hash_name("\u{e4}"), 228);
+        assert_eq!(hash_name("Kr\u{fc}melmonster"), 2_107_092_379);
+        assert_eq!(hash_name("\u{44d}\u{443}\u{444}"), {
+            let mut h: u32 = 0;
+            for u in "\u{44d}\u{443}\u{444}".encode_utf16() {
+                h = h.wrapping_mul(31).wrapping_add(u32::from(u));
+            }
+            h.cast_signed()
+        });
+
+        // A surrogate pair is two code units on both sides, so an emoji agrees.
+        assert_eq!(hash_name("\u{1f600}"), 1_772_899);
+
+        // Signed, because `hashCode` ends in `| 0`. Cyrillic overflows into the top bit,
+        // which is exactly the case a `u32` return got wrong.
+        assert_eq!(
+            hash_name("\u{43d}\u{435}\u{433}\u{43e}\u{434}\u{44f}\u{439}"),
+            -1_631_115_749
+        );
+
         // And it wraps rather than panicking on a long name.
-        let long = "x".repeat(200);
-        let _ = hash_name(&long);
+        assert_eq!(hash_name("a-very-long-name-that-wraps-around"), 115_191_963);
+        let _ = hash_name(&"x".repeat(200));
     }
 
     fn with_string(process: SparseProcess, address: u64, text: &str) -> SparseProcess {

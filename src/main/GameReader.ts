@@ -14,7 +14,7 @@ import Struct from 'structron';
 import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages';
 import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
-import { endFrame, isRecording, noteRead } from './recorder';
+import { endFrame, isRecording, noteRead, noteString } from './recorder';
 import Errors from '../common/Errors';
 
 /** The length of the `E9 rel32` detour this client writes, plus its `0x90` padding byte. */
@@ -763,7 +763,9 @@ export default class GameReader {
 			);
 			// readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int')
 			const buffer = readBuffer(this.amongUs.handle, address + (this.is_64bit ? 0x14 : 0xc), length << 1);
-			if (isRecording()) noteRead(address + (this.is_64bit ? 0x14 : 0xc), buffer);
+			// noteString rather than noteRead: the scrubber replaces a name where it lives,
+			// and searching every region for its bytes would be the unsafe way to find it.
+			if (isRecording()) noteString(address + (this.is_64bit ? 0x14 : 0xc), buffer);
 			if (buffer) {
 				return buffer.toString('utf16le').replace(/\0/g, '');
 			} else {
