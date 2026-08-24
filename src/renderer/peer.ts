@@ -49,6 +49,11 @@ export default class Peer {
 	private connectEmitted = false;
 
 	private connectTimer?: ReturnType<typeof setTimeout>;
+	/// How many candidates of each type this connection managed to gather.
+	private gathered: Record<string, number> = {};
+	/// What went wrong while gathering, deduplicated: the same relay fails identically
+	/// once per local interface, so the raw list is four copies of one fact.
+	private gatheringErrors = new Set<string>();
 
 	constructor(private options: PeerOptions = {}) {
 		this.pc = new RTCPeerConnection(options.config);
@@ -68,8 +73,22 @@ export default class Peer {
 
 		this.pc.onicecandidate = (event) => {
 			if (event.candidate) {
+				// Counted by type rather than logged one by one: a fourteen-peer lobby
+				// gathers hundreds, and the only question anybody ever asks of them is
+				// whether there were any relay ones.
+				const type = event.candidate.type ?? 'unknown';
+				this.gathered[type] = (this.gathered[type] ?? 0) + 1;
 				this.emit('signal', { candidate: event.candidate.toJSON() });
 			}
+		};
+
+		// Why a relay was not reachable, when it was not. A failed allocation is silent
+		// otherwise -- the connection simply has no relay candidate and fails later for
+		// what looks like an unrelated reason, which is exactly the report that cannot be
+		// diagnosed from a log.
+		this.pc.onicecandidateerror = (event) => {
+			const error = event as RTCPeerConnectionIceErrorEvent;
+			this.gatheringErrors.add(`${error.url} ${error.errorCode} ${error.errorText}`);
 		};
 
 		this.pc.ontrack = (event) => {
@@ -86,7 +105,11 @@ export default class Peer {
 				this.clearConnectTimer();
 			}
 			if (state === 'failed') {
-				this.emit('error', new Error(`peer connection ${state}`));
+				// The candidate tally goes in the message. Whether this peer gathered a
+				// relay candidate is the single fact that separates "the relay is not
+				// reachable from here" from "the relay is reachable and ICE did not use
+				// it", and without it a bug report is a guess.
+				this.emit('error', new Error(`peer connection ${state} (${this.describeGathering()})`));
 				this.destroy();
 			} else if (state === 'closed') {
 				this.destroy();
@@ -166,6 +189,23 @@ export default class Peer {
 		} catch (error) {
 			this.emit('error', error instanceof Error ? error : new Error(String(error)));
 		}
+	}
+
+	/**
+	 * A one-line summary of what this connection had to work with.
+	 *
+	 * `relay=0` is the answer to the question that has taken two rounds of guessing to
+	 * ask: the player's network could not reach the relay, whatever the server advertised.
+	 * `relay=2` with a failure means it could, and something else is wrong.
+	 */
+	private describeGathering(): string {
+		const counts = Object.entries(this.gathered)
+			.map(([type, count]) => `${type}=${count}`)
+			.sort()
+			.join(' ');
+		const errors = [...this.gatheringErrors];
+		const summary = counts || 'no candidates at all';
+		return errors.length > 0 ? `${summary}; gathering errors: ${errors.join(', ')}` : summary;
 	}
 
 	private clearConnectTimer(): void {

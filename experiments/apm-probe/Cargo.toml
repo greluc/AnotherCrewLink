@@ -1,6 +1,6 @@
 [package]
 name = "apm-probe"
-description = "P1+ experiment 2: the chosen echo canceller links. Its 32-bit question was answered and is now moot."
+description = "P1+ experiment 2: does the echo canceller link, and does it cancel? Its 32-bit question was answered and is now moot."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,3 +13,4 @@ publish = false
 # target, and Windows is where the users are. See docs/rust-port/08-dependency-review.md
 # section 2.2.
 sonora = "0.2.0"
+

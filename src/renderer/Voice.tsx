@@ -999,9 +999,19 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				return;
 			}
 
+			// Logged once, without credentials. Two separate reports of "nobody can hear
+			// me" have now been diagnosed by guessing what the server was advertising at
+			// the time, because the log did not say. It costs one line.
+			const advertised = withTcpRelays(clientPeerConfig.iceServers);
+			console.log(
+				'ICE servers offered by the server:',
+				advertised.flatMap((server) => [].concat(server.urls as never).map(String)).join(', '),
+				clientPeerConfig.forceRelayOnly ? '(relay forced)' : ''
+			);
+
 			iceConfig = {
 				iceTransportPolicy: clientPeerConfig.forceRelayOnly ? 'relay' : 'all',
-				iceServers: withTcpRelays(clientPeerConfig.iceServers),
+				iceServers: advertised,
 			};
 		});
 
