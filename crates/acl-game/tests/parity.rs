@@ -129,6 +129,27 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Collapses an indexed path so a tally counts problems rather than array elements.
+///
+/// `players[3].isDead` and `players[7].isDead` are one disagreement about how `isDead` is
+/// read, and counting them separately buries the shape of a failure under its size.
+fn generalise(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let mut in_index = false;
+    for character in field.chars() {
+        match character {
+            '[' => {
+                in_index = true;
+                out.push_str("[]");
+            }
+            ']' => in_index = false,
+            _ if in_index => {}
+            _ => out.push(character),
+        }
+    }
+    out
+}
+
 /// Reads a recording, compressed or not.
 ///
 /// A session runs about 10 KB per frame and gzips by a factor of 130, because 99.8% of
@@ -322,6 +343,10 @@ fn the_rust_reader_agrees_with_the_electron_one() {
         return;
     }
 
+    // Which fields differ and how often, across every recording. One frame's worth of
+    // detail says what went wrong; the tally says how much of the corpus it accounts for,
+    // which is the difference between one bad field and a reader that is generally wrong.
+    let mut by_field: BTreeMap<String, usize> = BTreeMap::new();
     let mut frames = 0usize;
     let mut mismatched = 0usize;
     let mut first_report = String::new();
@@ -342,7 +367,20 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             };
 
             if let Some(recorded) = frame.offsets.as_ref() {
-                carried = serde_json::from_value(recorded.clone()).ok();
+                // Loud, not `.ok()`. Silently falling back to a fixture when the recorded
+                // bundle will not parse is how a gate comes to measure the wrong thing:
+                // the fixture still has the scanner's `-1` holes in it, so every frame
+                // then replays as if the client had never found the game -- and the
+                // failure reads as a reader bug rather than as a parse error here.
+                carried = Some(
+                    serde_json::from_value(recorded.clone()).unwrap_or_else(|error| {
+                        panic!(
+                            "{} frame {} carries a bundle this port cannot parse: {error}",
+                            path.display(),
+                            frame.frame
+                        )
+                    }),
+                );
             }
             // The recorded bundle if the file carries one, otherwise a scan against the
             // fixture — which only works for a recording that happens to include the
@@ -396,6 +434,12 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             differences(&frame.state, &ours, "", &mut found);
             if !found.is_empty() {
                 mismatched += 1;
+                for field in found.keys() {
+                    // Indexed fields are counted together: `players[3].isDead` and
+                    // `players[7].isDead` are one problem, not seven.
+                    let generalised = generalise(field);
+                    *by_field.entry(generalised).or_default() += 1;
+                }
                 if first_report.is_empty() {
                     let mut lines: Vec<String> = found
                         .iter()
@@ -420,9 +464,31 @@ fn the_rust_reader_agrees_with_the_electron_one() {
     }
 
     assert!(frames > 0, "the recordings held no replayable frames");
+
+    // The tally before the detail. One frame's fields say what went wrong; the counts say
+    // how much of the corpus it accounts for, which is the difference between one field
+    // read wrongly and a reader that is generally out of step.
+    let mut tally: Vec<_> = by_field.iter().collect();
+    tally.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let summary = tally
+        .iter()
+        .take(15)
+        .map(|(field, count)| format!("  {count} frames: {field}"))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+
     assert_eq!(
         mismatched, 0,
-        "gate G1: {mismatched} of {frames} frames differ.\n{first_report}"
+        "gate G1: {mismatched} of {frames} frames differ.
+
+By field:
+{summary}
+
+First difference:
+{first_report}"
     );
     eprintln!("gate G1: {frames} frames, no differences");
 }

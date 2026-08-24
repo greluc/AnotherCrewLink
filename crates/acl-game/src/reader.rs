@@ -65,7 +65,8 @@ pub fn read_state(
     // undefined, the value falls back, and the frame goes out as a menu frame. A reader
     // that gives up instead disagrees with it on every frame where the game is starting,
     // closing or between rounds — which in a real session is thousands of them.
-    let inner_net = follow(memory, base, offsets_chain(offsets, "innerNetClient.base")).unwrap_or(0);
+    let inner_net =
+        follow(memory, base, offsets_chain(offsets, "innerNetClient.base")).unwrap_or(0);
     // Whether an in-game frame is a discussion is a second reading, of the meeting hud.
     // The cache pointer is what says a meeting is actually open rather than last used, and
     // 4 is the value the Electron reader falls back to for "no meeting".
