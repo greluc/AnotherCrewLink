@@ -1,0 +1,11 @@
+# Pinned so every machine and every CI leg compiles with the same compiler. The three
+# targets are the ones this project ships to; i686 is not optional, it is where a large
+# share of Among Us installs still are.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+targets = [
+	"x86_64-pc-windows-msvc",
+	"i686-pc-windows-msvc",
+	"x86_64-unknown-linux-gnu",
+]

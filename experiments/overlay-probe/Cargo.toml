@@ -1,0 +1,19 @@
+[package]
+name = "overlay-probe"
+description = "P1+ experiment 1: is a transparent, click-through, always-on-top window available on all three targets?"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+eframe = { version = "0.36.1", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.36.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+# The workspace lints are for shipped code. This is a probe: it prints what the OS did and
+# exits, and holding it to `missing_docs` would add ceremony to forty lines.

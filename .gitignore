@@ -15,3 +15,6 @@ native/*/prebuilds/
 native/*/package-lock.json
 vendor/*/node_modules/
 vendor/*/package-lock.json
+
+# Rust build output.
+/target/

@@ -1,0 +1,52 @@
+# The Rust workspace for the 2.x client. The Electron app in `src/` is what ships today
+# and is untouched by anything here; the two live side by side until `P8`.
+#
+# Phase 1 of `docs/rust-port/04-implementation-plan.md`. The crates listed there but not
+# present yet arrive in their own phases — `acl-game` in P2, `acl-audio` in P3, and so on.
+
+[workspace]
+resolver = "3"
+members = ["crates/acl-types", "experiments/overlay-probe", "experiments/apm-i686"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.0"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/greluc/AnotherCrewLink"
+
+[workspace.lints.rust]
+# The reader and the injection path are the reason this is `deny` rather than `warn`: an
+# unsafe block inside an unsafe fn is the one that reads as checked and is not.
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Every one of these turns a wrong number into a wrong answer somewhere else, and this
+# codebase is mostly numbers: offsets, coordinates, gains.
+cast_possible_truncation = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
+# Panicking is a crash in a voice client that is meant to survive a bad frame.
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+
+[workspace.dependencies]
+kurbo = "0.13.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.53" }
+tokio-tungstenite = "0.30"
+tracing = "0.1"
+
+[profile.release]
+# A panic in the elevated helper must not unwind through the FFI boundary into the game's
+# process. Aborting is also smaller and faster.
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

@@ -1,0 +1,13 @@
+# Two mitigations that are off by default on stable, cost nothing, and are already in
+# every Chromium this app ships today.
+#
+# Control Flow Guard checks indirect call targets against a compiler-built table. It is
+# the one that matters here: this process reads another process's memory and, on 32-bit
+# Windows, writes an injection stub into it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "control-flow-guard=yes", "-C", "link-arg=/CETCOMPAT"]
+
+# No /CETCOMPAT on i686: shadow stacks are a 64-bit feature, and the linker rejects the
+# flag on a 32-bit image rather than ignoring it.
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "control-flow-guard=yes"]
