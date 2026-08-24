@@ -18,9 +18,36 @@ import { IpcOverlayMessages, IpcRendererMessages } from '../common/ipc-messages'
 import { GameState, type AmongUsState, type Player } from '../common/AmongUsState';
 import { fetchOffsetLookup, fetchOffsets, type IOffsets, type IOffsetsLookup } from './offsetStore';
 import { isAddressInModule } from './offsetsValidator';
+import { endFrame, isRecording, noteRead } from './recorder';
 import Errors from '../common/Errors';
 
 /** The length of the `E9 rel32` detour this client writes, plus its `0x90` padding byte. */
+/**
+ * How many bytes each memoryjs data type reads.
+ *
+ * The recorder captures bytes rather than decoded values, so it has to know how far a
+ * read reached. Anything unlisted is recorded as eight bytes, which over-reads rather
+ * than under-reads — a replay with too many bytes still decodes correctly.
+ */
+const SIZE_OF: Record<string, number> = {
+	byte: 1,
+	int8: 1,
+	uint8: 1,
+	boolean: 1,
+	bool: 1,
+	short: 2,
+	int16: 2,
+	uint16: 2,
+	int: 4,
+	int32: 4,
+	uint32: 4,
+	float: 4,
+	long: 8,
+	int64: 8,
+	uint64: 8,
+	double: 8,
+};
+
 const DETOUR_LENGTH = 5;
 
 /**
@@ -260,6 +287,7 @@ export default class GameReader {
 					const { address, last } = this.offsetAddress(playerAddrPtr, this.offsets.player.offsets);
 					if (address === 0) continue;
 					const playerData = readBuffer(this.amongUs.handle, address + last, this.offsets.player.bufferLength);
+					if (isRecording()) noteRead(address + last, playerData);
 					const player = this.parsePlayer(address + last, playerData, clientId);
 					playerAddrPtr += this.is_64bit ? 8 : 4;
 					if (!player || state === GameState.MENU) {
@@ -442,6 +470,19 @@ export default class GameReader {
 				} catch {
 					process.exit(0);
 				}
+			}
+			if (isRecording()) {
+				endFrame(
+					newState,
+					this.is_64bit,
+					this.gameAssembly
+						? {
+								name: 'GameAssembly.dll',
+								base: this.gameAssembly.modBaseAddr,
+								size: this.gameAssembly.modBaseSize,
+							}
+						: undefined
+				);
 			}
 			this.lastState = newState;
 			this.oldGameState = state;
@@ -1075,7 +1116,24 @@ export default class GameReader {
 		}
 		const { address: addr, last } = this.offsetAddress(address, offsets || []);
 		if (addr === 0) return defaultParam as T;
-		return readMemoryRaw<T>(this.amongUs.handle, addr + last, dataType);
+		const value = readMemoryRaw<T>(this.amongUs.handle, addr + last, dataType);
+		// Recording captures the bytes rather than the decoded value, so a replay drives
+		// the same decoder rather than trusting this one's answer.
+		if (isRecording()) {
+			this.recordRead(addr + last, SIZE_OF[dataType] ?? 8);
+		}
+		return value;
+	}
+
+	/** Re-reads a region as bytes, for the recorder. Off by default and never throws. */
+	recordRead(address: number, length: number): void {
+		if (!this.amongUs || length <= 0) return;
+		try {
+			noteRead(address, readBuffer(this.amongUs.handle, address, length));
+		} catch {
+			// A region that cannot be re-read is one the replay will not have either, and
+			// the parity run will say so. Failing the frame here would be worse.
+		}
 	}
 
 	offsetAddress(address: number, offsets: number[]): { address: number; last: number } {
@@ -1101,6 +1159,7 @@ export default class GameReader {
 			);
 			// readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int')
 			const buffer = readBuffer(this.amongUs.handle, address + (this.is_64bit ? 0x14 : 0xc), length << 1);
+			if (isRecording()) noteRead(address + (this.is_64bit ? 0x14 : 0xc), buffer);
 			if (buffer) {
 				return buffer.toString('utf16le').replace(/\0/g, '');
 			} else {
