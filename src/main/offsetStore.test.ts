@@ -204,9 +204,12 @@ describe('fetchOffsets', () => {
 
 	it('refuses offsets that do not validate, and does not cache them', async () => {
 		fetchFailingTimes(0, { ...REAL_OFFSETS, fixedUpdateFunc: 0x7fffffff });
-		const result = fetchOffsets(false, 'nowhere/offsets.json', 1);
+		// The assertion is attached before the timers run: the rejection happens while they
+		// are being advanced, and an unhandled one fails the whole suite even though every
+		// test passes.
+		const assertion = expect(fetchOffsets(false, 'nowhere/offsets.json', 1)).rejects.toBeTruthy();
 		await vi.runAllTimersAsync();
-		await expect(result).rejects.toBeTruthy();
+		await assertion;
 		expect(stores.offsets.IOffsets).toBeUndefined();
 	});
 
@@ -241,9 +244,9 @@ describe('fetchOffsets', () => {
 		// The floor carries the current build only. Handing a player on a two-year-old
 		// Among Us the current offsets would read the wrong fields and report nothing.
 		fetchAlwaysFailing();
-		const result = fetchOffsets(false, 'V2021.3.31/offsets.json', 1);
+		const assertion = expect(fetchOffsets(false, 'V2021.3.31/offsets.json', 1)).rejects.toBeTruthy();
 		await vi.runAllTimersAsync();
-		await expect(result).rejects.toBeTruthy();
+		await assertion;
 	});
 });
 
