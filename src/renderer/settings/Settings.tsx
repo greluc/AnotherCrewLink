@@ -163,6 +163,22 @@ const DisabledTooltip: React.FC<DisabledTooltipProps> = ({ disabled, children, t
 	else return <>{children}</>;
 };
 
+/**
+ * The secret is the name of the room the overlay feed is published to, so guessing it
+ * yields every player's position and role. It used to come from Math.random(), which is
+ * neither unpredictable nor uniform in length - toString(36) drops leading zeroes, so it
+ * could return fewer than the nine characters the sender checks for. Existing secrets keep
+ * working; a user who wants a stronger one regenerates it, and their overlay URL changes
+ * with it.
+ */
+function generateObsSecret(): string {
+	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	// Rejection-free because the alphabet is exactly 32 long: five bits per character.
+	return Array.from(bytes, (byte) => alphabet[byte & 31]).join('');
+}
+
 const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) => {
 	const { classes } = useStyles({ open });
 	const [settings, setSettings, setLobbySettings] = useContext(SettingsContext);
@@ -1144,7 +1160,7 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 						onChange={(_, checked: boolean) => {
 							setSettings('obsOverlay', checked);
 							if (!settings.obsSecret) {
-								setSettings('obsSecret', Math.random().toString(36).substr(2, 9).toUpperCase());
+								setSettings('obsSecret', generateObsSecret());
 							}
 						}}
 						control={<Checkbox />}

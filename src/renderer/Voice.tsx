@@ -639,14 +639,16 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	}, [lobbySettings.maxDistance, lobbySettings.visionHearing]);
 
 	useEffect(() => {
-		if (
-			!gameState?.players ||
-			!connectionStuff.current.socket ||
-			(!hostRef.current.mobileRunning && !settings.obsOverlay)
-		) {
+		// Hosting for mobile players is opt-in, and the opt-in is this setting. The
+		// broadcast below used to depend only on mobileRunning, which any lobby member can
+		// switch on remotely, and it carries the whole game state: every player's position,
+		// impostor flag and vent state, to a room name anyone can join. That made a
+		// six-character lobby code enough to watch the entire lobby through the wall.
+		const hostingMobile = hostRef.current.mobileRunning && settings.mobileHost;
+		if (!gameState?.players || !connectionStuff.current.socket || (!hostingMobile && !settings.obsOverlay)) {
 			return;
 		}
-		if (hostRef.current.mobileRunning) {
+		if (hostingMobile) {
 			connectionStuff.current.socket?.emit('signal', {
 				to: `${gameState.lobbyCode}_mobile`,
 				data: { gameState, lobbySettings },
@@ -656,7 +658,8 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		if (
 			settings.obsOverlay &&
 			settings.obsSecret &&
-			settings.obsSecret.length === 9 &&
+			// A minimum, not an equality: secrets generated from now on are longer.
+			settings.obsSecret.length >= 9 &&
 			((gameState.gameState !== GameState.UNKNOWN && gameState.gameState !== GameState.MENU) ||
 				gameState.oldGameState !== gameState.gameState)
 		) {
@@ -1277,10 +1280,17 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 				// The server only sends { data, from }; `client` was always undefined here, so
 				// disconnectClient never cleaned up the stale audio element on this side.
 				socket.on('signal', ({ data, from }: { data: SignalData; from: string }) => {
+					const client = socketClientsRef.current[from];
+					if (!client) {
+						console.warn('SIGNAL FROM UNKOWN SOCKET..');
+						return;
+					}
+					// Below the sender check, not above it: this branch used to run for anyone
+					// who could name this socket, whether or not they were in the lobby.
 					if (Object.hasOwn(data, 'mobilePlayerInfo')) {
-						// eslint-disable-line
 						const mobiledata = data as unknown as mobileHostInfo;
 						if (
+							settingsRef.current.mobileHost &&
 							mobiledata.mobilePlayerInfo.code === hostRef.current.code &&
 							hostRef.current.gamestate !== GameState.MENU
 						) {
@@ -1290,11 +1300,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						return;
 					}
 					let connection: Peer;
-					const client = socketClientsRef.current[from];
-					if (!client) {
-						console.warn('SIGNAL FROM UNKOWN SOCKET..');
-						return;
-					}
 					// Only signals carrying a `type` used to be forwarded, so trickled ICE
 					// candidates, which have no type, were dropped outright. Connections then
 					// depended on whatever candidates happened to be in the initial SDP.
