@@ -12,13 +12,15 @@
 //!
 //! # Running it
 //!
-//! Put `.ndjson` files in `test/recordings/` and run `cargo test -p acl-game`. Without
+//! Put `.ndjson` or `.ndjson.gz` files in `test/recordings/` and run
+//! `cargo test -p acl-game`. Without
 //! any it skips, loudly. The empty corpus is tracked as
 //! <https://github.com/greluc/AnotherCrewLink/issues/10>, because it needs frames from a
 //! real game and nobody can write those at a keyboard. A test that quietly passes having compared nothing would be the
 //! worst possible outcome here: it would report that the gate is met.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use acl_game::mods::Mod;
@@ -28,6 +30,7 @@ use acl_game::resolve::resolve_offsets;
 use acl_game::sparse::SparseProcess;
 use acl_game::state::AmongUsState;
 use acl_game::{Module, ProcessMemory};
+use flate2::read::GzDecoder;
 use serde::Deserialize;
 
 /// How far two float positions may differ and still count as equal.
@@ -82,8 +85,9 @@ fn recordings() -> Vec<PathBuf> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
+            // `.ndjson`, or `.ndjson.gz` for a committed one.
             path.extension()
-                .is_some_and(|extension| extension == "ndjson")
+                .is_some_and(|extension| extension == "ndjson" || extension == "gz")
         })
         .collect();
     found.sort();
@@ -123,6 +127,24 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// Reads a recording, compressed or not.
+///
+/// A session runs about 10 KB per frame and gzips by a factor of 130, because 99.8% of
+/// the regions in a frame are byte-identical to the frame before. Committing them
+/// compressed keeps a working copy small; the harness does not care which it is given.
+fn read_recording(path: &Path) -> String {
+    let bytes = std::fs::read(path).expect("a recording");
+    if path.extension().is_some_and(|extension| extension == "gz") {
+        let mut text = String::new();
+        GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .expect("a gzipped recording");
+        text
+    } else {
+        String::from_utf8(bytes).expect("a recording is UTF-8")
+    }
 }
 
 /// Rebuilds the process as it was when the frame was recorded.
@@ -305,7 +327,7 @@ fn the_rust_reader_agrees_with_the_electron_one() {
     let mut first_report = String::new();
 
     for path in &files {
-        let text = std::fs::read_to_string(path).expect("a recording");
+        let text = read_recording(path);
         // Written once per file and used for every frame in it.
         let mut carried: Option<Offsets> = None;
         // Threaded from frame to frame, the way the reader sees it when it runs.

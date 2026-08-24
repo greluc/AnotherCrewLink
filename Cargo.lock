@@ -16,6 +16,7 @@ name = "acl-game"
 version = "0.0.0"
 dependencies = [
  "acl-types",
+ "flate2",
  "nix",
  "serde",
  "serde_json",
