@@ -110,6 +110,45 @@ code-signing application rests on every artifact being built from source in a ve
 way. Taking `libwebrtc` would put a downloaded binary blob at the centre of the audio path
 and would have to be argued for on those terms, not on ERLE.
 
+### The A/B, and the decision
+
+**Measured 2026-08-24.** Both cancellers, the same speech-like far end, the same echo path
+— 60 ms of delay, three reflections, twelve seconds, measured over the last two after the
+adaptive filter has converged:
+
+| Canceller | ERLE |
+| --- | --- |
+| `sonora` 0.2.0 | **11.6 dB** |
+| AEC3, through `libwebrtc` 0.3.45 | **11.3 dB** |
+
+`cargo run -p apm-probe --release` produces the first. The second needs its own binary, for
+a reason below, and is not in this repository.
+
+**Read that difference as "no difference".** Three tenths of a decibel is not a result, and
+the fact that two independent cancellers land on the same number is a warning about the
+measurement rather than a finding about them: this echo path is probably easy enough that
+both reach whatever ceiling the harness imposes. A real A/B with room recordings could
+still separate them.
+
+**It does not matter, because the decision does not turn on ERLE.** What the measurement
+establishes is the negative that was actually in doubt — sonora is not *worse* — and with
+that gone, the remaining differences all point one way:
+
+- `libwebrtc` links a prebuilt 86 MB `webrtc.lib` downloaded from LiveKit, 493 MB in the
+  build directory, compiled by nobody here. This project spent the same week removing
+  prebuilt binaries from `native/uiohook-napi` so libuiohook is built from the C in the
+  tree, and the code-signing application rests on that.
+- It **does not link at all in release on Windows** without `-C target-feature=+crt-static`.
+  The conflict is inside `webrtc-sys` itself: `desktop_frame.obj` is `/MT` and the
+  cxx-generated `desktop_capturer.rs.o` is `/MD`, so `link.exe` gives LNK2038 and LNK1169.
+  Debug links. Release does not. Forcing the static CRT on the whole binary to work around
+  a defect in a dependency is a decision with its own consequences.
+- It brings NetEQ, RTP/RTCP and Opus with it, which sounds like an argument for it until
+  you notice that phase 4 has not chosen a transport yet and this would choose it.
+
+**Decision: sonora.** Revisit if a room-recording A/B shows a real gap, or if the prebuilt
+blob stops being a concern.
+
 **A warning about measuring this.** The first attempt reported a hard failure —
 `fatal error C1083: Cannot open include file: 'absl/types/optional.h'` — and the header
 was there all along. The build ran under a path 298 characters deep, and `cl.exe` does not

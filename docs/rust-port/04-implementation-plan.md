@@ -891,6 +891,13 @@ Run the same impairments through the Electron client for reference numbers.
 >    compiled from source. That is the axis the choice now turns on, not echo
 >    return loss. See `experiments/README.md`.
 >
+>    **Decided 2026-08-24: sonora.** The A/B was run — same far end, same echo
+>    path, both cancellers — and it came out 11.6 dB against 11.3 dB, which is to
+>    say no difference at all. That settles the only thing that was in doubt,
+>    which was whether sonora is worse. It is not, so the decision falls to the
+>    prebuilt blob, and to the fact that `webrtc-sys` does not link in release on
+>    Windows without forcing the static CRT on the whole binary.
+>
 > Criterion 3's 30 ms latency budget and the NACK target-delay decision are made
 > **jointly**, not independently: a buffer deep enough to make a retransmission
 > useful over a 60–100 ms RTT can consume the entire budget.
