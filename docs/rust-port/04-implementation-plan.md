@@ -597,6 +597,30 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
    layer must stay pure: `&dyn ProcessMemory` in, `Result` out, no `unwrap`, no
    `as` truncation.
 
+> **Measured 2026-08-24, and it changes the shape of this decision.** The
+> injection path exists for two features, and one of them is already switched off.
+>
+> The `FixedUpdate` detour is there so the lobby browser can make the game join a
+> lobby without the player typing the code. That path is dead:
+> `GameReader.joinGame` has its parameters marked unused and its body entirely
+> commented out, and the only `JOIN_LOBBY` sender in the renderer
+> (`LobbyBrowser.tsx:244`) is commented out too. The shellcode is written and its
+> flag is never set.
+>
+> What still runs is `fixPingMessage`, which enables an icon and replaces the
+> game's ping string with `AnotherCrewLink v1.0.3 / aucl.greluc.me / Ping: {0}ms`.
+>
+> So today the client allocates an executable page in another process, overwrites
+> the first five bytes of two functions with jumps into hand-assembled x86, and
+> replaces a string pointer — to put a version number and a URL in the corner of
+> the game's menu. Nothing about voice depends on any of it, and none of it happens
+> on 64-bit builds at all.
+>
+> That does not decide anything by itself, but it prices it honestly. The `i686`
+> target, the NASM requirement, the alignment hazard item 2 lints around, the
+> `PROCESS_VM_WRITE` right, and the foreclosure of LiveKit's `libwebrtc` binding
+> are all bought by a branding stamp.
+
 **An explicit open decision: split the injection path into its own 32-bit
 process.** The `i686-pc-windows-msvc` target exists for nothing but item 6, and
 it is the largest available lever on this project's risk profile. That one target
