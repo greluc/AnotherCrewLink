@@ -39,7 +39,24 @@ A consequence worth having on purpose: the process never receives a cursor posit
 all, which is a better thing to be able to say about something holding a global input
 hook.
 
-**Re-apply it when upgrading.** It is fifteen lines in `dispatch_proc`, marked `LOCAL
+## What was measured, and how
+
+Against a running session, with the game in the foreground:
+
+| Check | Result |
+| --- | --- |
+| Module loads under Electron, hook starts and stops | yes |
+| Keycodes match `src/main/keyBindings.ts` | `V`=47, `CtrlRight`=3613, `AltRight`=3640 |
+| A synthetic `F13` arrives | yes, keycode 91 |
+| Real keystrokes arrive | yes, the player's own movement keys |
+| Extra mouse buttons arrive | yes, `mousedown` and `mouseup` for 4 and 5 |
+| Mouse motion arrives | no, 0 events where an unpatched build reported 1011 in 8 seconds |
+
+The mouse buttons were driven with `mouse_event` XBUTTON1 and XBUTTON2, which Among Us
+binds to nothing. The commit that made this change says they were unverified; they were
+verified immediately afterwards and this table is the record.
+
+**Re-apply the patch when upgrading.** It is fifteen lines in `dispatch_proc`, marked `LOCAL
 PATCH`. If mouse motion starts arriving again, that is what was lost. Note that a rebuild
 does not always recompile: `node-gyp-build` will reuse `build/Release/*.node` if it is
 there, so `rm -rf native/uiohook-napi/build` first and verify by counting `mousemove`
