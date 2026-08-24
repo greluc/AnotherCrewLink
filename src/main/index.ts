@@ -1,5 +1,5 @@
 import { autoUpdater } from 'electron-updater';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
 import { windowStateKeeper } from './windowState';
 import { platform } from 'node:os';
 import { join as joinPath, dirname, resolve as resolvePath, sep } from 'node:path';
@@ -276,6 +276,37 @@ if (!gotTheLock) {
 		`AnotherCrewLink ${appVersion} starting on ${process.platform} ${process.arch}, electron ${process.versions.electron}`
 	);
 	console.log('Logging to', logDirectory());
+
+	// Without these, a failure before the window opens is whatever the platform decides to
+	// show -- on Windows a dialog that names no cause -- and nothing reaches the log,
+	// because the process is gone before anything writes to it. Two users have reported
+	// exactly that after installing: several errors on first launch, then it started.
+	//
+	// Node terminates the process on an unhandled rejection, so both are caught. Neither
+	// handler tries to carry on: the app is in a state it did not plan for, and the
+	// honest thing is to say what happened and stop rather than to limp.
+	const reportFatal = (kind: string, error: unknown) => {
+		const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+		console.error(`${kind}:`, detail);
+		try {
+			// After the log, and in a try of its own: showing a dialog can itself fail
+			// while the app is starting, and losing the log to that would be the worse
+			// half of the trade.
+			dialog.showErrorBox(
+				'AnotherCrewLink could not start',
+				`${detail}
+
+This has been written to:
+${logDirectory()}`
+			);
+		} catch {
+			/* The log already has it. */
+		}
+		app.exit(1);
+	};
+
+	process.on('uncaughtException', (error) => reportFatal('Uncaught exception', error));
+	process.on('unhandledRejection', (reason) => reportFatal('Unhandled rejection', reason));
 
 	autoUpdater.autoDownload = false;
 	// The returned promise rejects alongside the error event, and nothing was waiting on
