@@ -113,7 +113,23 @@ jobs:
 
       # 32-bit binaries run on a 64-bit Windows host, so this is a real run rather than a
       # cross-compile check.
+      # The conformance test drives this client against the Rust server, which is itself
+      # verified against the reference socket.io-client from Node. Checking out a second
+      # repository to run it is the price of testing against an implementation that did
+      # not come from this one.
+      - name: Check out the server
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: greluc/AnotherCrewLink-Server
+          path: server
+
+      - name: Build the server
+        working-directory: server
+        run: cargo build --locked
+
       - name: Test
+        env:
+          ACL_SERVER_BIN: ${{ runner.os == 'Windows' && 'server/target/debug/acl-server.exe' || 'server/target/debug/acl-server' }}
         run: cargo test --locked --workspace --target ${{ matrix.target }}
 
   overlay-linux:
@@ -168,3 +184,61 @@ jobs:
 
       - name: Check dependencies
         run: cargo deny --locked check
+
+      # Pinned for the same reason cargo-deny is: the store format moves between
+      # releases, and an unpinned install turns a green gate red with nothing changed
+      # here.
+      - name: Install cargo-vet
+        run: cargo install cargo-vet --locked --version 0.10.2
+
+      # This passes on exemptions rather than audits — 38 of 283 crates are covered, and
+      # supply-chain/README.md says so in as many words. What it catches is a *new*
+      # unaudited dependency arriving unnoticed.
+      - name: Check the audit store
+        run: cargo vet --locked
+
+  attribution:
+    # Distributing a GPL binary means distributing the licence texts of everything linked
+    # into it. The file is generated rather than committed, so this checks that it can
+    # still be generated — a dependency with an unrecognised licence fails here rather
+    # than at release time.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version 0.9.2 --features cli
+
+      - name: Generate the third-party attribution
+        run: cargo about generate about.hbs -o THIRD-PARTY.html
+
+      - name: It is not empty
+        run: |
+          test -s THIRD-PARTY.html
+          grep -q '<h2>' THIRD-PARTY.html
+
+  auditable:
+    # A shipped binary carries its own dependency list, so `cargo audit bin` still works
+    # against an artefact months after the tree that built it moved on. Proving that here
+    # means the release build in P7 inherits a mechanism that is known to work rather than
+    # one that was written down.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install cargo-auditable and cargo-audit
+        run: cargo install cargo-auditable cargo-audit --locked
+
+      - name: Build with an embedded dependency list
+        run: cargo auditable build --locked --release -p apm-i686
+
+      - name: The list is actually in the binary
+        run: cargo audit bin target/release/apm-i686
