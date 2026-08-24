@@ -1,5 +1,36 @@
 # AnotherCrewLink Changelog
 
+## v1.0.3
+
+A security release. Update it.
+
+### Fixed
+
+- **Any member of a lobby could read every other player's position and role.**
+  Hosting for mobile players is opt-in, through the mobileHost setting, and the
+  broadcast did not check it: it depended only on an internal flag that an incoming
+  `mobilePlayerInfo` message switched on, and that message was handled before the
+  check on who sent it. What it broadcasts is the whole game state — every player's
+  coordinates, impostor flag, dead flag and vent state, five times a second — to a
+  room named after the lobby code with `_mobile` appended. The server relays a signal
+  to whatever target the sender names without checking that they share a lobby, and
+  its join handler accepts any string as a room name. Knowing a six-character lobby
+  code was therefore enough to switch the broadcast on in someone else's client and
+  then read it: a working wallhack, including who the impostors are. The broadcast now
+  requires the local setting, and the message is handled below the sender check.
+- **The overlay secret was predictable.** It came from
+  `Math.random().toString(36).substr(2, 9)`, which is neither unpredictable nor
+  reliably nine characters, and it names the room the overlay feed is published to —
+  the same positional payload. New secrets come from the platform's cryptographic
+  random generator. Existing secrets keep working; regenerating one changes the
+  overlay URL with it.
+
+The server-side half — refusing to relay a signal whose target is not in the sender's
+lobby — needs a logging period before it can be enforced without breaking older
+clients, and is planned for 1.0.5.
+
+This code is inherited from BetterCrewLink, so other forks are likely to be affected.
+
 ## v1.0.2
 
 ### Fixed
