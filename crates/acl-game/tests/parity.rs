@@ -26,6 +26,7 @@ use acl_game::offsets::Offsets;
 use acl_game::reader::{ReadContext, read_state};
 use acl_game::resolve::resolve_offsets;
 use acl_game::sparse::SparseProcess;
+use acl_game::state::AmongUsState;
 use acl_game::{Module, ProcessMemory};
 use serde::Deserialize;
 
@@ -59,6 +60,14 @@ struct RecordedFrame {
     /// The Electron reader's answer, kept as raw JSON so a field this port does not know
     /// about still shows up as a difference rather than being dropped on the way in.
     state: serde_json::Value,
+    /// The bundle the Electron reader was actually using, written once per file.
+    ///
+    /// The scan cannot be redone on replay: it runs inside `memoryjs` and never passes
+    /// through a recorded read, so the module's bytes are not in the file. The first real
+    /// recording failed all 124 of its frames for exactly this reason before the recorder
+    /// started carrying the resolved bundle.
+    #[serde(default)]
+    offsets: Option<serde_json::Value>,
 }
 
 fn recordings_directory() -> PathBuf {
@@ -124,8 +133,13 @@ fn replay(frame: &RecordedFrame) -> Option<(SparseProcess, Module)> {
 
     let mut process = SparseProcess::new(frame.is64).with_module("GameAssembly.dll", base, size);
     for read in &frame.reads {
-        let address = parse_hex(&read.a)?;
-        let bytes = decode_base64(&read.b)?;
+        // A region that cannot be parsed is dropped, not fatal. Returning `None` here
+        // discards the whole frame, and one unusable address among hundreds of good ones
+        // is not a reason to throw the frame away — it is a reason for the read that
+        // needed it to fail, loudly, where the comparison can see it.
+        let (Some(address), Some(bytes)) = (parse_hex(&read.a), decode_base64(&read.b)) else {
+            continue;
+        };
         process = process.with_region(address, bytes);
     }
     Some((
@@ -292,6 +306,10 @@ fn the_rust_reader_agrees_with_the_electron_one() {
 
     for path in &files {
         let text = std::fs::read_to_string(path).expect("a recording");
+        // Written once per file and used for every frame in it.
+        let mut carried: Option<Offsets> = None;
+        // Threaded from frame to frame, the way the reader sees it when it runs.
+        let mut previous: Option<AmongUsState> = None;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let frame: RecordedFrame = serde_json::from_str(line)
                 .unwrap_or_else(|error| panic!("{} has a bad frame: {error}", path.display()));
@@ -301,12 +319,27 @@ fn the_rust_reader_agrees_with_the_electron_one() {
                 continue;
             };
 
-            let offsets = offsets_for(&process);
-            let resolved = resolve_offsets(&process, &module, &offsets)
-                .expect("resolving offsets against a replayed process");
+            if let Some(recorded) = frame.offsets.as_ref() {
+                carried = serde_json::from_value(recorded.clone()).ok();
+            }
+            // The recorded bundle if the file carries one, otherwise a scan against the
+            // fixture — which only works for a recording that happens to include the
+            // module's bytes, and says so when it does not.
+            let resolved = if let Some(offsets) = carried.as_ref() {
+                offsets.clone()
+            } else {
+                let offsets = offsets_for(&process);
+                resolve_offsets(&process, &module, &offsets)
+                    .expect("resolving offsets against a replayed process")
+                    .offsets
+            };
             let context = ReadContext {
                 module_base: module.base,
-                previous: None,
+                // The frame before it, as this reader produced it. Two fields are defined
+                // against it — `oldGameState` and `lightRadiusChanged` — and passing None
+                // every time made both differ on every frame after the first, which read
+                // as a reader bug and was a harness one.
+                previous: previous.clone(),
                 loaded_mod: Mod::None,
                 current_server: frame
                     .state
@@ -317,17 +350,24 @@ fn the_rust_reader_agrees_with_the_electron_one() {
             };
 
             frames += 1;
-            let Ok(state) = read_state(&process, &resolved.offsets, &context) else {
-                mismatched += 1;
-                if first_report.is_empty() {
-                    first_report = format!(
-                        "{} frame {}: the Rust reader could not read the frame at all",
-                        path.display(),
-                        frame.frame
-                    );
+            let state = match read_state(&process, &resolved, &context) {
+                Ok(state) => state,
+                Err(error) => {
+                    mismatched += 1;
+                    if first_report.is_empty() {
+                        // The error itself, not just that there was one: "could not read
+                        // the frame" is what this said at first, and it cost a debugging
+                        // round to find out which chain had given up.
+                        first_report = format!(
+                            "{} frame {}: the Rust reader could not read the frame: {error}",
+                            path.display(),
+                            frame.frame
+                        );
+                    }
+                    continue;
                 }
-                continue;
             };
+            previous = Some(state.clone());
 
             let ours = serde_json::to_value(&state).expect("the state serialises");
             let mut found = BTreeMap::new();

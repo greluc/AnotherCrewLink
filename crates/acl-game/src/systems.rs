@@ -40,10 +40,10 @@ const MAX_DOORS: i32 = 16;
 const MIRA_CONSOLES_FOR_CLEAR: u32 = 2;
 
 /// The Skeld's camera console is one place, so proximity to it is the test.
-const SKELD_CAMERA: (f32, f32) = (-12.9364, -2.7928);
+const SKELD_CAMERA: (f64, f64) = (-12.9364, -2.7928);
 
 /// How close the local player must be to count as at The Skeld's camera console.
-const SKELD_CAMERA_RANGE: f32 = 0.6;
+const SKELD_CAMERA_RANGE: f64 = 0.6;
 
 /// The Polus and Airship camera minigames have six cameras; anything else is a bad read.
 const SURVEILLANCE_CAMERAS: u32 = 6;
@@ -123,7 +123,7 @@ pub fn read_systems(
     ship: u64,
     minigame: u64,
     map: MapType,
-    local_position: Option<(f32, f32)>,
+    local_position: Option<(f64, f64)>,
     offsets: &SystemOffsets,
 ) -> Systems {
     let mut systems = Systems::default();
@@ -197,7 +197,7 @@ fn read_camera(
     memory: &dyn ProcessMemory,
     minigame: u64,
     map: MapType,
-    local_position: Option<(f32, f32)>,
+    local_position: Option<(f64, f64)>,
     offsets: &SystemOffsets,
     into: &mut Systems,
 ) {

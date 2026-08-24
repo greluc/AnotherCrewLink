@@ -457,7 +457,9 @@ export default class GameReader {
 								base: this.gameAssembly.modBaseAddr,
 								size: this.gameAssembly.modBaseSize,
 							}
-						: undefined
+						: undefined,
+					// Resolved, with the scanner's holes filled -- the replay cannot rescan.
+					this.offsets
 				);
 			}
 			this.lastState = newState;
@@ -737,6 +739,9 @@ export default class GameReader {
 	/** Re-reads a region as bytes, for the recorder. Off by default and never throws. */
 	recordRead(address: number, length: number): void {
 		if (!this.amongUs || length <= 0) return;
+		// Checked here as well as in the recorder, so a NaN address does not cost a call
+		// into the native module before being thrown away.
+		if (!Number.isSafeInteger(address) || address < 0) return;
 		try {
 			noteRead(address, readBuffer(this.amongUs.handle, address, length));
 		} catch {
@@ -749,7 +754,13 @@ export default class GameReader {
 		if (!this.amongUs) throw 'Among Us not open? Weird error';
 		address = this.is_64bit ? address : address;
 		for (let i = 0; i < offsets.length - 1; i++) {
-			address = readMemoryRaw<number>(this.amongUs.handle, address + offsets[i], this.is_64bit ? 'uint64' : 'uint32');
+			const step = address + offsets[i];
+			// Every pointer along the chain, not just the value at the end of it. A replay
+			// has to walk the same chain, and without these it cannot take the first step:
+			// the first real recording failed all 72 of its frames on a pointer that had
+			// never been written down.
+			if (isRecording()) this.recordRead(step, this.is_64bit ? 8 : 4);
+			address = readMemoryRaw<number>(this.amongUs.handle, step, this.is_64bit ? 'uint64' : 'uint32');
 
 			if (address == 0) break;
 		}
@@ -762,10 +773,11 @@ export default class GameReader {
 			if (address === 0 || !this.amongUs) {
 				return '';
 			}
-			const length = Math.max(
-				0,
-				Math.min(readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int'), maxLength)
-			);
+			// The .NET string's length field, which a replay needs before it can know how
+			// far the characters run.
+			const lengthAt = address + (this.is_64bit ? 0x10 : 0x8);
+			if (isRecording()) this.recordRead(lengthAt, 4);
+			const length = Math.max(0, Math.min(readMemoryRaw<number>(this.amongUs.handle, lengthAt, 'int'), maxLength));
 			// readMemoryRaw<number>(this.amongUs.handle, address + (this.is_64bit ? 0x10 : 0x8), 'int')
 			const buffer = readBuffer(this.amongUs.handle, address + (this.is_64bit ? 0x14 : 0xc), length << 1);
 			// noteString rather than noteRead: the scrubber replaces a name where it lives,
@@ -997,7 +1009,10 @@ export default class GameReader {
 			nameHash,
 			colorId,
 			hatId: data.hat ?? '',
-			petId: data.pet ?? '',
+			// `?? ''` until 2026-08-24, in a field declared `number` and carried as one into
+			// the OBS payload. Only the eight pre-outfit bundles set `data.pet` at all, so on
+			// every current build this was the empty string in a numeric field.
+			petId: data.pet ?? 0,
 			skinId: data.skin ?? '',
 			visorId: data.visor ?? '',
 			disconnected: data.disconnected != 0,

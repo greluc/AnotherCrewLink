@@ -52,23 +52,44 @@ impl TryFrom<u8> for GameState {
     type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(Self::from_game(u32::from(value)))
+        Ok(Self::from_repr(u32::from(value)))
     }
 }
 
 impl GameState {
-    /// The state for a value read out of the game.
+    /// This enum's own value, as it is carried over IPC and stored.
     ///
-    /// Anything unrecognised is [`GameState::Unknown`] rather than an error: a new game
-    /// build adding a state should leave players audible, not stop the reader.
+    /// The inverse of the numbering above, and **not** the game's. `from_game` served as
+    /// both until 2026-08-24, which is how the game's raw state came to be read as if it
+    /// were one of these: the two happen to overlap for 0 to 3 while meaning different
+    /// things, so nothing complained until a real frame was compared.
     #[must_use]
-    pub fn from_game(value: u32) -> Self {
+    pub fn from_repr(value: u32) -> Self {
         match value {
             0 => Self::Lobby,
             1 => Self::Tasks,
             2 => Self::Discussion,
             3 => Self::Menu,
             _ => Self::Unknown,
+        }
+    }
+
+    /// The state for a value read out of the game.
+    ///
+    /// Anything unrecognised is [`GameState::Unknown`] rather than an error: a new game
+    /// build adding a state should leave players audible, not stop the reader.
+    #[must_use]
+    pub fn from_game(value: u32, meeting_hud_state: i32) -> Self {
+        // `GameReader.ts`'s switch, which is not a mapping of the raw value onto this
+        // enum — it was read that way here until 2026-08-24, and the first real recording
+        // showed every lobby frame reported as `Tasks`. The raw value distinguishes menu
+        // from in-game; whether an in-game frame is a discussion is a separate reading, of
+        // the meeting hud, and 4 is its "no meeting" value.
+        match value {
+            0 => Self::Menu,
+            1 | 3 => Self::Lobby,
+            _ if meeting_hud_state < 4 => Self::Discussion,
+            _ => Self::Tasks,
         }
     }
 }
@@ -122,9 +143,12 @@ pub struct Player {
     /// Whether the record looked wrong and was kept anyway.
     pub bugged: bool,
     /// Where they are.
-    pub x: f32,
+    /// A double, because the Electron reader's is: it rounds to four decimal places and
+    /// a `f32` cannot hold the result — 36.676 came back as 36.67599868774414. The
+    /// collider's `Vector2` is a double too, so this is the boundary that was odd.
+    pub x: f64,
     /// See [`Player::x`].
-    pub y: f32,
+    pub y: f64,
     /// Whether they are in a vent.
     pub in_vent: bool,
     /// Whether they are a practice-mode dummy.
@@ -170,6 +194,7 @@ pub struct AmongUsState {
     /// The lobby's player limit.
     pub max_players: u32,
     /// Which mod is loaded.
+    #[serde(rename = "mod")]
     pub mod_id: String,
     /// Whether this build has the older meeting HUD layout.
     pub old_meeting_hud: bool,
@@ -419,12 +444,31 @@ mod tests {
     use crate::sparse::SparseProcess;
 
     #[test]
-    fn a_state_number_the_build_does_not_know_is_unknown_rather_than_an_error() {
-        // A new game build adding a state should leave players audible, not stop the
-        // reader.
-        assert_eq!(GameState::from_game(0), GameState::Lobby);
-        assert_eq!(GameState::from_game(3), GameState::Menu);
-        assert_eq!(GameState::from_game(99), GameState::Unknown);
+    fn the_games_state_number_is_not_this_enums_number() {
+        // `GameReader.ts`'s switch. The two numberings overlap while meaning different
+        // things — the game's 0 is the menu, this enum's 0 is the lobby — and reading one
+        // as the other reported every lobby frame as `Tasks` until a real recording said
+        // so. `NO_MEETING` is the state the Electron reader falls back to.
+        const NO_MEETING: i32 = 4;
+        assert_eq!(GameState::from_game(0, NO_MEETING), GameState::Menu);
+        assert_eq!(GameState::from_game(1, NO_MEETING), GameState::Lobby);
+        assert_eq!(GameState::from_game(3, NO_MEETING), GameState::Lobby);
+        // Anything else is in a round, and the meeting hud decides which kind.
+        assert_eq!(GameState::from_game(2, NO_MEETING), GameState::Tasks);
+        assert_eq!(GameState::from_game(2, 0), GameState::Discussion);
+        assert_eq!(GameState::from_game(99, 3), GameState::Discussion);
+        // A new game build adding a state leaves players audible rather than stopping the
+        // reader: it is a round, which is the safe reading.
+        assert_eq!(GameState::from_game(99, NO_MEETING), GameState::Tasks);
+    }
+
+    #[test]
+    fn this_enums_own_number_round_trips() {
+        // The inverse of the numbering, for a value that came from this client rather
+        // than from the game.
+        assert_eq!(GameState::from_repr(0), GameState::Lobby);
+        assert_eq!(GameState::from_repr(3), GameState::Menu);
+        assert_eq!(GameState::from_repr(99), GameState::Unknown);
     }
 
     #[test]

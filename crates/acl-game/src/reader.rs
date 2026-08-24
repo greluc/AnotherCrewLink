@@ -62,8 +62,34 @@ pub fn read_state(
     let base = context.module_base;
 
     let inner_net = follow(memory, base, offsets_chain(offsets, "innerNetClient.base"))?;
+    // Whether an in-game frame is a discussion is a second reading, of the meeting hud.
+    // The cache pointer is what says a meeting is actually open rather than last used, and
+    // 4 is the value the Electron reader falls back to for "no meeting".
+    let meeting_hud = follow(memory, base, top_level_chain(offsets, "meetingHud")).unwrap_or(0);
+    let meeting_hud_cache = if meeting_hud == 0 {
+        0
+    } else {
+        follow(
+            memory,
+            meeting_hud,
+            top_level_chain(offsets, "objectCachePtr"),
+        )
+        .unwrap_or(0)
+    };
+    let meeting_hud_state = if meeting_hud_cache == 0 {
+        4
+    } else {
+        read_i32_at(
+            memory,
+            meeting_hud,
+            first_offset(offsets, "meetingHudState"),
+        )
+        .unwrap_or(4)
+    };
+
     let game_state = GameState::from_game(
         read_u32_at(memory, inner_net, inner_client_offset(offsets, "gameState")).unwrap_or(4),
+        meeting_hud_state,
     );
 
     let lobby_code_int = if game_state == GameState::Menu {
@@ -276,6 +302,36 @@ fn read_u8_at(memory: &dyn ProcessMemory, base: u64, offset: Option<i64>) -> Opt
     raw.first().copied()
 }
 
+/// One coordinate, rounded the way the Electron reader rounds it.
+///
+/// ```text
+/// const x_round = parseFloat(x?.toFixed(4));
+/// x: x_round || x || 999,
+/// ```
+///
+/// The rounding is not cosmetic for the gate: four decimal places move a coordinate by up
+/// to 5e-5, and the tolerance is 1e-6.
+///
+/// The `||` chain is reproduced rather than tidied, quirk included. `x_round` is falsy
+/// when it is zero, so a player standing at exactly 0.0 falls through to the raw value,
+/// which is also falsy, and is reported at 999. That is what the Electron reader does, and
+/// the gate compares the two exactly.
+fn position(read: Option<f32>) -> f64 {
+    let raw = f64::from(read.unwrap_or(0.0));
+    let rounded = (raw * 10_000.0).round() / 10_000.0;
+    #[allow(
+        clippy::float_cmp,
+        reason = "JavaScript truthiness is the specification here"
+    )]
+    if rounded != 0.0 {
+        rounded
+    } else if raw != 0.0 {
+        raw
+    } else {
+        999.0
+    }
+}
+
 /// Walks a chain and reads a float from where it lands.
 ///
 /// The single-offset readers beside this one are for fields the bundles really do give as
@@ -381,8 +437,16 @@ fn read_player(
     // Two steps in most bundles and four in some, so taking only the first lands on a
     // pointer rather than on the coordinate it points at. Positions are what proximity
     // chat is, which makes this the most expensive place in the reader to get wrong.
-    let x = read_f32_chain(memory, object_ptr, player_chain(offsets, x_field)).unwrap_or(0.0);
-    let y = read_f32_chain(memory, object_ptr, player_chain(offsets, y_field)).unwrap_or(0.0);
+    let x = position(read_f32_chain(
+        memory,
+        object_ptr,
+        player_chain(offsets, x_field),
+    ));
+    let y = position(read_f32_chain(
+        memory,
+        object_ptr,
+        player_chain(offsets, y_field),
+    ));
 
     let current_outfit = read_u32_at(
         memory,

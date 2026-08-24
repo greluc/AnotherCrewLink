@@ -99,36 +99,51 @@ impl ProcessMemory for SparseProcess {
         if into.is_empty() {
             return Ok(());
         }
-        // The region that starts at or before this address is the only one that can hold
-        // it, because regions are keyed by start and a read never spans two.
-        let Some((start, bytes)) = self.regions.range(..=address).next_back() else {
-            return Err(ReadError::Unreadable {
-                address,
-                length: into.len(),
-            });
-        };
-        let offset = usize::try_from(address - start).map_err(|_| ReadError::Unreadable {
-            address,
-            length: into.len(),
-        })?;
-        let Some(available) = bytes.get(offset..) else {
-            return Err(ReadError::Unreadable {
-                address,
-                length: into.len(),
-            });
-        };
-        if available.len() < into.len() {
-            return Err(ReadError::Short {
-                address,
-                wanted: into.len(),
-                got: available.len(),
-            });
+        // The *containing* region, not merely the nearest one starting at or before this
+        // address — regions overlap. A real recording holds the whole 136-byte player
+        // record and, inside it, the eight-byte pointer reads the reader made separately.
+        // Taking the nearest preceding start finds one of those eight-byte regions and
+        // reports the byte just past it as unreadable, which is how `isDead` came back
+        // false for a player the game had killed.
+        //
+        // Overlapping regions agree about the bytes they share: they are snapshots of the
+        // same memory in the same frame. So the first one that covers the range is as good
+        // as any other, and searching backwards finds the widest soonest in practice.
+        let mut exact: Option<&[u8]> = None;
+        // How much the most generous region that starts at or before this address could
+        // offer, for the error if none of them can offer enough.
+        let mut longest = 0usize;
+        for (start, bytes) in self.regions.range(..=address).rev() {
+            let Ok(offset) = usize::try_from(address - start) else {
+                continue;
+            };
+            let Some(available) = bytes.get(offset..) else {
+                continue;
+            };
+            longest = longest.max(available.len());
+            if let Some(wanted) = available.get(..into.len()) {
+                exact = Some(wanted);
+                break;
+            }
+            // A region that starts before this address but ends inside the read cannot
+            // help. An earlier, wider one still might, so keep looking.
         }
-        let Some(exact) = available.get(..into.len()) else {
-            return Err(ReadError::Short {
-                address,
-                wanted: into.len(),
-                got: available.len(),
+
+        let Some(exact) = exact else {
+            return Err(if longest == 0 {
+                ReadError::Unreadable {
+                    address,
+                    length: into.len(),
+                }
+            } else {
+                // Something is mapped here, just not enough of it. Worth telling apart
+                // from nothing being mapped at all: one is a bad address, the other a
+                // recording that stopped short.
+                ReadError::Short {
+                    address,
+                    wanted: into.len(),
+                    got: longest,
+                }
             });
         };
         into.copy_from_slice(exact);
