@@ -1314,10 +1314,24 @@ off a layered window will not appear at all and the alternative is a swapchain
 hook this project must not ship; Wayland detection gated on the **live winit
 backend** rather than `XDG_SESSION_TYPE`, which describes the session and not the
 backend the process actually got, and would grey out the overlay for XWayland
-users who work today; and the single-instance lock using the same
-`Local\AnotherCrewLink` name H1 puts into the field, so a 1.x and a 2.x install
-on one machine cannot run two keyboard hooks, two overlays and two memory readers
+users who work today; and the single-instance lock, so a 1.x and a 2.x install on
+one machine cannot run two keyboard hooks, two overlays and two memory readers
 against the same game.
+
+> **Corrected 2026-08-25.** This said "the same `Local\AnotherCrewLink` name H1
+> puts into the field". H1 puts no such name into the field. The shipped client
+> calls `app.requestSingleInstanceLock()` and nothing else — `src/main/index.ts`
+> line 270 is the only lock in the tree, and Electron keys its `ProcessSingleton`
+> on the userData directory rather than on a name a second implementation could
+> claim.
+>
+> So the requirement stands and the mechanism named for it does not. A 2.x client
+> taking a mutex called `Local\AnotherCrewLink` would exclude other copies of
+> itself and nothing else, which is the failure this bullet exists to prevent
+> while looking exactly like the fix. Whatever P5 uses has to be something a
+> running 1.x actually holds, and that is either a name added to 1.x in a patch
+> release first, or the userData path Electron already keys on. Decided in P5, not
+> here — but not by assuming.
 
 ## 4.8 Phase 6 — GUI (11.5 weeks)
 
