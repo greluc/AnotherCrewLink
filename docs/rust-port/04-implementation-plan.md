@@ -506,7 +506,7 @@ de-risk the two most expensive phases are run here rather than discovered later.
    no taskbar button never becomes the foreground window, so it was reporting the
    console's styles. A probe that asks the OS a question must be sure it is asking
    about the right object.
-3. §4.8's "not one interpolation placeholder across 4,736 strings" is now off by
+3. §4.8's "not one interpolation placeholder across 4,631 strings" is now off by
    one, by H2's hand: `reset_offsets_done` carries `{{version}}`. The loader
    carries the smallest possible substitution and nothing more.
 4. The bundle's function RVAs are placeholders — already recorded under H2, and it
@@ -737,7 +737,7 @@ fixtures.
 
 ## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
-> **Status, 2026-08-25.** Every item is built, `crates/acl-audio` carries 424 tests, and
+> **Status, 2026-08-25.** Every item is built, `crates/acl-audio` carries 244 tests, and
 > every gate criterion that has not been struck is met.
 >
 > Closing it changed two things it was supposed only to measure: the jitter buffer's depth
@@ -1392,7 +1392,8 @@ process in the act of crashing pins users to the slow rung for reasons unrelated
 to the GPU.
 
 **Localisation is not a conversion.** The 37 locale directories stay i18next
-JSON, read by the loader written in P1+. Measured across all 4,736 strings there
+JSON, read by the loader written in P1+. Measured across all 4,631 strings — it was
+4,736 until 1.0.5 removed the mobile-host and OBS keys from all 37 locales — there
 is not one interpolation placeholder, not one plural key and not one selector, so
 every feature that would distinguish a localisation framework from a flat map is
 unused — and Fluent identifiers cannot contain dots, so "translation content is

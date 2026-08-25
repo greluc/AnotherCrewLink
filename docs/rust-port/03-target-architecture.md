@@ -553,7 +553,7 @@ startup by a loader of under 100 lines over the `serde_json` already in the tree
 flattening the nested keys once into a map behind `fn t(&self, key: &str) -> &str`
 with an English fallback chain. Measured, the corpus has 128 keys per locale,
 zero key difference against `en`, and **zero** interpolation placeholders,
-plurals or selectors across all 4,736 strings — every feature that would
+plurals or selectors across all 4,631 strings — every feature that would
 distinguish Fluent from a flat map is unused. Converting would also not leave
 translation content untouched: Fluent identifiers cannot contain dots and the
 keys are dotted throughout, and those keys are what Crowdin and every call site

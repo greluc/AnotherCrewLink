@@ -229,7 +229,7 @@ egui and `eframe` are MIT OR Apache-2.0, both compatible with GPL-3.0-or-later;
 
 Localisation is a loader in this repository, not a crate. Measured across all 37
 locale directories: 128 keys each, no key difference against `en`, and zero
-occurrences of any interpolation syntax, plural suffix or selector in all 4,736
+occurrences of any interpolation syntax, plural suffix or selector in all 4,631
 strings. Every feature that distinguishes Fluent from a flat map is unused, and
 the runtime i18next configuration uses only `resources`, `fallbackLng` and
 `escapeValue`. So the JSON stays byte-for-byte, `serde_json` reads it, the
