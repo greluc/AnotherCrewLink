@@ -1132,6 +1132,24 @@ mapping — and the Socket.IO client that used to be item 1 has moved to P1+.
    would a 14-peer mesh need". TURN is the reason `webrtc` wins here; its
    staleness relative to str0m is not, and neither crate can demonstrate Chromium
    interop in CI, which is why this is a spike and not a table.
+
+   > **Partly answered, 2026-08-25**, by `experiments/webrtc-probe` — and the part that
+   > is answered is the part that was expensive to leave until P7+.
+   >
+   > The crate connects: two peers, offer and answer, candidates trickled both ways after
+   > the descriptions are set, a data channel, and a message through it. The crypto
+   > backend resolves to **`ring` 0.17.14**, which is the version the tree already carries
+   > for `rustls` — no second TLS backend, no version split. It costs **141 new crates**,
+   > and all four supply-chain gates accept them: `cargo deny`, `cargo audit`,
+   > `cargo about`, and `cargo vet` once the exemptions were written down.
+   > `rtc-turn` is in the dependency list, so the premise this item rests on — that TURN
+   > is why `webrtc` wins over str0m — holds as a fact rather than a claim.
+   >
+   > What is *not* answered is the Chromium arm, and with G3 struck nothing else answers
+   > it either. The three weeks this item budgets should shrink to what is left: the
+   > i686 leg went with the 32-bit target on 2026-08-24, the crypto question is closed,
+   > and the str0m arm's written read is now moot — a spike that cannot be adjudicated by
+   > a gate is a spike with no decision attached to it.
 2. `Peer` over the `webrtc` crate, pinned `=0.20.3` because the maintainer states
    a minor bump may carry breaking changes: trickle ICE with candidate queueing,
    data channel, connect timeout, TURN with `relay`-only support. One shape

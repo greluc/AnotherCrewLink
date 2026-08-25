@@ -1,10 +1,11 @@
 # Experiments
 
-Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9. Both take
-hours to answer now and are, in the plan's words, brutal to discover in month nine — each
-one decides how a later phase is planned rather than how it is written.
+Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9, and one from
+§4.6 item 1. All three take hours to answer now and are, in the plan's words, brutal to
+discover in month nine — each one decides how a later phase is planned rather than how it
+is written.
 
-They stay in the workspace rather than being deleted once answered, because both check a
+They stay in the workspace rather than being deleted once answered, because each checks a
 property that a dependency update can take away again.
 
 ## 1. `overlay-probe` — a transparent, click-through, always-on-top window
@@ -155,3 +156,49 @@ was there all along. The build ran under a path 298 characters deep, and `cl.exe
 opt in to long paths whatever `LongPathsEnabled` says. Anyone repeating this must build
 from a short directory, or they will record "libwebrtc does not build on Windows" and be
 wrong.
+
+## 3. `webrtc-probe` — does the pinned WebRTC crate connect, and what does it cost?
+
+**Answered 2026-08-25: yes, and 141 crates.**
+
+§4.6 item 1 budgets three weeks to prove `webrtc` `=0.20.3` against a real 1.0.2 Chromium
+client. Gate G3, which that spike fed, was struck on 2026-08-25 — but the crate still has
+to work, and three of the spike's four questions never needed a Chromium peer.
+
+```
+cargo run -p webrtc-probe
+```
+
+Two peer connections in one process on loopback: offer, answer, candidates trickled in
+both directions *after* the descriptions are set, a data channel, and one message through
+it. It exits non-zero if any step does not settle within twenty seconds.
+
+| Question | Answer |
+| --- | --- |
+| Does it build and run? | Yes, `x86_64-pc-windows-msvc` |
+| Does a connection establish? | Yes — both ends reach `connected` |
+| Trickle both ways, data channel, a message? | Yes |
+| Crypto backend | `ring` 0.17.14 |
+| New crates in the tree | 141 |
+| `cargo deny` | advisories ok, bans ok, licenses ok, sources ok |
+| `cargo audit` | clean |
+| `cargo vet` | 141 new exemptions; see `supply-chain/README.md` |
+
+**The crypto answer is the one worth having early.** The plan called the backend "nearly
+free to discover while the rig is standing and expensive to discover in P7+". It resolves
+to `ring` 0.17.14 — the exact version the tree already carries for `rustls`, so there is
+no second TLS backend and no version split. What `webrtc` *does* add beside it is a full
+RustCrypto software stack — `aes-gcm`, `ccm`, `chacha20poly1305`, `p256`, `p384`,
+`x25519-dalek` — because DTLS and SRTP need primitives `ring` does not expose. Two crypto
+implementations in one binary is a fact about the shipped artefact, not a bug, and it is
+better known now than at packaging time.
+
+**`rtc-turn` is in the tree.** §4.6 gives TURN as the reason `webrtc` wins over `str0m`,
+which "explicitly does not implement TURN". The dependency list confirms the premise
+rather than leaving it as a claim.
+
+**What it does not prove, and nothing else now does either.** Both ends are this same
+crate, on loopback, with no relay and no NAT. G3 was the thing that would have proved
+interoperability with a 1.0.2 Chromium client, through coturn, across a NAT — and it was
+struck. So "the crate is usable" is established and "the client is interoperable" is not,
+by anything, until the field says so.
