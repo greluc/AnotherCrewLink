@@ -29,7 +29,6 @@ export interface ISettings {
 	microphoneGainEnabled: boolean;
 	micSensitivity: number;
 	micSensitivityEnabled: boolean;
-	mobileHost: boolean;
 	vadEnabled: boolean;
 	hardware_acceleration: boolean;
 	echoCancellation: boolean;
@@ -38,8 +37,6 @@ export interface ISettings {
 
 	enableSpatialAudio: boolean;
 	playerConfigMap: playerConfigMap;
-	obsOverlay: boolean;
-	obsSecret: string | undefined;
 
 	launchPlatform: GamePlatform | string;
 	customPlatforms: GamePlatformMap;

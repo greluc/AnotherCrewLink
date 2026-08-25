@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "ベータ/デバッグ",
-			"mobilehost": "モバイル ホスト",
 			"vad_enabled": "音声アクティビティ検出",
 			"hardware_acceleration": "ハードウェア アクセラレーション",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "配信設定",
 			"hidecode": "ロビーコードの表示",
-			"obs_overlay": "OBS ブラウザーのオーバーレイ",
-			"obs_url": "OBSブラウザソースURL",
 			"voice_server_comp": "ボイスサーバー互換性モード",
 			"voice_server_comp_warning": "例えば、ボイスサーバーをAnotherCrewLinkボイスサーバー(https://bettercrewl.ink)に変更することをお勧めします。"
 		},

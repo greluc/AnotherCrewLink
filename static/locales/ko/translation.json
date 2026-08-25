@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "베타/디버그",
-			"mobilehost": "모바일 호스트",
 			"vad_enabled": "VAD 켜짐",
 			"hardware_acceleration": "하드웨어 가속",
 			"hardware_acceleration_warning": "하드웨어 가속이 비활성화됩니다 (CPU 사용량이 증가할 수 있음)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "스트리밍 설정",
 			"hidecode": "로비 코드 표시",
-			"obs_overlay": "OBS 브라우저 오버레이",
-			"obs_url": "OBS 브라우저 소스 URL",
 			"voice_server_comp": "음성 서버 호환 모드",
 			"voice_server_comp_warning": "예를 들어서 음성 서버를 AnotherCrewLink 음성 서버(https://bettercrewl.ink)로 변경하는 것을 권장드립니다."
 		},

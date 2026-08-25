@@ -672,6 +672,17 @@ proves the toolchain, CI and release story before any of it matters.
 
 ## 3.5 What is deliberately *not* ported
 
+> **Superseded 2026-08-25.** The Electron client no longer has either feature. The
+> `mobileHost` setting, the `<code>_mobile` broadcast, `obsOverlay`, `obsSecret` and the
+> `ObsVoiceState` payload were removed from it, along with the settings that turned them
+> on. Nothing this project ships emits either feed any more, and there is no client left
+> to break.
+>
+> What that changes here: the OBS overlay page is no longer a scheduling constraint on
+> any server release — there is no sender for it to stay compatible with — and the
+> mobile relay is not something the envelope rules break, because it is already gone.
+> The paragraphs around this note are kept as the record of what was decided and why.
+
 - **`electron-devtools-installer`, the Pug view engine, `morgan`** — replaced by
   `tracing` and a formatted string, no user-visible surface.
 - **The OBS browser overlay** (`obs.aucl.greluc.me`) stays a web page and

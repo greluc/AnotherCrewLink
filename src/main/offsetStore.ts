@@ -53,11 +53,6 @@ export interface IOffsets {
 	gameoptionsData: number[];
 	gameOptions_MapId: number[];
 	gameOptions_MaxPLayers: number[];
-	connectFunc: number;
-	fixedUpdateFunc: number;
-	showModStampFunc: number;
-	modLateUpdateFunc: number;
-	pingMessageString: number;
 	serverManager_currentServer: number[];
 	innerNetClient: {
 		base: number[];
@@ -118,16 +113,10 @@ export interface IOffsets {
 		miniGame: ISignature;
 		palette: ISignature;
 		playerControl: ISignature;
-		connectFunc: ISignature;
-		fixedUpdateFunc: ISignature;
-		pingMessageString: ISignature;
 		serverManager: ISignature;
-		showModStamp: ISignature;
-		modLateUpdate: ISignature;
 		gameOptionsManager: ISignature;
 	};
 	oldMeetingHud: boolean;
-	disableWriting: boolean;
 	newGameOptions: boolean;
 }
 
@@ -143,10 +132,9 @@ interface ILookupStore extends IOffsetsLookup {
 	bundle_version?: number;
 }
 
-// The offsets decide where this client reads inside another process, and on 32-bit
-// Windows they decide where the injection stub writes. They used to come from a branch
-// of a repository this project does not control; they now come from our own fork, which
-// is the only part of that chain we can review before it reaches users.
+// The offsets decide where this client reads inside another process. They used to come
+// from a branch of a repository this project does not control; they now come from our own
+// fork, which is the only part of that chain we can review before it reaches users.
 const BASE_URL = 'https://raw.githubusercontent.com/greluc/AnotherCrewlink-Offsets/main';
 const BASE_URL_error = 'https://cdn.jsdelivr.net/gh/greluc/AnotherCrewlink-Offsets@main';
 

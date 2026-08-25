@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Amfitrió Mòbil",
 			"vad_enabled": "VAD activat",
 			"hardware_acceleration": "Hardware Acceleration",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Opcions de directe",
 			"hidecode": "Mostrar Codi del Vestíbul",
-			"obs_overlay": "Superposició de Navegador de OBS",
-			"obs_url": "OBS Browser Source URL",
 			"voice_server_comp": "Mode de compatibilitat VS",
 			"voice_server_comp_warning": "Es recomana canviar el servidor de veu per un servidor de veu bettercrewlink https://bettercrewl.ink, per exemple."
 		},

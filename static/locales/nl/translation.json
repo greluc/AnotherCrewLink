@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Mobile Host",
 			"vad_enabled": "VAD Enabled",
 			"hardware_acceleration": "Hardware Acceleration",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Streamers instellingen",
 			"hidecode": "Toon lobbycode",
-			"obs_overlay": "OBS Browser Overlay",
-			"obs_url": "OBS Browser Source URL",
 			"voice_server_comp": "Server compatibiliteit modus",
 			"voice_server_comp_warning": "Het is beter om de standaard server te gebruiken (https://bettercrewl.ink)"
 		},

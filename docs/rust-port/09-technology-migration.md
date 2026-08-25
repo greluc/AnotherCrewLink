@@ -20,6 +20,17 @@ Checked directly, not delegated:
   room name. The four links close into a working attack on 1.0.2.
 - **The OBS secret** is `Math.random().toString(36).substr(2, 9).toUpperCase()` at
   `Settings.tsx:1147`, and the same payload class is emitted to a room named by it.
+
+> **Superseded 2026-08-25.** Both findings are closed by removal rather than by fix. The
+> `mobileHost` setting, the `<code>_mobile` broadcast, `obsOverlay`, `obsSecret` and the
+> `ObsVoiceState` payload are gone from the client: there is no mobile relay to turn on
+> remotely and no secret to guess, so S5, S19 and S20 below have nothing left to decide,
+> and the `<code>_mobile` and 9-character rooms the server never left no longer have a
+> client that joins them. What still stands is everything about `setHost`, the signal
+> envelope, and the server's room handling in general — those were never specific to
+> these two features. The rest of this document is kept as the record of what was
+> decided and why.
+
 - **`elevate.exe` does ship** in a real installed 1.0.2, 107,520 bytes. §6 question 7
   can be answered without further investigation.
 - **Hardware acceleration is already disabled** unconditionally on Linux and on demand

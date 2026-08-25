@@ -1,9 +1,10 @@
 declare module 'memoryjs' {
-	// writeMemory, writeBuffer and virtualAllocEx were declared here until 2026-08-24. The
-	// native module still exports them, but this client opens processes with
-	// PROCESS_VM_READ only, so calling one would fail — silently, as it happens:
-	// writeBuffer ignores WriteProcessMemory's return value and reports success either way.
-	// Not declaring them is what stops that being discovered the hard way.
+	// This module reads another process and nothing else. The write, allocate and
+	// call-into-the-target entry points were removed from the native module itself on
+	// 2026-08-25, so there is nothing left to declare: the client opens Among Us with
+	// PROCESS_VM_READ only, and writeBuffer used to ignore WriteProcessMemory's return
+	// value and report success either way, so a call that could never work looked like one
+	// that had.
 	type Callback<T> = (error: unknown, value: T) => void;
 
 	// Processes
@@ -35,15 +36,6 @@ declare module 'memoryjs' {
 	}
 
 	export function findModule(identifier: string, processId: number, callback?: Callback<ModuleObject>): ModuleObject;
-	//  virtualAllocEx(handle, address, size, allocationType, protection, callback) {
-	export function virtualAllocEx(
-		handle: number,
-		address: number | null,
-		size: number,
-		allocationType: number,
-		protection: number,
-		callback?: Callback<ModuleObject[]>
-	): number;
 
 	// Memory
 
@@ -87,29 +79,4 @@ declare module 'memoryjs' {
 		addressOffset: number,
 		skip: number
 	): number;
-
-	// Functions
-
-	// export enum ArgType { T_VOID, T_STRING, T_CHAR, T_BOOL, T_INT, T_DOUBLE, T_FLOAT }
-	export const T_VOID = 0x0;
-	export const T_STRING = 0x1;
-	export const T_CHAR = 0x2;
-	export const T_BOOL = 0x3;
-	export const T_INT = 0x4;
-	export const T_DOUBLE = 0x5;
-	export const T_FLOAT = 0x6;
-
-	export type FunctionArg = { type: number; value: unknown };
-
-	export interface FunctionResult<T> {
-		returnValue: T;
-		exitCode: number;
-	}
-
-	export function callFunction<T>(
-		handle: number,
-		args: FunctionArg[],
-		returnType: number,
-		address: number
-	): FunctionResult<T>;
 }

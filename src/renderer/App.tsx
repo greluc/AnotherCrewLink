@@ -5,7 +5,7 @@ import { ipcRenderer, shell } from 'electron';
 import type { AmongUsState } from '../common/AmongUsState';
 import Settings from './settings/Settings';
 import SettingsStore, { setSetting, setLobbySetting } from './settings/SettingsStore';
-import { GameStateContext, SettingsContext, PlayerColorContext, HostSettingsContext } from './contexts';
+import { GameStateContext, SettingsContext, HostSettingsContext } from './contexts';
 import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
 import { makeStyles } from 'tss-react/mui';
 import {
@@ -241,85 +241,83 @@ export default function App({ t }: AppProps): React.JSX.Element {
 	}
 
 	return (
-		<PlayerColorContext.Provider value={playerColors.current}>
-			<GameStateContext.Provider value={gameState}>
-				<HostSettingsContext.Provider value={[hostLobbySettings, setHostLobbySettings]}>
-					<SettingsContext.Provider value={[settings, setSetting, setLobbySetting]}>
-						<StyledEngineProvider injectFirst>
-							<ThemeProvider theme={theme}>
-								<TitleBar settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} />
-								<Settings t={t} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-								<Dialog fullWidth open={updaterState.state !== 'unavailable' && diaOpen}>
-									{updaterState.state === 'available' && updaterState.info && (
-										<DialogTitle>Update v{updaterState.info.version}</DialogTitle>
-									)}
-									{updaterState.state === 'error' && <DialogTitle>Updater Error</DialogTitle>}
-									{updaterState.state === 'downloading' && <DialogTitle>Updating...</DialogTitle>}
-									<DialogContent>
-										{updaterState.state === 'downloading' && updaterState.progress && (
-											<>
-												<LinearProgress variant={'determinate'} value={updaterState.progress.percent} />
-												<DialogContentText>
-													{prettyBytes(updaterState.progress.transferred)} / {prettyBytes(updaterState.progress.total)}
-												</DialogContentText>
-											</>
-										)}
-										{updaterState.state === 'available' && (
-											<>
-												<LinearProgress variant={'indeterminate'} />
-												<DialogContentText>Update now or later?</DialogContentText>
-											</>
-										)}
-										{updaterState.state === 'error' && (
-											<DialogContentText color="error">{String(updaterState.error)}</DialogContentText>
-										)}
-									</DialogContent>
-									{updaterState.state === 'error' && (
-										<DialogActions>
-											<Button
-												color="grey"
-												onClick={() => {
-													shell.openExternal('https://github.com/greluc/AnotherCrewLink/releases/latest');
-												}}
-											>
-												Download Manually
-											</Button>
-											<Button
-												color="grey"
-												onClick={() => {
-													setDiaOpen(false);
-												}}
-											>
-												Skip
-											</Button>
-										</DialogActions>
+		<GameStateContext.Provider value={gameState}>
+			<HostSettingsContext.Provider value={[hostLobbySettings, setHostLobbySettings]}>
+				<SettingsContext.Provider value={[settings, setSetting, setLobbySetting]}>
+					<StyledEngineProvider injectFirst>
+						<ThemeProvider theme={theme}>
+							<TitleBar settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} />
+							<Settings t={t} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+							<Dialog fullWidth open={updaterState.state !== 'unavailable' && diaOpen}>
+								{updaterState.state === 'available' && updaterState.info && (
+									<DialogTitle>Update v{updaterState.info.version}</DialogTitle>
+								)}
+								{updaterState.state === 'error' && <DialogTitle>Updater Error</DialogTitle>}
+								{updaterState.state === 'downloading' && <DialogTitle>Updating...</DialogTitle>}
+								<DialogContent>
+									{updaterState.state === 'downloading' && updaterState.progress && (
+										<>
+											<LinearProgress variant={'determinate'} value={updaterState.progress.percent} />
+											<DialogContentText>
+												{prettyBytes(updaterState.progress.transferred)} / {prettyBytes(updaterState.progress.total)}
+											</DialogContentText>
+										</>
 									)}
 									{updaterState.state === 'available' && (
-										<DialogActions>
-											<Button
-												onClick={() => {
-													ipcRenderer.send('update-app');
-												}}
-											>
-												Now
-											</Button>
-											<Button
-												onClick={() => {
-													setDiaOpen(false);
-												}}
-											>
-												Later
-											</Button>
-										</DialogActions>
+										<>
+											<LinearProgress variant={'indeterminate'} />
+											<DialogContentText>Update now or later?</DialogContentText>
+										</>
 									)}
-								</Dialog>
-								{page}
-							</ThemeProvider>
-						</StyledEngineProvider>
-					</SettingsContext.Provider>
-				</HostSettingsContext.Provider>
-			</GameStateContext.Provider>
-		</PlayerColorContext.Provider>
+									{updaterState.state === 'error' && (
+										<DialogContentText color="error">{String(updaterState.error)}</DialogContentText>
+									)}
+								</DialogContent>
+								{updaterState.state === 'error' && (
+									<DialogActions>
+										<Button
+											color="grey"
+											onClick={() => {
+												shell.openExternal('https://github.com/greluc/AnotherCrewLink/releases/latest');
+											}}
+										>
+											Download Manually
+										</Button>
+										<Button
+											color="grey"
+											onClick={() => {
+												setDiaOpen(false);
+											}}
+										>
+											Skip
+										</Button>
+									</DialogActions>
+								)}
+								{updaterState.state === 'available' && (
+									<DialogActions>
+										<Button
+											onClick={() => {
+												ipcRenderer.send('update-app');
+											}}
+										>
+											Now
+										</Button>
+										<Button
+											onClick={() => {
+												setDiaOpen(false);
+											}}
+										>
+											Later
+										</Button>
+									</DialogActions>
+								)}
+							</Dialog>
+							{page}
+						</ThemeProvider>
+					</StyledEngineProvider>
+				</SettingsContext.Provider>
+			</HostSettingsContext.Provider>
+		</GameStateContext.Provider>
 	);
 }
 const App2 = withTranslation()(App);

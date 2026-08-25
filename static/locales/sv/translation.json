@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/FELSÖKA",
-			"mobilehost": "Mobil Värd",
 			"vad_enabled": "VAD är aktiverat",
 			"hardware_acceleration": "Maskinvaruacceleration",
 			"hardware_acceleration_warning": "Detta inaktiverar maskinvaruacceleration (som kan öka CPU-användningen)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Inställningar för streaming",
 			"hidecode": "Visa Lobbykod",
-			"obs_overlay": "OBS Webbläsar Överlägg",
-			"obs_url": "OBS Webbläsarkälla URL",
 			"voice_server_comp": "RS Kompatibilitetsläge",
 			"voice_server_comp_warning": "Det är rekommenderat att endast ändra röstservern till en AnotherCrewLink Voice Server (https://bettercrewl.ink) till exempel."
 		},

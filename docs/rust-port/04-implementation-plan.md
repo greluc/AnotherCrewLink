@@ -204,6 +204,17 @@ the upstream release and the merged, purged bundle.
 > deploying the Rust server. The paragraphs below are kept as the record of what was
 > decided and why.
 
+> **Superseded 2026-08-25.** The Electron client no longer has either feature. The
+> `mobileHost` setting, the `<code>_mobile` broadcast, `obsOverlay`, `obsSecret` and the
+> `ObsVoiceState` payload were removed from it, along with the settings that turned them
+> on. Nothing this project ships emits either feed any more, and there is no client left
+> to break.
+>
+> What that changes here: the OBS overlay page is no longer a scheduling constraint on
+> any server release — there is no sender for it to stay compatible with — and the
+> mobile relay is not something the envelope rules break, because it is already gone.
+> The paragraphs around this note are kept as the record of what was decided and why.
+
 **H3 enforces from the first release. There is no logging period.** The signal
 envelope rules — `to` must be a co-member of the sender's lobby, `to != from`, a
 size cap — and first-claimer host go on when the server release ships. No

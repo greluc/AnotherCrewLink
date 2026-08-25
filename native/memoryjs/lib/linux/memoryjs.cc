@@ -549,21 +549,6 @@ Napi::Value readBuffer(const Napi::CallbackInfo &args)
   }
 }
 
-Napi::Value writeMemory(const Napi::CallbackInfo &args)
-{
-  return args.Env().Null();
-}
-
-Napi::Value writeBuffer(const Napi::CallbackInfo &args)
-{
-  return args.Env().Null();
-}
-
-Napi::Value virtualProtectEx(const Napi::CallbackInfo &args)
-{
-  return Napi::Number::From(args.Env(), 0);
-}
-
 Napi::Value getProcessPath(const Napi::CallbackInfo &args)
 {
   Napi::Env env = args.Env();
@@ -598,9 +583,6 @@ Napi::Object init(Napi::Env env, Napi::Object exports)
   exports.Set(Napi::String::New(env, "readMemory"), Napi::Function::New(env, readMemory));
   exports.Set(Napi::String::New(env, "readBuffer"), Napi::Function::New(env, readBuffer));
   exports.Set(Napi::String::New(env, "getProcessPath"), Napi::Function::New(env, getProcessPath));
-  exports.Set(Napi::String::New(env, "writeMemory"), Napi::Function::New(env, writeMemory));
-  exports.Set(Napi::String::New(env, "writeBuffer"), Napi::Function::New(env, writeBuffer));
-  exports.Set(Napi::String::New(env, "virtualProtectEx"), Napi::Function::New(env, virtualProtectEx));
 
   return exports;
 }

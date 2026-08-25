@@ -12,25 +12,20 @@ through for the process (that is returned from `memoryjs.openProcess`). This all
 - List all modules associated with a process
 - Find a specific module within a process
 - Read process memory
-- Write process memory
 - Read buffers from memory
-- Write buffer to memory
-- Change memory protection
-- Reserve/allocate, commit or change regions of memory
 - Fetch a list of memory regions within a process
 - Pattern scanning
-- Execute a function within a process
 - Hardware breakpoints (find out what accesses/writes to this address etc)
 
 Functions that this library directly exposes from the WinAPI:
 - [ReadProcessMemory](https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-readprocessmemory)
-- [WriteProcessMemory](https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-writeprocessmemory)
-- [VirtualProtectEx](https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-virtualprotectex)
-- [VirtualAllocEx](https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-virtualallocex)
 
-TODO:
-- WriteFile support (for driver interactions)
-- DLL injections
+**This is AnotherCrewLink's vendored fork.** Writing to another process was removed on
+2026-08-25: `writeMemory`, `writeBuffer`, `virtualAllocEx`, `virtualProtectEx` and
+`callFunction` are gone, along with the shellcode helper `callFunction` was built on. The
+only consumer opens its target with `PROCESS_VM_READ`, so none of them could succeed, and
+`writeBuffer` ignored `WriteProcessMemory`'s return value and reported success either way.
+This fork reads; it does not write.
 
 # Install
 
@@ -143,16 +138,6 @@ memoryjs.readBuffer(handle, address, size, (error, buffer) => {
 });
 ```
 
-Write to memory:
-``` javascript
-memoryjs.writeMemory(handle, address, value, dataType);
-```
-
-Write buffer to memory:
-``` javascript
-memoryjs.writeBuffer(handle, address, buffer);
-```
-
 Fetch memory regions (sync):
 ``` javascript
 const regions = memoryjs.getRegions(handle);
@@ -167,16 +152,6 @@ memoryjs.getRegions(handle, (regions) => {
 
 See the [Documentation](#user-content-documentation) section of this README to see what values `dataType` can be.
 
-### Protection:
-
-Set protection of memory:
-``` javascript
-const oldProtection = memoryjs.virtualProtectEx(handle, address, size, protection);
-```
-
-See the [Documentation](#user-content-protection-type) section of this README to see what values `protection` can be.
-
-
 ### Pattern Scanning:
 
 Pattern scanning (sync):
@@ -190,23 +165,6 @@ memoryjs.findPattern(handle, moduleName, signature, signatureType, patternOffset
 
 })
 ```
-
-### Function Execution:
-
-Function execution (sync):
-``` javascript
-const result = memoryjs.callFunction(handle, args, returnType, address);
-```
-
-Function execution (async):
-``` javascript
-memoryjs.callFunction(handle, args, returnType, address, (error, result) => {
-
-});
-```
-
-Click [here](#user-content-result-object) to see what a result object looks like.
-Clicklick [here](#user-content-function-execution-1) for details about how to format the arguments and the return type.
 
 ### Hardware Breakpoints
 
@@ -267,17 +225,9 @@ The `handle` and `modBaseAddr` properties are only available when opening a proc
   th32ProcessID: 10316 }
   ```
 
-### Result Object:
-``` javascript
-{ returnValue: 1.23,
-  exitCode: 2 }
-```
-
-The `returnValue` is the value returned from the function that was called. `exitCode` is the termination status of the thread.
-
 ### Data Type:
 
-When using the write or read functions, the data type (dataType) parameter can either be a string and be one of the following:
+When using the read functions, the data type (dataType) parameter can either be a string and be one of the following:
 
 `"byte", "int", "int32", "uint32", "int64", "uint64", "dword", "short", "long", "float", "double", "bool", "boolean", "ptr", "pointer", "str", "string", "vec3", "vector3", "vec4", "vector4"`
 
@@ -285,56 +235,24 @@ or can reference constants from within the library:
 
 `memoryjs.BYTE, memoryjs.INT, memoryjs.INT32, memoryjs.UINT32, memoryjs.INT64, memoryjs.UINT64, memoryjs.DWORD, memoryjs.SHORT, memoryjs.LONG, memoryjs.FLOAT, memoryjs.DOUBLE, memoryjs.BOOL, memoryjs.BOOLEAN, memoryjs.PTR, memoryjs.POINTER, memoryjs.STR, memoryjs.STRING, memoryjs.VEC3, memoryjs.VECTOR3, memoryjs.VEC4, memoryjs.VECTOR4`
 
-This is simply used to denote the type of data being read or written.
+This is simply used to denote the type of data being read.
 
-Vector3 is a data structure of three floats:
-
-``` javascript
-const vector3 = { x: 0.0, y: 0.0, z: 0.0 };
-memoryjs.writeMemory(address, vector3);
-```
-
-Vector4 is a data structure of four floats:
+Vector3 is a data structure of three floats, Vector4 a data structure of four:
 
 ``` javascript
-const vector4 = { w: 0.0, x: 0.0, y: 0.0, z: 0.0 };
-memoryjs.writeMemory(address, vector4);
+const vector3 = memoryjs.readMemory(handle, address, memoryjs.VEC3); // { x, y, z }
+const vector4 = memoryjs.readMemory(handle, address, memoryjs.VEC4); // { w, x, y, z }
 ```
 
 ### Generic Structures:
 
-If you have a structure you want to write to memory, you can use buffers. For an example on how to do this, view the [buffers example](https://github.com/Rob--/memoryjs/blob/master/examples/buffers.js).
-
-To write a structure to memory, you can use the [concentrate](https://github.com/deoxxa/concentrate) library to describe the structure as a buffer
-and then write the buffer to memory using the `writeBuffer` function.
-
 To read a structure from memory, you will need to read a buffer from memory using the `readBuffer` function, and then you can use the [dissolve](https://github.com/deoxxa/dissolve) library to parse the buffer into a structure.
 
-In either case you don't need to use the two libraries mentioned above, they just make it easy to turn your structure into a buffer, and your buffer into a structure.
-
-### Protection Type:
-
-Protection type is a bit flag DWORD value.
-
-This parameter should reference a constant from the library:
-
-`memoryjs.PAGE_NOACCESS, memoryjs.PAGE_READONLY, memoryjs.PAGE_READWRITE, memoryjs.PAGE_WRITECOPY, memoryjs.PAGE_EXECUTE, memoryjs.PAGE_EXECUTE_READ, memoryjs.PAGE_EXECUTE_READWRITE, memoryjs.PAGE_EXECUTE_WRITECOPY, memoryjs.PAGE_GUARD, memoryjs.PAGE_NOCACHE, memoryjs.PAGE_WRITECOMBINE, memoryjs.PAGE_ENCLAVE_THREAD_CONTROL, memoryjs.PAGE_TARGETS_NO_UPDATE, memoryjs.PAGE_TARGETS_INVALID, memoryjs.PAGE_ENCLAVE_UNVALIDATED`
-
-Refer to MSDN's [Memory Protection Constants](https://docs.microsoft.com/en-gb/windows/desktop/Memory/memory-protection-constants) for more information.
-
-### Memory Allocation Type:
-
-Memory allocation type is a bit flag DWORD value.
-
-This parameter should reference a constat from the library:
-
-`memoryjs.MEM_COMMIT, memoryjs.MEM_RESERVE, memoryjs.MEM_RESET, memoryjs.MEM_RESET_UNDO`
-
-Refer to MSDN's [VirtualAllocEx](https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-virtualallocex) documentation for more information.
+You don't need to use the library mentioned above, it just makes it easy to turn your buffer into a structure.
 
 ### Strings:
 
-You can use this library to read either a "string", or "char*" and to write a string.
+You can use this library to read either a "string" or a "char*".
 
 In both cases you want to get the address of the char array:
 
@@ -366,61 +284,6 @@ When pattern scanning, flags need to be raised for the signature types. The sign
 `0x2` or `memoryjs.SUBSTRACT` which will subtract the image base from the address.
 
 To raise multiple flags, use the bitwise OR operator: `memoryjs.READ | memoryjs.SUBTRACT`.
-
-### Function Execution:
-
-Remote function execution works by building an array of arguments and dynamically generating shellcode that is injected into the target process and executed, for this reason crashes may occur.
-
-To call a function in a process, the `callFunction` function can be used. The library supports passing arguments to the function and need to be in the following format:
-
-```javascript
-[{ type: T_INT, value: 4 }]
-```
-
-The library expects the arguments to be an array of objects where each object has a `type` which denotes the data type of the argument, and a `value` which is the actual value of the argument. The various supported data types can be found below.
-
-
-``` javascript
-memoryjs.T_VOID = 0x0,
-memoryjs.T_STRING = 0x1,
-memoryjs.T_CHAR = 0x2,
-memoryjs.T_BOOL = 0x3,
-memoryjs.T_INT = 0x4,
-memoryjs.T_DOUBLE = 0x5,
-memoryjs.T_FLOAT = 0x6,
-```
-
-When using `callFunction`, you also need to supply the return type of the function, which again needs to be one of the above values.
-
-For example, given the following C++ function:
-
-``` c++
-int add(int a, int b) {
-    return a + b;
-}
-```
-
-You would call this function as so:
-
-```javascript
-const args = [{
-    type: memoryjs.T_INT,
-    value: 2,
-}, {
-    type: memoryjs.T_INT,
-    value: 5,
-}];
-const returnType = T_INT;
-
-> memoryjs.callFunction(handle, args, returnType, address);
-{ returnValue: 7, exitCode: 7 }
-```
-
-See the [result object documentation](user-content-result-object) for details on what `callFunction` returns.
-
-Notes: currently passing a `double` as an argument is not supported, but returning one is.
-
-Much thanks to the [various contributors](https://github.com/Rob--/memoryjs/issues/6) that made this feature possible.
 
 ### Hardware Breakpoints:
 

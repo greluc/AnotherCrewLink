@@ -6,7 +6,6 @@
 #include "memoryjs.h"
 #include "memory.h"
 #include "pattern.h"
-#include "functions.h"
 
 #pragma comment(lib, "psapi.lib")
 
@@ -15,7 +14,6 @@ process Process;
 // module Module;
 memory Memory;
 pattern Pattern;
-// functions Functions;
 
 struct Vector3 {
   float x, y, z;
@@ -531,135 +529,6 @@ Napi::Value readBuffer(const Napi::CallbackInfo& args) {
   }
 }
 
-Napi::Value writeMemory(const Napi::CallbackInfo& args) {
-  Napi::Env env = args.Env();
-
-  if (args.Length() != 4) {
-    Napi::Error::New(env, "requires 4 arguments").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (!args[0].IsNumber() && !args[1].IsNumber() && !args[3].IsString()) {
-    Napi::Error::New(env, "first and second argument must be a number, third argument must be a string").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  std::string dataTypeArg(args[3].As<Napi::String>().Utf8Value());
-  const char* dataType = dataTypeArg.c_str();
-
-  HANDLE handle = (HANDLE)args[0].As<Napi::Number>().Int64Value();
-  DWORD64 address = args[1].As<Napi::Number>().Int64Value();
-
-  if (!strcmp(dataType, "byte")) {
-
-    Memory.writeMemory<unsigned char>(handle, address, args[2].As<Napi::Number>().Uint32Value());
-
-  } else if (!strcmp(dataType, "int")) {
-
-    Memory.writeMemory<int>(handle, address, args[2].As<Napi::Number>().Int32Value());
-
-  } else if (!strcmp(dataType, "int32")) {
-
-    Memory.writeMemory<int32_t>(handle, address, args[2].As<Napi::Number>().Int32Value());
-
-  } else if (!strcmp(dataType, "uint32")) {
-
-    Memory.writeMemory<uint32_t>(handle, address, args[2].As<Napi::Number>().Uint32Value());
-
-  } else if (!strcmp(dataType, "int64")) {
-
-    Memory.writeMemory<int64_t>(handle, address, args[2].As<Napi::Number>().Int64Value());
-
-  } else if (!strcmp(dataType, "uint64")) {
-
-    Memory.writeMemory<uint64_t>(handle, address, args[2].As<Napi::Number>().Int64Value());
-
-  } else if (!strcmp(dataType, "dword")) {
-
-    Memory.writeMemory<DWORD>(handle, address, args[2].As<Napi::Number>().Uint32Value());
-
-  } else if (!strcmp(dataType, "short")) {
-
-    Memory.writeMemory<short>(handle, address, args[2].As<Napi::Number>().Int32Value());
-
-  } else if (!strcmp(dataType, "long")) {
-
-    Memory.writeMemory<long>(handle, address, args[2].As<Napi::Number>().Int32Value());
-
-  } else if (!strcmp(dataType, "float")) {
-
-    Memory.writeMemory<float>(handle, address, args[2].As<Napi::Number>().FloatValue());
-
-  } else if (!strcmp(dataType, "double")) {
-
-    Memory.writeMemory<double>(handle, address, args[2].As<Napi::Number>().DoubleValue());
-
-  } else if (!strcmp(dataType, "bool") || !strcmp(dataType, "boolean")) {
-
-    Memory.writeMemory<bool>(handle, address, args[2].As<Napi::Boolean>().Value());
-
-  } else if (!strcmp(dataType, "string") || !strcmp(dataType, "str")) {
-
-    std::string valueParam(args[2].As<Napi::String>().Utf8Value());
-    valueParam.append("", 1);
-
-    // Write String, Method 1
-    //Memory.writeMemory<std::string>(handle, address, std::string(*valueParam));
-
-    // Write String, Method 2
-    Memory.writeMemory(handle, address, (char*) valueParam.data(), valueParam.size());
-
-  } else if (!strcmp(dataType, "vector3") || !strcmp(dataType, "vec3")) {
-
-    Napi::Object value = args[2].As<Napi::Object>();
-    Vector3 vector = {
-      value.Get(Napi::String::New(env, "x")).As<Napi::Number>().FloatValue(),
-      value.Get(Napi::String::New(env, "y")).As<Napi::Number>().FloatValue(),
-      value.Get(Napi::String::New(env, "z")).As<Napi::Number>().FloatValue()
-    };
-    Memory.writeMemory<Vector3>(handle, address, vector);
-
-  } else if (!strcmp(dataType, "vector4") || !strcmp(dataType, "vec4")) {
-
-    Napi::Object value = args[2].As<Napi::Object>();
-    Vector4 vector = {
-      value.Get(Napi::String::New(env, "w")).As<Napi::Number>().FloatValue(),
-      value.Get(Napi::String::New(env, "x")).As<Napi::Number>().FloatValue(),
-      value.Get(Napi::String::New(env, "y")).As<Napi::Number>().FloatValue(),
-      value.Get(Napi::String::New(env, "z")).As<Napi::Number>().FloatValue()
-    };
-    Memory.writeMemory<Vector4>(handle, address, vector);
-
-  } else {
-
-    Napi::Error::New(env, "unexpected data type").ThrowAsJavaScriptException();
-  }
-
-  return env.Null();
-}
-
-Napi::Value writeBuffer(const Napi::CallbackInfo& args) {
-  Napi::Env env = args.Env();
-
-  if (args.Length() != 3) {
-    Napi::Error::New(env, "required 3 arguments").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (!args[0].IsNumber() && !args[1].IsNumber()) {
-    Napi::Error::New(env, "first and second argument must be a number").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  HANDLE handle = (HANDLE)args[0].As<Napi::Number>().Int64Value();
-  DWORD64 address = args[1].As<Napi::Number>().Int64Value();
-  SIZE_T length = args[2].As<Napi::Buffer<char>>().Length();
-  char* data = args[2].As<Napi::Buffer<char>>().Data();
-  Memory.writeMemory<char*>(handle, address, data, length);
-
-  return env.Null();
-}
-
 Napi::Value findPattern(const Napi::CallbackInfo& args) {
   Napi::Env env = args.Env();
 
@@ -727,173 +596,6 @@ Napi::Value findPattern(const Napi::CallbackInfo& args) {
   } else {
     // return JSON
     return Napi::Value::From(env, address);
-  }
-}
-
-Napi::Value callFunction(const Napi::CallbackInfo& args) {
-  Napi::Env env = args.Env();
-
-  if (args.Length() != 4 && args.Length() != 5) {
-    Napi::Error::New(env, "requires 4 arguments, 5 with callback").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (!args[0].IsNumber() && !args[1].IsObject() && !args[2].IsNumber() && !args[3].IsNumber()) {
-    Napi::Error::New(env, "invalid arguments").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  // TODO: temp (?) solution to forcing variables onto the heap
-  // to ensure consistent addresses. copy everything to a vector, and use the
-  // vector's instances of the variables as the addresses being passed to `functions.call()`.
-  // Another solution: do `int x = new int(4)` and then use `&x` for the address
-  std::vector<LPVOID> heap;
-
-  std::vector<Arg> parsedArgs;
-  Napi::Array arguments = args[1].As<Napi::Array>();
-  for (unsigned int i = 0; i < arguments.Length(); i++) {
-    Napi::Object argument = arguments.Get(i).As<Napi::Object>();
-
-    Type type = (Type) argument.Get(Napi::String::New(env, "type")).As<Napi::Number>().Uint32Value();
-
-    if (type == T_STRING) {
-      std::string stringValue = argument.Get(Napi::String::New(env, "value")).As<Napi::String>().Utf8Value();
-      parsedArgs.push_back({ type, &stringValue });
-    }
-
-    if (type == T_INT) {
-      int data = argument.Get(Napi::String::New(env, "value")).As<Napi::Number>().Int32Value();
-
-      // As we only pass the addresses of the variable to the `call` function and not a copy
-      // of the variable itself, we need to ensure that the variable stays alive and in a unique
-      // memory location until the `call` function has been executed. So manually allocate memory,
-      // track it, and then free it once the function has been called.
-      // TODO: find a better solution?
-      int* memory = (int*) malloc(sizeof(int));
-      *memory = data;
-      heap.push_back(memory);
-
-      parsedArgs.push_back({ type, memory });
-    }
-
-    if (type == T_FLOAT) {
-      float data = argument.Get(Napi::String::New(env, "value")).As<Napi::Number>().FloatValue();
-
-      float* memory = (float*) malloc(sizeof(float));
-      *memory = data;
-      heap.push_back(memory);
-
-      parsedArgs.push_back({ type, memory });
-    }
-  }
-
-  HANDLE handle = (HANDLE)args[0].As<Napi::Number>().Int64Value();
-  Type returnType = (Type) args[2].As<Napi::Number>().Uint32Value();
-  DWORD64 address = args[3].As<Napi::Number>().Int64Value();
-
-  const char* errorMessage = "";
-  Call data = functions::call<int>(handle, parsedArgs, returnType, address, &errorMessage);
-
-  // Free all the memory we allocated
-  for (auto &memory : heap) {
-    free(memory);
-  }
-
-  heap.clear();
-
-  Napi::Object info = Napi::Object::New(env);
-
-  Napi::String keyString = Napi::String::New(env, "returnValue");
-
-  if (returnType == T_STRING) {
-    info.Set(keyString, Napi::String::New(env, data.returnString.c_str()));
-  }
-
-  if (returnType == T_CHAR) {
-    info.Set(keyString, Napi::Value::From(env, (char) data.returnValue));
-  }
-
-  if (returnType == T_BOOL) {
-    info.Set(keyString, Napi::Value::From(env, (bool) data.returnValue));
-  }
-
-  if (returnType == T_INT) {
-    info.Set(keyString, Napi::Value::From(env, (int) data.returnValue));
-  }
-
-  if (returnType == T_FLOAT) {
-    float value = *(float *)&data.returnValue;
-    info.Set(keyString, Napi::Value::From(env, value));
-  }
-
-  if (returnType == T_DOUBLE) {
-    double value = *(double *)&data.returnValue;
-    info.Set(keyString, Napi::Value::From(env, value));
-  }
-
-  info.Set(Napi::String::New(env, "exitCode"), Napi::Value::From(env, data.exitCode));
-
-  if (args.Length() == 5) {
-    // Callback to let the user handle with the information
-    Napi::Function callback = args[2].As<Napi::Function>();
-    callback.Call(env.Global(), { Napi::String::New(env, errorMessage), info });
-    return env.Null();
-  } else {
-    // return JSON
-    return info;
-  }
-
-}
-
-Napi::Value virtualProtectEx(const Napi::CallbackInfo& args) {
-  Napi::Env env = args.Env();
-
-  if (args.Length() != 4 && args.Length() != 5) {
-    Napi::Error::New(env, "requires 4 arguments, 5 with callback").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (!args[0].IsNumber() && !args[1].IsNumber() && !args[2].IsNumber()) {
-    Napi::Error::New(env, "All arguments should be numbers.").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (args.Length() == 5 && !args[4].IsFunction()) {
-    Napi::Error::New(env, "callback needs to be a function").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  DWORD result;
-  HANDLE handle = (HANDLE)args[0].As<Napi::Number>().Int64Value();
-  DWORD64 address = args[1].As<Napi::Number>().Int64Value();
-  SIZE_T size = args[2].As<Napi::Number>().Int64Value();
-  DWORD protection = args[3].As<Napi::Number>().Uint32Value();
-
-  bool success = VirtualProtectEx(handle, (LPVOID) address, size, protection, &result);
-
-  const char* errorMessage = "";
-
-  if (success == 0) {
-    errorMessage = "an error occurred calling VirtualProtectEx";
-    // errorMessage = GetLastErrorToString().c_str();
-  }
-
-  // If there is an error and there is no callback, throw the error
-  if (strcmp(errorMessage, "") && args.Length() != 5) {
-    Napi::Error::New(env, errorMessage).ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (args.Length() == 5) {
-    // Callback to let the user handle with the information
-    Napi::Function callback = args[5].As<Napi::Function>();
-    callback.Call(env.Global(), {
-      Napi::String::New(env, errorMessage),
-      Napi::Value::From(env, result)
-    });
-    return env.Null();
-  } else {
-    return Napi::Value::From(env, result);
   }
 }
 
@@ -1011,68 +713,6 @@ Napi::Value virtualQueryEx(const Napi::CallbackInfo& args) {
   }
 }
 
-Napi::Value virtualAllocEx(const Napi::CallbackInfo& args) {
-  Napi::Env env = args.Env();
-
-  if (args.Length() != 5 && args.Length() != 6) {
-    Napi::Error::New(env, "requires 5 arguments, 6 with callback").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (!args[0].IsNumber() || !args[2].IsNumber() || !args[3].IsNumber() || !args[4].IsNumber()) {
-    Napi::Error::New(env, "invalid arguments: arguments 0, 2, 3 and 4 need to be numbers").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (args.Length() == 6 && !args[5].IsFunction()) {
-    Napi::Error::New(env, "callback needs to be a function").ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  HANDLE handle = (HANDLE)args[0].As<Napi::Number>().Int64Value();
-  SIZE_T size = args[2].As<Napi::Number>().Int64Value();
-  DWORD allocationType = args[3].As<Napi::Number>().Uint32Value();
-  DWORD protection = args[4].As<Napi::Number>().Uint32Value();
-  LPVOID address;
-
-  // Means in the JavaScript space `null` was passed through.
-  if (args[1] == env.Null()) {
-    address = NULL;
-  } else {
-    address = (LPVOID) args[1].As<Napi::Number>().Int64Value();
-  }
-
-  LPVOID allocatedAddress = VirtualAllocEx(handle, address, size, allocationType, protection);
-
-  const char* errorMessage = "";
-
-  // If null, it means an error occurred
-  if (allocatedAddress == NULL) {
-    errorMessage = "an error occurred calling VirtualAllocEx";
-    // errorMessage = GetLastErrorToString().c_str();
-  }
-
-  // If there is an error and there is no callback, throw the error
-  if (strcmp(errorMessage, "") && args.Length() != 6) {
-    Napi::Error::New(env, errorMessage).ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  if (args.Length() == 6) {
-    // Callback to let the user handle with the information
-    Napi::Function callback = args[5].As<Napi::Function>();
-    callback.Call(env.Global(), {
-      Napi::String::New(env, errorMessage),
-      Napi::Value::From(env, (intptr_t)allocatedAddress)
-    });
-    return env.Null();
-  } else {
-    return Napi::Value::From(env, (intptr_t)allocatedAddress);
-  }
-}
-
-
-
 // https://stackoverflow.com/a/17387176
 std::string GetLastErrorToString() {
   DWORD errorMessageID = ::GetLastError();
@@ -1110,12 +750,7 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
   exports.Set(Napi::String::New(env, "getProcessPath"), Napi::Function::New(env, getProcessPath));
   exports.Set(Napi::String::New(env, "readMemory"), Napi::Function::New(env, readMemory));
   exports.Set(Napi::String::New(env, "readBuffer"), Napi::Function::New(env, readBuffer));
-  exports.Set(Napi::String::New(env, "writeMemory"), Napi::Function::New(env, writeMemory));
-  exports.Set(Napi::String::New(env, "writeBuffer"), Napi::Function::New(env, writeBuffer));
   exports.Set(Napi::String::New(env, "findPattern"), Napi::Function::New(env, findPattern));
-  exports.Set(Napi::String::New(env, "virtualProtectEx"), Napi::Function::New(env, virtualProtectEx));
-  exports.Set(Napi::String::New(env, "callFunction"), Napi::Function::New(env, callFunction));
-  exports.Set(Napi::String::New(env, "virtualAllocEx"), Napi::Function::New(env, virtualAllocEx));
   exports.Set(Napi::String::New(env, "getRegions"), Napi::Function::New(env, getRegions));
   exports.Set(Napi::String::New(env, "virtualQueryEx"), Napi::Function::New(env, virtualQueryEx));
   return exports;

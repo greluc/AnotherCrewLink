@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "مضيف الجوال",
 			"vad_enabled": "تمكين VAD",
 			"hardware_acceleration": "تسريع الجهاز",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "إعدادات البث",
 			"hidecode": "إظهار كود الردهة",
-			"obs_overlay": "تراكب متصفح OBS",
-			"obs_url": "عنوان URL لمصدر متصفح OBS",
 			"voice_server_comp": "وضع التوافق مع خادم الصوت",
 			"voice_server_comp_warning": "يوصى بتغيير خادم الصوت إلى خادم صوت AnotherCrewLink (https://bettercrewl.ink) على سبيل المثال."
 		},

@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Mobil vert",
 			"vad_enabled": "VAD aktivert",
 			"hardware_acceleration": "Maskinvareakselerasjon",
 			"hardware_acceleration_warning": "Dette deaktiverer maskinvareakselerasjon (som kan øke CPU-bruk)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Strømningsinnstillinger",
 			"hidecode": "Vis lobbykode",
-			"obs_overlay": "OBS-nettleser overlegg",
-			"obs_url": "OBS-nettleser kildelenke",
 			"voice_server_comp": "VS kompatibilitetsmodus",
 			"voice_server_comp_warning": "Det anbefales å kun endre stemmeserver til en AnotherCrewLink-stemmeserver (https://bettercrewl.ink) for eksempel."
 		},

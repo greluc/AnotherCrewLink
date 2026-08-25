@@ -3,18 +3,16 @@ import type { IOffsets, IOffsetsLookup } from './offsetStore';
 /**
  * Structural validation for the offsets bundle.
  *
- * The offsets decide where this client reads inside another process, and on 32-bit
- * Windows they decide where an injection stub writes. They arrive over the network from
- * a repository, and until H2 nothing between the fetch and their use looked at them at
- * all: a truncated response, a rate-limit page that happened to parse, or a hostile
- * merge on the mirror all reached `GameReader` unchanged.
+ * The offsets decide where this client reads inside another process. They arrive over the
+ * network from a repository, and until H2 nothing between the fetch and their use looked
+ * at them at all: a truncated response, a rate-limit page that happened to parse, or a
+ * hostile merge on the mirror all reached `GameReader` unchanged.
  *
  * **What this catches:** shape, types, ranges, and the pattern syntax of a signature.
  * **What it cannot catch:** a structurally perfect bundle with the wrong numbers in it.
  * A plausible-but-wrong offset reads the wrong field, and no amount of validation here
  * distinguishes that from a game update. That limit is the honest boundary of this
- * layer; the answer to it is review on the mirror, and the write-side prologue check in
- * `GameReader`, not a longer function here.
+ * layer; the answer to it is review on the mirror, not a longer function here.
  *
  * Every bound below is derived from the 44 real offsets files in
  * `test/fixtures/offsets`, not guessed. A validator that rejects real data is a
@@ -30,7 +28,6 @@ export type OffsetsRejection =
 	| 'chain-out-of-range'
 	| 'chain-too-long'
 	| 'buffer-length-absurd'
-	| 'rva-out-of-module'
 	| 'bad-signature'
 	| 'bad-struct'
 	| 'bundle-version-replayed'
@@ -82,8 +79,8 @@ const MAX_SIGNATURE_TOKENS = 256;
 /**
  * Where in the matched pattern the address is taken from, and how far it is then stepped.
  * Real values are 0..10 and -5..4 respectively. These are deliberately close to the data:
- * a signature is the one field in the bundle that steers a pattern scan, and a scan
- * result is what the injection stub writes to on 32-bit Windows.
+ * a signature is the one field in the bundle that steers a pattern scan, and the scan
+ * result becomes the base of a pointer chain this client dereferences.
  */
 const MAX_PATTERN_OFFSET = 256;
 const MAX_ADDRESS_OFFSET = 64;
@@ -133,31 +130,12 @@ const REQUIRED_TOP_LEVEL = [
 	'gameoptionsData',
 	'gameOptions_MapId',
 	'gameOptions_MaxPLayers',
-	'connectFunc',
-	'fixedUpdateFunc',
-	'showModStampFunc',
-	'modLateUpdateFunc',
-	'pingMessageString',
 	'serverManager_currentServer',
 	'innerNetClient',
 	'player',
 	'signatures',
 	'oldMeetingHud',
-	'disableWriting',
 	'newGameOptions',
-] as const;
-
-/**
- * The five fields that become addresses. On 32-bit builds four of them are the target of
- * an `E9 rel32` write, so they are range-checked here even though `GameReader` overwrites
- * them with a pattern-scan result before use — see the note on `validateResolvedAddress`.
- */
-const RVA_FIELDS = [
-	'connectFunc',
-	'fixedUpdateFunc',
-	'showModStampFunc',
-	'modLateUpdateFunc',
-	'pingMessageString',
 ] as const;
 
 const INNER_NET_CLIENT_NUMBERS = [
@@ -196,12 +174,7 @@ const SIGNATURE_NAMES = [
 	'miniGame',
 	'palette',
 	'playerControl',
-	'connectFunc',
-	'fixedUpdateFunc',
-	'pingMessageString',
 	'serverManager',
-	'showModStamp',
-	'modLateUpdate',
 	'gameOptionsManager',
 ] as const;
 
@@ -409,15 +382,7 @@ export function validateOffsets(value: unknown, where = 'offsets'): IOffsets {
 		}
 	}
 
-	for (const key of RVA_FIELDS) {
-		const at = `${where}.${key}`;
-		const rva = requireInteger(offsets, key, at);
-		if (rva < 0 || rva > MAX_MODULE_RVA) {
-			throw new OffsetsRejected('rva-out-of-module', at, `${rva} is outside 0..0x${MAX_MODULE_RVA.toString(16)}`);
-		}
-	}
-
-	for (const key of ['oldMeetingHud', 'disableWriting', 'newGameOptions'] as const) {
+	for (const key of ['oldMeetingHud', 'newGameOptions'] as const) {
 		requireBoolean(offsets, key, `${where}.${key}`);
 	}
 
@@ -556,26 +521,4 @@ export function validateLookup(value: unknown, where = 'lookup', context?: Bundl
 	}
 
 	return value as IOffsetsLookup;
-}
-
-/**
- * The range check that actually protects the write path.
- *
- * `GameReader` overwrites `connectFunc`, `fixedUpdateFunc`, `showModStampFunc` and
- * `modLateUpdateFunc` with the result of a pattern scan before using them, so the number
- * validated in the bundle is a placeholder — the real values in the corpus are 255 to
- * 4095, far too small to be functions. What the bundle actually controls is the
- * *signature*, and a hostile signature steers the scan to whatever address its bytes
- * happen to match. Bounding the resolved address is therefore the check that matters,
- * and it belongs where the address is produced.
- */
-export function isAddressInModule(resolved: number, moduleBase: number, moduleSize: number): boolean {
-	if (!Number.isInteger(resolved) || !Number.isInteger(moduleBase)) {
-		return false;
-	}
-	if (resolved <= moduleBase) {
-		return false;
-	}
-	const size = Number.isInteger(moduleSize) && moduleSize > 0 ? moduleSize : MAX_MODULE_RVA;
-	return resolved < moduleBase + size;
 }

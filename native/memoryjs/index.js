@@ -1,3 +1,8 @@
+// This fork reads a process and does not write to one. writeMemory, writeBuffer,
+// virtualAllocEx, virtualProtectEx and callFunction were removed from the native module
+// on 2026-08-25, together with the shellcode helper callFunction was built on: the only
+// consumer opens its target with PROCESS_VM_READ, so none of them could have succeeded,
+// and writeBuffer reported success regardless of what the kernel did.
 const memoryjs = require('./build/Release/memoryjs');
 
 module.exports = {
@@ -28,43 +33,6 @@ module.exports = {
   NORMAL: 0x0,
   READ: 0x1,
   SUBTRACT: 0x2,
-
-  // function data type constants
-  T_VOID: 0x0,
-  T_STRING: 0x1,
-  T_CHAR: 0x2,
-  T_BOOL: 0x3,
-  T_INT: 0x4,
-  T_DOUBLE: 0x5,
-  T_FLOAT: 0x6,
-
-    // Memory access types.
-  // See: https://docs.microsoft.com/en-gb/windows/desktop/Memory/memory-protection-constants
-  PAGE_NOACCESS: 0x01,
-  PAGE_READONLY: 0x02,
-  PAGE_READWRITE: 0x04,
-  PAGE_WRITECOPY: 0x08,
-  PAGE_EXECUTE: 0x10,
-  PAGE_EXECUTE_READ: 0x20,
-  PAGE_EXECUTE_READWRITE: 0x40,
-  PAGE_EXECUTE_WRITECOPY: 0x80,
-  PAGE_GUARD: 0x100,
-  PAGE_NOCACHE: 0x200,
-  PAGE_WRITECOMBINE: 0x400,
-  PAGE_ENCLAVE_UNVALIDATED: 0x20000000,
-  PAGE_TARGETS_NO_UPDATE: 0x40000000,
-  PAGE_TARGETS_INVALID: 0x40000000,
-  PAGE_ENCLAVE_THREAD_CONTROL: 0x80000000,
-
-    // Memory allocation types.
-  // See: https://docs.microsoft.com/en-us/windows/desktop/api/memoryapi/nf-memoryapi-virtualallocex
-  MEM_COMMIT: 0x00001000,
-  MEM_RESERVE: 0x00002000,
-  MEM_RESET: 0x00080000,
-  MEM_TOP_DOWN: 0x00100000,
-  MEM_RESET_UNDO: 0x1000000,
-  MEM_LARGE_PAGES: 0x20000000,
-  MEM_PHYSICAL: 0x00400000,
 
   openProcess(processIdentifier, callback) {
     if (arguments.length === 1) {
@@ -108,26 +76,6 @@ module.exports = {
 
   getProcessPath(handle) {
       return memoryjs.getProcessPath(handle);
-  },
-
-  virtualAllocEx(handle, address, size, allocationType, protection, callback) {
-    if (arguments.length === 5) {
-      return memoryjs.virtualAllocEx(handle, address, size, allocationType, protection);
-    }
-
-    memoryjs.virtualAllocEx(handle, address, size, allocationType, protection, callback);
-  },
-
-  writeMemory(handle, address, value, dataType) {
-    if (dataType === 'str' || dataType === 'string') {
-      value += '\0'; // add terminator
-    }
-
-    return memoryjs.writeMemory(handle, address, value, dataType.toLowerCase());
-  },
-
-  writeBuffer(handle, address, buffer) {
-    return memoryjs.writeBuffer(handle, address, buffer);
   },
 
   findPattern(handle, moduleName, signature, signatureType, patternOffset, addressOffset, skip = 0, callback) {

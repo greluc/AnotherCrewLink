@@ -77,9 +77,6 @@ memoryjs.readMemory(processObject.handle, address, memoryjs.INT, (error, result)
   console.log(`value of 0x${address.toString(16)}: ${result}`);
 });
 
-// write memory
-memoryjs.writeMemory(processObject.handle, address, 1, memoryjs.INT);
-
 // pattern reading
 const signature = 'A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 59 C3 6A';
 const signatureTypes = memoryjs.READ | memoryjs.SUBTRACT;

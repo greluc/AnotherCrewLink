@@ -441,6 +441,14 @@ new risk and these are the other kind.
   Not a CSPRNG, about 46 bits, and it can return fewer than nine characters,
   which silently disables the overlay for that user.
 
+> **Closed 2026-08-25, by removal.** The first and third of these are gone rather than
+> fixed: the client no longer has a mobile relay or an OBS feed, so there is no
+> `mobilePlayerInfo` branch to sit above a guard and no secret to guess. Between 1.0.2 and
+> the removal both had already been narrowed — the mobile branch was moved below the
+> sender check and put behind the `mobileHost` opt-in, and the secret became 16 CSPRNG
+> bytes — but the code paths themselves have now been deleted. The second, the
+> unauthenticated `setHost` fallback, is untouched by that and stands as written.
+
 The fixes ship on the 1.x line rather than waiting for the port, and are
 scheduled in [09-technology-migration.md](09-technology-migration.md) §3.2.
 
