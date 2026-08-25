@@ -995,12 +995,27 @@ that is why it is a G2 criterion.
 > asks `opus_packet_has_lbrr` instead. With the loop closed: 37 recovered, 22 gaps. With it
 > open: 0 recovered, 59 gaps.
 >
-> The corrected classification also exposed a threshold nothing in the plan anticipated:
-> **below about 5% reported loss libopus emits no usable redundancy at all.** At 1% and 2%
-> the recovery count is zero, not small. That is defensible -- concealment holds quality at
-> 0.995 and 0.984 there -- but it means the controller's output between 1% and 4% is intent
-> without effect, and no reading of the impairment table should attribute those rows to
-> error correction. No bitrate ladder — below roughly 16–20 kbps
+> The corrected classification appeared to expose a threshold -- below about 5% reported
+> loss, no redundancy at all, zero rather than a little -- and it was written down here as
+> a property of libopus.
+>
+> **It was not. Corrected 2026-08-24.** LBRR lives in libopus's SILK layer; libopus decides
+> for itself whether a signal is speech or music, and music is coded by CELT, which carries
+> no LBRR. The encoder had been left to guess. `Encoder::new` now says `Signal::Voice`,
+> which is simply true of this application, and 1% recovers 6 frames where it recovered 0,
+> 2% recovers 20, and 5% recovers 39 instead of 28.
+>
+> **The same mistake also broke the controller outright, which is worse.** Told about 5%
+> before its first frame, the encoder protected 175 of 200 packets. Told the same thing
+> after two hundred frames -- which is what a receiver report does, and the only thing the
+> controller ever does -- it protected **none**: an encoder settled into a mode without LBRR
+> did not go back for it. So the loop §3e exists to close was reporting success and
+> achieving nothing, wearing the costume of the fix for exactly that fault. With
+> `Signal::Voice` it protects 171 of 200.
+>
+> It was found by asking of our own packets the question that had been asked of Chromium's:
+> not "did the call succeed" but `opus_packet_has_lbrr` -- is the redundancy actually in
+> there. No bitrate ladder — below roughly 16–20 kbps
 libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
 loop exactly when it is needed.
 

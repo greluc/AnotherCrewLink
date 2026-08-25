@@ -41,20 +41,25 @@
 //! and one that never had. The buffer now asks `opus_packet_has_lbrr` before it claims
 //! anything.
 //!
-//! Correcting it exposed a threshold worth knowing:
+//! Correcting it appeared to expose a threshold, and the threshold turned out to be a
+//! second bug:
 //!
-//! | told the encoder | frames recovered | frames concealed |
+//! | told the encoder | recovered, before | recovered, after |
 //! | --- | --- | --- |
-//! | 1% | 0 | 7 |
-//! | 2% | 0 | 24 |
-//! | 5% | 28 | 21 |
-//! | 10% | 79 | 23 |
+//! | 1% | 0 | 6 |
+//! | 2% | 0 | 20 |
+//! | 5% | 28 | 39 |
+//! | 10% | 79 | 79 |
 //!
-//! **Below about five percent, libopus emits no usable redundancy at all.** Not a little:
-//! none. That is not a fault -- at one or two percent concealment holds quality at 0.995
-//! and 0.984, so there is nothing to protect against -- but it does mean the controller's
-//! output between one and four percent is intent without effect, and anybody reading these
-//! rows should not expect error correction to explain them.
+//! The left column read as "below about five percent libopus emits no usable redundancy",
+//! which was written down as a property of libopus. It is not. LBRR lives in the SILK
+//! layer, libopus decides for itself whether a signal is speech or music, and music is
+//! coded by CELT, which has no LBRR at all -- so the encoder was answering a question
+//! nobody had meant to ask. `Encoder::new` now says `Signal::Voice`, which is true of this
+//! application, and the right column is what the same runs produce.
+//!
+//! Worth keeping as a warning rather than deleting: a measured number that looks like a
+//! codec's behaviour can be a configuration nobody chose.
 //!
 //! # Where the quality number still lies, and where it stopped
 //!
