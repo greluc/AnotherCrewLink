@@ -14,6 +14,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
+# P4's transport. Pinned exactly, as §4.6 item 2 asks: the maintainer states a minor bump
+# may carry breaking changes, and 0.20 is a sans-IO rewrite rather than the Pion port
+# older versions were. It costs 141 crates -- measured, and all four supply-chain gates
+# accept them; see `experiments/README.md` experiment 3.
+webrtc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
