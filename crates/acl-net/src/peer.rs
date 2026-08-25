@@ -2,14 +2,15 @@
 //!
 //! The same split [`crate::client`] uses, and for the same reason: everything that can go
 //! wrong in a hand-written peer goes wrong here rather than inside the `webrtc` crate,
-//! where it would need two hosts and a network to reproduce. Four decisions live here —
+//! where it would need two hosts and a network to reproduce. Five decisions live here —
 //! when a candidate may be applied, whether an event still belongs to a live connection,
-//! when a connection that never started is declared dead, and what to do with a signal
-//! from a socket nobody knows.
+//! when a connection that never started is declared dead, what to do with a signal from a
+//! socket nobody knows, and whether trouble on a live link costs a restart or a rebuild.
 //!
-//! Three of the four are 1.0.0 bugs. §4.6 names them as regression tests because a port
-//! will otherwise reintroduce them, and a test that needs a lobby to run is a test that
-//! does not run.
+//! Three of them are 1.0.0 bugs. §4.6 names those as regression tests because a port will
+//! otherwise reintroduce them, and a test that needs a lobby to run is a test that does
+//! not run. The fifth is 1.0.4's, and it is here for the same reason: a repair that
+//! quietly does nothing is indistinguishable from the fault it was meant to fix.
 
 use std::time::Duration;
 
@@ -215,6 +216,92 @@ impl Attempt {
     }
 }
 
+/// How long a connection may sit disconnected before ICE is restarted.
+///
+/// `disconnected` means connectivity checks have stopped succeeding but ICE has not given
+/// up. Sometimes it heals on its own — a wifi roam, a moment of congestion — and tearing
+/// anything down for that would be worse than waiting. Sometimes it does not, and the
+/// stack then takes fifteen to thirty seconds to admit it by moving to `failed`. For all
+/// of that time the player is silent.
+///
+/// Four seconds is longer than the transient cases take and much shorter than the wait
+/// for `failed`. A restart re-gathers — including a fresh relay allocation — and keeps
+/// the connection, its tracks and its DTLS session, which is a far cheaper repair than
+/// the rebuild a failure costs.
+pub const ICE_RESTART_AFTER_DISCONNECTED: Duration = Duration::from_secs(4);
+
+/// What the transport reports about a link that is already up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkState {
+    /// Media is flowing.
+    Connected,
+    /// Checks have stopped succeeding, but ICE has not given up.
+    Disconnected,
+    /// ICE gave up.
+    Failed,
+}
+
+/// The cheapest repair that fits what went wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repair {
+    /// Leave it alone.
+    None,
+    /// Re-gather, keeping the connection, its tracks and its DTLS session.
+    RestartIce,
+    /// Tear it down and build another.
+    Rebuild,
+}
+
+/// Decides between an ICE restart and a rebuild.
+///
+/// A rebuild is not the first response to trouble, and §4.6 says so: only a failure
+/// costs one. The two rules that are not obvious from either stack's API are both here.
+///
+/// **Only the initiator restarts.** A restart works by making the next offer carry fresh
+/// ICE credentials, so an end that does not offer cannot perform one.
+///
+/// **One restart per connection.** A path that is genuinely gone returns to disconnected
+/// immediately afterwards, and restarting on a loop would re-gather each time — taking a
+/// relay allocation per attempt from a server that grants a finite number — instead of
+/// letting it fail once and be rebuilt.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RepairPolicy {
+    restarted: bool,
+}
+
+impl RepairPolicy {
+    /// A policy for a connection that has not been repaired yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { restarted: false }
+    }
+
+    /// Whether this connection has already spent its one restart.
+    #[must_use]
+    pub const fn has_restarted(self) -> bool {
+        self.restarted
+    }
+
+    /// What to do, given the state, how long the link has been in it, and whether this
+    /// end is the one that offers.
+    pub const fn poll(&mut self, state: LinkState, held: Duration, initiator: bool) -> Repair {
+        match state {
+            // Whichever end notices. Both will, and the reconnect policy decides which of
+            // them offers the replacement.
+            LinkState::Failed => Repair::Rebuild,
+            LinkState::Disconnected
+                if initiator
+                    && !self.restarted
+                    && held.as_millis() >= ICE_RESTART_AFTER_DISCONNECTED.as_millis() =>
+            {
+                self.restarted = true;
+                Repair::RestartIce
+            }
+            LinkState::Disconnected | LinkState::Connected => Repair::None,
+        }
+    }
+}
+
 /// What to do with a signal whose sender the mesh does not recognise.
 ///
 /// The server sends `{ data, from }` and nothing else. The 1.0.0 client destructured a
@@ -337,6 +424,114 @@ mod tests {
         assert!(!accepts_signal_from(&known, "mallory"));
         // The empty lobby is the case that used to reach the destructuring first.
         assert!(!accepts_signal_from(&[], "alice"));
+    }
+
+    #[test]
+    fn a_disconnected_link_is_left_alone_for_four_seconds() {
+        // Transient cases -- a wifi roam, a moment of congestion -- heal on their own, and
+        // re-gathering for one costs a relay allocation for nothing.
+        let mut policy = RepairPolicy::new();
+        assert_eq!(
+            policy.poll(LinkState::Disconnected, Duration::ZERO, true),
+            Repair::None
+        );
+        assert_eq!(
+            policy.poll(
+                LinkState::Disconnected,
+                ICE_RESTART_AFTER_DISCONNECTED
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap(),
+                true
+            ),
+            Repair::None
+        );
+        assert_eq!(
+            policy.poll(
+                LinkState::Disconnected,
+                ICE_RESTART_AFTER_DISCONNECTED,
+                true
+            ),
+            Repair::RestartIce
+        );
+    }
+
+    #[test]
+    fn only_the_initiator_restarts() {
+        // A restart works by making the next offer carry fresh ICE credentials. An end
+        // that does not offer cannot perform one, and trying would be a silent no-op --
+        // which looks exactly like the fault it is meant to repair.
+        let mut policy = RepairPolicy::new();
+        assert_eq!(
+            policy.poll(LinkState::Disconnected, Duration::from_secs(60), false),
+            Repair::None
+        );
+        assert!(!policy.has_restarted());
+    }
+
+    #[test]
+    fn one_restart_per_connection() {
+        // A path that is genuinely gone returns to disconnected immediately afterwards.
+        // Restarting on a loop re-gathers each time, taking a relay allocation per attempt
+        // from a server that grants a finite number, instead of failing once and being
+        // rebuilt.
+        let mut policy = RepairPolicy::new();
+        assert_eq!(
+            policy.poll(
+                LinkState::Disconnected,
+                ICE_RESTART_AFTER_DISCONNECTED,
+                true
+            ),
+            Repair::RestartIce
+        );
+        assert_eq!(
+            policy.poll(LinkState::Disconnected, Duration::from_secs(600), true),
+            Repair::None
+        );
+    }
+
+    #[test]
+    fn a_recovery_does_not_return_the_restart() {
+        // The budget is per connection, not per disconnection. A link that flaps would
+        // otherwise re-gather on every dip.
+        let mut policy = RepairPolicy::new();
+        policy.poll(
+            LinkState::Disconnected,
+            ICE_RESTART_AFTER_DISCONNECTED,
+            true,
+        );
+        assert_eq!(
+            policy.poll(LinkState::Connected, Duration::ZERO, true),
+            Repair::None
+        );
+        assert_eq!(
+            policy.poll(LinkState::Disconnected, Duration::from_secs(600), true),
+            Repair::None
+        );
+    }
+
+    #[test]
+    fn only_a_failure_costs_a_rebuild() {
+        // The whole point of the restart: it keeps the connection, its tracks and its
+        // DTLS session. A rebuild throws all three away.
+        let mut policy = RepairPolicy::new();
+        assert_eq!(
+            policy.poll(LinkState::Failed, Duration::ZERO, true),
+            Repair::Rebuild
+        );
+        // Either end may notice, and both will.
+        assert_eq!(
+            RepairPolicy::new().poll(LinkState::Failed, Duration::ZERO, false),
+            Repair::Rebuild
+        );
+    }
+
+    #[test]
+    fn a_connected_link_is_never_repaired() {
+        let mut policy = RepairPolicy::new();
+        assert_eq!(
+            policy.poll(LinkState::Connected, Duration::from_secs(3600), true),
+            Repair::None
+        );
     }
 
     #[test]
