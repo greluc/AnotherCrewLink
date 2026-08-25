@@ -366,7 +366,6 @@ ${logDirectory()}`
 
 	// quit application when all windows are closed
 	app.on('window-all-closed', () => {
-		// on macOS it is common for applications to stay open until the user explicitly quits
 		try {
 			const mainWindow = global.mainWindow;
 			const overlay = global.overlay;
@@ -381,27 +380,16 @@ ${logDirectory()}`
 		app.quit();
 	});
 
-	app.on('activate', () => {
-		console.log('ACTIVATE???');
-		// on macOS it is common to re-create a window even after all windows have been closed
-		if (global.mainWindow === null) {
-			global.mainWindow = createMainWindow();
-		}
-
-		session.fromPartition('default').setPermissionRequestHandler((_webContents, permission, callback) => {
-			const allowedPermissions = ['audioCapture']; // Full list here: https://developer.chrome.com/extensions/declare_permissions#manifest
-			console.log('permission requested ', permission);
-			if (allowedPermissions.includes(permission)) {
-				callback(true); // Approve permission request
-			} else {
-				console.error(
-					`The application tried to request permission for '${permission}'. This permission was not whitelisted and has been blocked.`
-				);
-
-				callback(false); // Deny
-			}
-		});
-	});
+	// There was an `app.on('activate')` handler here until 2026-08-25. Electron's own
+	// typings mark that event `@platform darwin`, so on the only platform this ships for
+	// it never fired -- and it held the window re-creation branch and, inside it, the
+	// session's permission request handler. **That allow-list has therefore never been
+	// installed for any user of this application.** It is not reinstated here as it
+	// stood: it allowed the single permission `audioCapture`, which is a Chrome
+	// *extension* manifest permission and not one Electron ever passes to this callback
+	// -- `getUserMedia` asks for `media` -- so wiring it up unchanged would deny the
+	// microphone and take voice out entirely. Restoring it needs the right permission
+	// name and a test with a real microphone, which is a change of its own.
 
 	// create main BrowserWindow when electron is ready
 	app.whenReady().then(() => {

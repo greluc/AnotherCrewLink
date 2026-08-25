@@ -35,30 +35,6 @@
             'libuiohook/src/windows'
           ]
         }],
-        ['OS=="mac"', {
-          "defines":[
-            "__MACOSX_CORE__","USE_IOKIT","USE_APPLICATION_SERVICES","USE_OBJC"
-          ],
-          "link_settings": {
-            "libraries": [
-              "-framework IOKit",
-              "-framework Carbon",
-              "-framework ApplicationServices",
-              "-framework AppKit",
-              "-framework CoreFoundation"
-            ],
-          },
-          'cflags': ['-std=c99', '-pedantic', '-Wall', '-pthread'],
-          'sources': [
-            "libuiohook/src/darwin/input_helper.c",
-            "libuiohook/src/darwin/input_hook.c",
-            "libuiohook/src/darwin/post_event.c",
-            "libuiohook/src/darwin/system_properties.c"
-          ],
-          'include_dirs': [
-            'libuiohook/src/darwin'
-          ]
-        }]
       ]
     }
   ]

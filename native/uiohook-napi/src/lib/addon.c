@@ -240,16 +240,6 @@ napi_value AddonStart(napi_env env, napi_callback_info info) {
     NAPI_THROW(env, "UIOHOOK_ERROR_X_RECORD_ENABLE_CONTEXT", "Failed to enable XRecord context.", NULL);
   case UIOHOOK_ERROR_SET_WINDOWS_HOOK_EX:
     NAPI_THROW(env, "UIOHOOK_ERROR_SET_WINDOWS_HOOK_EX", "Failed to register low level windows hook.", NULL);
-  case UIOHOOK_ERROR_AXAPI_DISABLED:
-    NAPI_THROW(env, "UIOHOOK_ERROR_AXAPI_DISABLED", "Failed to enable access for assistive devices.", NULL);
-  case UIOHOOK_ERROR_CREATE_EVENT_PORT:
-    NAPI_THROW(env, "UIOHOOK_ERROR_CREATE_EVENT_PORT", "Failed to create apple event port.", NULL);
-  case UIOHOOK_ERROR_CREATE_RUN_LOOP_SOURCE:
-    NAPI_THROW(env, "UIOHOOK_ERROR_CREATE_RUN_LOOP_SOURCE", "Failed to create apple run loop source.", NULL);
-  case UIOHOOK_ERROR_GET_RUNLOOP:
-    NAPI_THROW(env, "UIOHOOK_ERROR_GET_RUNLOOP", "Failed to acquire apple run loop.", NULL);
-  case UIOHOOK_ERROR_CREATE_OBSERVER:
-    NAPI_THROW(env, "UIOHOOK_ERROR_CREATE_OBSERVER", "Failed to create apple run loop observer.", NULL);
   case UIOHOOK_FAILURE:
   default:
     NAPI_THROW(env, "UIOHOOK_FAILURE", "An unknown hook error occurred.", NULL);

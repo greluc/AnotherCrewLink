@@ -21,7 +21,7 @@ from the `fix/bugs-and-deps-224r05` branch at version 1.0.2 and from
 | `src/common` | TS | 666 | Shared types, map colliders, mods |
 | `native/memoryjs` | C++ | 2,905 | Process memory, both platforms |
 | `native/electron-overlay-window` | C | 1,205 | Overlay attach, Win32 + X11 |
-| `native/uiohook-napi` | C | ~11,000 | Input hook, Win32 + X11 + darwin (libuiohook) |
+| `native/uiohook-napi` | C | ~11,000 | Input hook, Win32 (libuiohook). The X11 and darwin trees were vendored too until 2026-08-25 |
 | `vendor/structron` | JS | 802 | Binary struct parsing |
 | Server `src` | TS | 476 | Signalling relay, lobby browser |
 | **Total hand-written** | | **~16,300** | excluding tests, locales, assets |
