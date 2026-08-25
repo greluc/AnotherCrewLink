@@ -12,13 +12,27 @@ These files come from real play, and nothing else can produce them.
 
 ## What is still missing
 
-No recording covers a live match. Every frame in the corpus is a menu, freeplay or a
-lobby, so the fields that only a real round sets have never been compared against
-anything: `comsSabotaged`, `closedDoors`, `currentCamera`, `lightRadius` under a lights
-sabotage, `isDead`, and every game state but `LOBBY`.
+No recording covers a live match. Every frame is a menu, freeplay or a lobby, so the two
+game states a real round produces -- `TASKS` and `DISCUSSION` -- are absent, and with them
+`comsSabotaged`, `closedDoors`, a `currentCamera` that ever changes, and `lightRadius`
+under a lights sabotage.
 
 Freeplay cannot fill that gap -- sabotage and cameras are not reachable there -- so it
 needs somebody to record an online round. That is the whole of issue #10.
+
+**Do not guess at this list.** It was written by hand once and was wrong in both
+directions: it said `isDead` had never been compared, when freeplay produces it true in
+4126 player-frames, and it did not notice that `currentCamera` is the constant `7` in
+every frame of every recording -- compared, and never once exercised. Run the measurement
+instead:
+
+```bash
+cargo test -p acl-game --test corpus_coverage -- --nocapture
+```
+
+It prints what the corpus reaches and what it does not, before a session so you know what
+to go after, and after one so you know whether you got it. A parity run cannot tell you:
+a branch neither reader reaches compares equal on both sides.
 
 ## Making one
 
