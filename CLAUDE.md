@@ -90,12 +90,14 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 - **Connect an effect before disconnecting the direct path.** The other order
   leaves the player with no output at all if the second step throws.
 - **Tests are node-environment only.** Anything touching Electron or the DOM is
-  not unit-tested; it is covered by running the app. Six files have tests:
+  not unit-tested; it is covered by running the app. Ten files have tests:
   `ColliderMap`, `reconnectPolicy`, `validateClientPeerConfig`, `offsetStore`,
-  `offsetsValidator`, `vdf`. The last two read `test/fixtures/offsets`, a vendored
-  copy of the real offsets tree — gate G0 requires the validator to accept every
-  real file unchanged, so that half is tested against the whole corpus rather than
-  a sample.
+  `offsetsValidator`, `vdf`, `keyBindings`, `recorder`, `iceServers` and
+  `signalRoute`. `offsetsValidator` and `vdf` read `test/fixtures/offsets`, a
+  vendored copy of the real offsets tree — gate G0 requires the validator to accept
+  every real file unchanged, so that half is tested against the whole corpus rather
+  than a sample. `keyBindings` reads the vendored `uiohook-napi` declaration and
+  fails if a scancode has drifted.
 - **Native modules are vendored on purpose.** They used to be installed from
   unpinned branch HEADs. Do not replace a `file:native/...` dependency with a
   git or registry one.
