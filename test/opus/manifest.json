@@ -1,0 +1,12 @@
+{
+	"source": "Chromium WebCodecs AudioEncoder, via Electron",
+	"chromium": "150.0.7871.224",
+	"electron": "43.4.1",
+	"sampleRate": 48000,
+	"frameSamples": 960,
+	"packets": 1001,
+	"packetLossPercentToldToTheEncoder": 5,
+	"smallestPacket": 56,
+	"largestPacket": 114,
+	"sha256": "ca53dd6edb192dcd12f616529c40ac992a991fb23919910816f0ec14132c8bb4"
+}

@@ -31,7 +31,8 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"golden": "electron scripts/golden-vectors/main.mjs"
+		"golden": "electron scripts/golden-vectors/main.mjs",
+		"opus-vectors": "electron scripts/opus-vectors/main.mjs"
 	},
 	"dependencies": {
 		"electron-overlay-window": "file:native/electron-overlay-window",
