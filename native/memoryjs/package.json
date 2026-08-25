@@ -1,7 +1,7 @@
 {
   "name": "memoryjs",
   "version": "0.0.6",
-  "description": "Node add-on for memory reading and writing on linux!",
+  "description": "Node add-on for reading another process's memory on Windows.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

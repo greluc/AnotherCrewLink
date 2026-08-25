@@ -85,7 +85,6 @@ function decodeValue<T>(bytes: Buffer, dataType: DataType): T | undefined {
 import { CameraLocation, MapType } from '../common/AmongusMap';
 import { GenerateAvatars, numberToColorHex } from './avatarGenerator';
 import { RainbowColorId } from '../common/playerColors';
-import { platform } from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { type AmongusMod, modList } from '../common/Mods';
@@ -121,7 +120,6 @@ export default class GameReader {
 	lastPlayerPtr = 0;
 	shouldReadLobby = false;
 	is_64bit = false;
-	is_linux = false;
 	oldGameState = GameState.UNKNOWN;
 	// Not an empty object: consumers read map straight out of this before the first
 	// successful pass, and an undefined map made the collider lookup silently answer
@@ -140,7 +138,6 @@ export default class GameReader {
 	playercolors: string[][] = [];
 
 	constructor(sendIPC: Electron.WebContents['send']) {
-		this.is_linux = platform() === 'linux';
 		this.sendIPC = sendIPC;
 	}
 

@@ -1,7 +1,6 @@
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
 import { windowStateKeeper } from './windowState';
-import { platform } from 'node:os';
 import { join as joinPath, dirname, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { format as formatUrl } from 'node:url';
@@ -37,12 +36,11 @@ global.overlay = null;
 const store = new Store<ISettings>();
 app.commandLine.appendSwitch('disable-pinch');
 
-if (platform() === 'linux' || !store.get('hardware_acceleration', true)) {
+// Windows only, so the unconditional half of this is gone: it used to read
+// `platform() === 'linux' || !store.get(...)`, because Linux ran software rendering
+// whatever the setting said. What is left is the setting a player can actually change.
+if (!store.get('hardware_acceleration', true)) {
 	app.disableHardwareAcceleration();
-}
-
-if (platform() === 'linux') {
-	app.commandLine.appendSwitch('disable-gpu-sandbox');
 }
 
 // The layout was designed at this size, so it stays the floor and the default.

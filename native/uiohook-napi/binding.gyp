@@ -35,26 +35,6 @@
             'libuiohook/src/windows'
           ]
         }],
-        ['OS=="linux"', {
-          'defines': [
-            'USE_XRANDR', 'USE_EVDEV', 'USE_XT'
-          ],
-          'link_settings': {
-            'libraries': [
-              '-lX11', '-lXrandr', '-lXtst', '-lpthread', '-lXt'
-            ],
-          },
-          'cflags': ['-std=c99', '-pedantic', '-Wall', '-pthread'],
-          'sources': [
-            'libuiohook/src/x11/input_helper.c',
-            'libuiohook/src/x11/input_hook.c',
-            'libuiohook/src/x11/post_event.c',
-            'libuiohook/src/x11/system_properties.c'
-          ],
-          'include_dirs': [
-            'libuiohook/src/x11'
-          ]
-        }],
         ['OS=="mac"', {
           "defines":[
             "__MACOSX_CORE__","USE_IOKIT","USE_APPLICATION_SERVICES","USE_OBJC"

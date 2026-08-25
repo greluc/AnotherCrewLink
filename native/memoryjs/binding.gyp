@@ -7,18 +7,6 @@
          ],
          "conditions":[
             [
-               'OS=="linux"',
-               {
-                  "sources":[
-                     "lib/linux/memoryjs.cc",
-                     "lib/linux/memory.cc",
-                     "lib/linux/process.cc",
-                     "lib/linux/module.cc",
-                     "lib/linux/pattern.cc"
-                  ]
-               }
-            ],
-            [
                'OS=="win"',
                {
                   "sources":[

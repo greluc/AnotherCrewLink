@@ -17,7 +17,6 @@ import { useMemo, useState, useEffect, useContext } from 'react';
 import ChevronLeft from '@mui/icons-material/ArrowBack';
 import { type GamePlatformInstance, PlatformRunType } from '../../common/GamePlatform';
 import path from 'node:path';
-import { platform } from 'node:process';
 import { SettingsContext } from '../contexts';
 import { webUtils } from 'electron';
 
@@ -59,8 +58,6 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = ({
 	setOpenState,
 	editPlatform,
 }: CustomPlatformSettingProps) => {
-	const desktopPlatform = platform;
-
 	const { classes } = useStyles();
 	const [settings, setSettings] = useContext(SettingsContext);
 	const [advanced, setAdvanced] = useState(false);
@@ -156,7 +153,7 @@ export const CustomPlatformSettings: React.FC<CustomPlatformSettingProps> = ({
 					<Button variant="contained" component="label">
 						{t('buttons.file_select')}
 						<input
-							accept={desktopPlatform === 'win32' ? '.exe' : '*'}
+							accept=".exe"
 							type="file"
 							hidden
 							onChange={(ev) => {

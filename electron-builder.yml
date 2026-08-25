@@ -10,11 +10,8 @@ files:
       - package.json
       - out
 
+# Windows x64 only. Windows 11 is the floor and has no 32-bit edition, so there is no
+# ia32 target; Linux was dropped because nobody here can test it.
 win:
-  publish:
-    - github
-linux:
-  target:
-    - "AppImage"
   publish:
     - github
