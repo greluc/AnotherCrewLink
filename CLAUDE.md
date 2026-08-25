@@ -116,6 +116,13 @@ Add alongside; do not repurpose.
 was wrong, what the user saw, and what changed. Read the 1.0.0–1.0.2 entries
 before writing a new one — the register is deliberate.
 
-CI is four GitHub Actions workflows with every action pinned to a commit SHA.
+CI is five GitHub Actions workflows with every action pinned to a commit SHA.
 The Windows and Linux legs use `fail-fast: false` so one broken platform does not
 hide the other.
+
+`winget.yml` submits each published release to the Windows Package Manager. It can
+only *update* the package — the first version of an identifier is a manual pull
+request against `microsoft/winget-pkgs`, and it needs a fork and a classic PAT.
+`docs/winget.md` is the runbook. It installs komac with a pinned `cargo install`
+rather than using `winget-releaser`, which reaches `cargo-binstall@main` internally
+and would make a SHA-pinned action pin nothing that runs.
