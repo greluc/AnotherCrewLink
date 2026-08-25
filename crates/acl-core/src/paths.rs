@@ -16,6 +16,12 @@
 //! directory joined with the application's name — `productName` from `package.json`, not
 //! `name`. On Windows that is `%APPDATA%`; on Unix `$XDG_CONFIG_HOME`, falling back to
 //! `$HOME/.config`.
+//!
+//! **Confirmed against a real installation on 2026-08-25**, not only against the source
+//! that produces it: `%APPDATA%\AnotherCrewLink` holds `config.json`, `lookup.json`,
+//! `offsets.json`, `windows.json`, `logs/`, `static/` and `recordings/` — every path
+//! below, in that one directory. Reading the TypeScript would have given the same answer;
+//! looking is what makes it a fact rather than a derivation.
 
 use std::path::{Path, PathBuf};
 
