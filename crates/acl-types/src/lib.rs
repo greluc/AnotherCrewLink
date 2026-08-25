@@ -8,6 +8,7 @@
 pub mod collider;
 mod collider_data;
 pub mod cosmetics;
+pub mod errors;
 pub mod map;
 pub mod mods;
 pub mod platform;
