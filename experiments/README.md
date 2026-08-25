@@ -10,7 +10,12 @@ property that a dependency update can take away again.
 
 ## 1. `overlay-probe` — a transparent, click-through, always-on-top window
 
-**Answered 2026-08-24: available on both Windows targets. Linux is checked in CI.**
+**Answered 2026-08-24: available on both Windows targets.**
+
+> **Superseded 2026-08-25.** This said "Linux is checked in CI". Linux support was
+> removed from the client, and the probe's Linux arm and the `overlay-linux` job went
+> with it. The Windows answer is unchanged and is the only one that describes something
+> shipped.
 
 The overlay is its own Electron `BrowserWindow` today, so whatever replaces it has to do
 three things at once: be transparent, let clicks through to the game, and stay above it.
@@ -40,11 +45,11 @@ click-through window with no taskbar button never *becomes* the foreground windo
 was reading the console's styles. It now finds the window by title. Any probe that asks
 the OS a question has to be sure it is asking about the right object.
 
-Linux has no equivalent read-back here: on X11 the same property is an empty input region
-set through the shape extension, and reading it back needs an X connection of the probe's
-own. The Linux leg answers what the experiment exists for — does it start, is the surface
-transparent, does the renderer survive — and the passthrough claim there rests on winit's
-implementation.
+There was a Linux arm here until 2026-08-25 with no equivalent read-back: on X11 the same
+property is an empty input region set through the shape extension, and reading it back
+needs an X connection of the probe's own. It could report that the window started and was
+transparent and no more, so the passthrough claim there rested on winit's implementation
+rather than on a measurement. It went with the client's Linux support.
 
 ## 2. `apm-probe` — does the echo canceller exist on 32-bit Windows?
 
@@ -78,10 +83,17 @@ cargo test --target i686-pc-windows-msvc --workspace \
 The release number is the one that counts: it is where the SIMD paths the plan was
 worried about are actually taken.
 
-Two of G2's preconditions remain open and neither is a build question. The A/B
-echo-return-loss-enhancement measurement against `webrtc-audio-processing` needs real
-speaker-and-mic captures on Linux, where both crates build. And sonora's bus factor is
-one — 209 of its 221 commits are from a single author — which no test run changes.
+One of G2's preconditions remains open and it is not a build question: sonora's bus
+factor is one — 209 of its 221 commits are from a single author — which no test run
+changes.
+
+> **Superseded 2026-08-25.** A second precondition stood here: an A/B
+> echo-return-loss-enhancement measurement against `webrtc-audio-processing`, which
+> needed real speaker-and-mic captures on Linux because that is the only place both
+> crates build. Dropping Linux would have made it impossible — except that the section
+> below had already made it pointless on 2026-08-24, when `webrtc-audio-processing` was
+> ruled out on MSVC and the comparison became sonora against `libwebrtc`. A measurement
+> whose whole purpose was to rank a candidate that is out is not one this project owes.
 
 ### The comparison is no longer sonora against `webrtc-audio-processing`
 

@@ -64,6 +64,31 @@ still overlap between two developers, but two developers do not halve the total:
 P3+ is no longer the sole critical path, P4+ now rivals it, and P7+ can start on
 neither until both have landed.
 
+> **Windows only, decided 2026-08-25.** The client's Linux support was removed, and
+> the minimum Windows raised to 11, for one reason: nobody on this project can test
+> either. Everything below that names Linux, X11, Wayland, an AppImage, a Unix socket
+> or a `setcap` step describes work that is no longer in scope, and the individual
+> passages carry their own notes. Two consequences are not local to a passage:
+>
+> **P7 and P8 lose their riskiest Linux item outright.** `electron-updater`'s AppImage
+> path unlinks the running AppImage and runs the replacement with `execFileSync` and
+> `APPIMAGE_EXIT_AFTER_INSTALL=true`; a Rust AppImage that started its GUI instead of
+> exiting would have hung the old client on every Linux machine at once. That failure
+> mode is gone rather than mitigated.
+>
+> **The effort table in §4.11 is not re-estimated here.** Its convention is that
+> deleted work comes off the total, and work really is deleted — the Linux reader in
+> P2, the Unix-socket half of P5's IPC, `x11.c`, Wayland detection, P6's software
+> default, P7's hand-built AppImage and `setcap` tarball, and P8's AppImage handshake
+> and its G4 leg. Putting a number on that is a judgement for whoever owns the
+> schedule, and inventing one here would be the guessing this plan is written against.
+>
+> **There are AppImage users.** Every release from 1.0.1 to 1.0.5 published one, with
+> a `latest-linux.yml` feed beside it. Those clients keep polling a feed that stops
+> moving, and stay on 1.0.5 with no message. Saying so is CHANGELOG's job, and it
+> does; it is recorded here because a plan that drops a platform without naming who
+> was on it is how that gets missed.
+
 **Where the extra thirty-seven weeks went.** Three items account for most of it,
 and none of them is security. P4+ grows by 5.5 because `webrtc` 0.20 is a rewrite
 on a sans-IO core, which kills the premise that the 237 lines of `peer.ts` map
@@ -567,9 +592,9 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
    cheaper still: `native/memoryjs` opened the game with `PROCESS_ALL_ACCESS`
    until 2026-08-24 and now asks for the same two rights this line does, so the
    improvement landed in 1.x rather than waiting for 2.0. **Delivered.**
-   Process enumeration is roughly 25 lines of Toolhelp32 on Windows and a `/proc`
-   scan on Linux — a direct transliteration of code already in `native/` — rather
-   than a crate that costs 25 dependencies and drags `winapi` 0.3.9 in with it,
+   Process enumeration is roughly 25 lines of Toolhelp32 — a direct transliteration
+   of code already in `native/`, and since 2026-08-25 there is no `/proc` scan
+   beside it — rather than a crate that costs 25 dependencies and drags `winapi` 0.3.9 in with it,
    and dropping that crate is also what lets the project's own Win32 move from
    `windows` 0.62.2 to `windows-sys` 0.61.2. Find the PID once and keep the
    handle; re-scan only on read failure.
@@ -594,7 +619,13 @@ extra weeks live, and all three survive unchanged. P2+ stays at 6.0.
    so a "not supported" banner would cry wolf. The format is the one G0 proved,
    so this is a consumer, not a design.
 4. Mod detection, VDF parsing, avatar recolouring.
-5. The Linux implementation. `nix::sys::uio::process_vm_readv` is a safe `fn`
+5. ~~The Linux implementation.~~ **Struck 2026-08-25** with the client's Linux
+   support; `acl-game::linux` was written and is deleted. The two warnings it
+   carried outlived it in a useful form: the trait method is `read_exact` because
+   the C zero-filled a short read silently, and that rule now applies to every
+   reader. Original text follows.
+
+   `nix::sys::uio::process_vm_readv` is a safe `fn`
    whose lengths derive from the slices passed in, so the Linux reader contains
    no `unsafe` at all. Two things not to port: the C code's response to a short
    read is to zero-fill the buffer silently, so the trait method is `read_exact`
@@ -876,6 +907,12 @@ specifies for it. The condition attached to this — a green `i686` build, run b
 P1+ and confirmed by G2 — lapsed on 2026-08-24 with the target itself. The trait
 boundary is what matters now, because LiveKit's `libwebrtc` binding is reachable
 again and P3 should weigh it against `sonora` before committing.
+> **Superseded 2026-08-25.** The Linux-only test baseline below cannot be run any
+> more, and does not need to be: the 2026-08-24 measurement in
+> `experiments/README.md` ruled `webrtc-audio-processing` out on MSVC entirely and
+> made the real comparison sonora against `libwebrtc`. The A/B measurement described
+> here would have ranked a candidate that is already out.
+
 `webrtc-audio-processing` `=2.1.0` stays in the tree as a **Linux-only test
 baseline**, not as the shipping canceller: it does not build on either Windows
 target, PR #102 "Support MSVC targets" has been open and unmerged since
@@ -1271,14 +1308,18 @@ will otherwise reintroduce them:
 the elevated one.
 
 Keyboard hook, overlay window, single-instance lock, autostart, paths, logging.
-Port `native/electron-overlay-window/src/lib/windows.c` and `x11.c` logic
-directly rather than re-deriving it — that code already knows about the window
-managers and edge cases this needs.
+Port `native/electron-overlay-window/src/lib/windows.c` logic directly rather than
+re-deriving it — that code already knows about the edge cases this needs.
+
+> **Corrected 2026-08-25.** This also named `x11.c`, which has been deleted along
+> with the client's Linux support. The same change removes the Unix-socket half of
+> the IPC below, Wayland detection, and the exclusive-fullscreen decision's backend
+> argument — `acl-core::overlay` is now one bit wide.
 
 **Two processes, not one.** `acl-helper` runs elevated and holds memory reading,
 injection, the keyboard hook and the overlay window. `acl-core` is never
 elevated and holds tokio, signalling, WebRTC, audio and the GUI. Length-prefixed
-`postcard` over a named pipe on Windows and a Unix socket on Linux. A thread
+`postcard` over a named pipe. A thread
 boundary is not a privilege boundary, and the alternative — a single elevated,
 unsandboxed address space holding the RTP parser, the Opus decoder, an image
 decoder for remotely fetched hats, the TLS stack and a process-memory writer — is
@@ -1334,10 +1375,12 @@ tolerable, and for the mouse-motion patch the client carries.
 
 Also here: exclusive-fullscreen detection, because with Fullscreen Optimizations
 off a layered window will not appear at all and the alternative is a swapchain
-hook this project must not ship; Wayland detection gated on the **live winit
-backend** rather than `XDG_SESSION_TYPE`, which describes the session and not the
-backend the process actually got, and would grey out the overlay for XWayland
-users who work today; and the single-instance lock, so a 1.x and a 2.x install on
+hook this project must not ship; ~~Wayland detection gated on the **live winit
+backend** rather than `XDG_SESSION_TYPE`~~ — struck 2026-08-25, and worth keeping
+legible because it was the subtlest decision in this phase: the variable describes
+the session and not the backend the process actually got, so reading it would have
+greyed out the overlay for XWayland users who work today; and the single-instance
+lock, so a 1.x and a 2.x install on
 one machine cannot run two keyboard hooks, two overlays and two memory readers
 against the same game.
 
@@ -1391,10 +1434,15 @@ answered in P1+, before this phase was planned around it.
 
 **No GPU is not a failure to launch.** Chromium currently gives every user
 SwiftShader for free, and this project has already found the problem in the
-field: hardware acceleration is disabled unconditionally on Linux today and on
-demand on Windows through a shipped setting. So Linux defaults to software,
-matching what ships now; Windows goes wgpu/DX12, then WARP through
-`force_fallback_adapter`, then a CPU rasteriser. **No glow rung** — glow needs GL
+field: hardware acceleration is disabled on demand through a shipped setting.
+Windows goes wgpu/DX12, then WARP through `force_fallback_adapter`, then a CPU
+rasteriser.
+
+> **Corrected 2026-08-25.** This said acceleration was "disabled unconditionally on
+> Linux today", and that Linux therefore defaults to software. Both halves went with
+> the client's Linux support, on the same day and in the same change: the Electron
+> client's unconditional arm and `acl-ui::renderer`'s `Platform` enum. The chain
+> below is unchanged for the platform that ships. **No glow rung** — glow needs GL
 3.3 or ES 3.0, and a Windows machine without a vendor driver offers software GL
 1.1, so the rung does not save the RDP and bare-VM cases it would exist for.
 Migrate the existing `hardware_acceleration` answer forward rather than inventing
@@ -1415,8 +1463,8 @@ working in one format. `format!` covers the first string that ever needs
 formatting; nobody should reopen this.
 
 No separate clipboard crate either: `egui-winit`'s default `clipboard` feature
-already provides one, with better Wayland coverage than a direct dependency, and
-a direct line would only add version-drift surface.
+already provides one, and a direct line would only add version-drift surface. (The
+original reason was its better Wayland coverage. The conclusion outlived it.)
 
 **Deliberately accepted:** the Rust UI will not be pixel-identical to the React
 one. Layout, spacing and control affordances will differ. What must not differ is
@@ -1437,15 +1485,22 @@ forms. A developer-week and a half, and it was the least predictable time in the
 phase, because its schedule belonged to a certificate authority rather than to
 us.
 
-1. `cargo-dist` for Windows x64, Windows i686 and Linux x64 — for archives and
-   the release job only. Its installer set is shell, PowerShell, npm, Homebrew
-   and MSI: there is no NSIS backend and no AppImage backend, and MSI would
-   strand every installed 1.x client, because `electron-updater`'s `findFile`
-   picks by extension and changing artefact type is the same act as abandoning
-   the installed base. So the NSIS script and the AppImage are hand-built and
-   keep their exact CLI contracts. Name the Windows installers with the literal
-   `x64` and `ia32` tokens `findFile` prefers, or 32-bit users silently receive
-   the 64-bit installer. Turn on `github-attestations` and `cargo-auditable`, and
+1. `cargo-dist` for Windows x64 — for archives and the release job only. Its
+   installer set is shell, PowerShell, npm, Homebrew and MSI: there is no NSIS
+   backend, and MSI would strand every installed 1.x client, because
+   `electron-updater`'s `findFile` picks by extension and changing artefact type is
+   the same act as abandoning the installed base. So the NSIS script is hand-built
+   and keeps its exact CLI contract.
+
+   > **Corrected 2026-08-25.** This named three targets and a hand-built AppImage,
+   > and told the reader to put literal `x64` and `ia32` tokens in the installer
+   > names "or 32-bit users silently receive the 64-bit installer". Two things are
+   > now true instead. Linux is out. And 1.x never published a token in a name:
+   > every release from 1.0.1 to 1.0.5 shipped exactly one
+   > `AnotherCrewLink-Setup-<version>.exe`, which is electron-builder's single
+   > multi-architecture NSIS installer. With ia32 dropped for the Windows 11 floor
+   > that installer becomes x64-only under the same filename, so `findFile` keeps
+   > picking it and nothing about the update path changes. Turn on `github-attestations` and `cargo-auditable`, and
    write down the exit: the output is checked-in GitHub Actions YAML, which is
    what makes a one-maintainer build tool an acceptable dependency.
 2. **No Authenticode code signing.** Windows artefacts ship unsigned and users go
@@ -1480,9 +1535,9 @@ us.
    release-workflow secret; rollback protection that the user can bypass, because
    the 2.0→1.x downgrade path is documented; no freeze rule, which is a
    fleet-wide time bomb dependent on the user's clock. Never install an update
-   while elevated. On Linux there is no separate updater process and nothing to
-   install: verify then replace inside the AppImage, which is a second update
-   code path this project chooses to own permanently and should say so.
+   while elevated. (There was a second, AppImage-shaped update code path here that
+   this project would have owned permanently. It went on 2026-08-25 with Linux, and
+   one update path is the improvement.)
 
    **This is signed where the offsets bundle is not, and the difference is
    availability, not importance.** A release is a planned event: it happens when
@@ -1507,9 +1562,10 @@ us.
    `electron` bump currently patches libopus, libvpx, BoringSSL and libpng at
    once, with CVE numbers and a public feed. After the port that becomes a named
    human with a named upstream watch list, and it needs an owner here.
-6. The Linux tarball with a documented `setcap cap_sys_ptrace+ep` step. On the
-   common `ptrace_scope=1` default the client cannot read the game at all, and an
-   AppImage that silently fails is worse than a documented step.
+6. ~~The Linux tarball with a documented `setcap cap_sys_ptrace+ep` step.~~ Struck
+   2026-08-25 with the client's Linux support. It was here because on the common
+   `ptrace_scope=1` default the client cannot read the game at all, and an AppImage
+   that silently fails is worse than a documented step.
 
 Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
 its CLI contract is tested against real 1.x updaters before it carries anything
@@ -1647,20 +1703,25 @@ written down and not discovered.
 The mechanism is fully specified and can be read out of the installed
 `electron-updater`: `latest.yml` supplies version, path and SHA-512; `findFile`
 picks by extension and then prefers a filename containing `x64` or `ia32`;
-`NsisUpdater` spawns the installer with `--updated /S /D=<installDirectory>`; the
-AppImage updater unlinks the running AppImage, moves the replacement into place
-and runs it with `execFileSync` and `APPIMAGE_EXIT_AFTER_INSTALL=true`. That last
-detail decides the Linux rollout: `execFileSync` is synchronous, so a Rust
-AppImage that starts its GUI instead of exiting hangs the old client forever, on
-every Linux machine, at once. The Rust binary checks that variable in `main()`
-before anything else.
+`NsisUpdater` spawns the installer with `--updated /S /D=<installDirectory>`.
+
+> **Superseded 2026-08-25.** What stood here was the AppImage half, and it was the
+> most dangerous item in this phase: the updater unlinks the running AppImage, moves
+> the replacement into place and runs it with `execFileSync` and
+> `APPIMAGE_EXIT_AFTER_INSTALL=true`. `execFileSync` is synchronous, so a Rust
+> AppImage that started its GUI instead of exiting would hang the old client
+> forever, on every Linux machine, at once — and the mitigation was one variable
+> check in `main()` that nothing would have failed loudly for. Dropping Linux
+> deletes the failure mode rather than mitigating it.
+>
+> It also strands the AppImage users who exist. See the note in §4.1.
 
 1. The bridge is built by the Rust pipeline and published into the 1.x feed as
-   **1.1.0**. On Windows, either NSIS installers carrying the literal `x64` and
-   `ia32` tokens or one combined dual-arch installer — decide explicitly, because
-   the default behaviour on a mismatch is to hand every client the first `.exe`
-   in `latest.yml`. On Linux, an AppImage that *is* the Rust client and exits
-   immediately on `APPIMAGE_EXIT_AFTER_INSTALL`.
+   **1.1.0**, as one NSIS installer under the name 1.x has always used. The choice
+   this item used to pose — tokenised per-architecture installers or one combined
+   dual-arch one — was settled by the Windows 11 floor: x64 alone, and the name does
+   not change, so `findFile` behaves exactly as it does today. The AppImage arm went
+   with Linux on 2026-08-25.
 2. No `.blockmap` asset for the bridge, or the updater attempts a differential
    download against a file that is not there.
 3. Staged rollout as sequential tagged releases — 1.1.0, 1.1.1, 1.1.2, a week
@@ -1700,11 +1761,15 @@ rises to match, **with no drop in total joins**. A drop in total joins is the
 signal to stop.
 
 > **Gate G4 — bridge rehearsal.**
-> On **real 1.0.2 installs**, not dev builds: Windows x64, Windows ia32 and Linux
-> each update from a staging feed to the bridge. Silent install; the correct
-> architecture selected; correct install directory; a working uninstall entry;
-> migrated config; and on Linux the old process exits within two seconds rather
-> than hanging. The staged rollout puts both generations in one lobby, by design,
+> On **real 1.0.2 installs**, not dev builds: Windows x64 updates from a staging
+> feed to the bridge. Silent install; correct install directory; a working uninstall
+> entry; migrated config.
+>
+> **Narrowed 2026-08-25.** This had three legs: Windows x64, Windows ia32 and Linux,
+> with "the correct architecture selected" and "on Linux the old process exits within
+> two seconds rather than hanging". ia32 went with the Windows 11 floor and Linux with
+> its support, so one leg is left — and the architecture-selection criterion has
+> nothing left to select between. The staged rollout puts both generations in one lobby, by design,
 > for weeks; G3 was what would have proved that works before the fleet met it, and
 > it was struck on 2026-08-25.
 >

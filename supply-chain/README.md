@@ -35,7 +35,8 @@ SRTP from the network, which is the least comfortable exemption in this store.
 
 Note the third one in particular. Those features are gated by platform, so the crates
 never build on Windows — but `cargo metadata --all-features`, which cargo-vet uses, lists
-them anyway. That is what lets a Windows machine keep a store the Linux CI leg accepts.
+them anyway. That is what lets a Windows machine keep a store the Linux CI runner accepts
+(the `deny` and `attribution` jobs read metadata and have no target of their own).
 
 ## So what is the gate for
 

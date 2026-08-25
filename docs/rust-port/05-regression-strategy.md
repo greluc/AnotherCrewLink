@@ -82,8 +82,10 @@ how the embedded size becomes a recorded number instead of an estimate.
 
 ### Replay (game reader)
 
-`ReplayProcess` implements `ProcessMemory` over a recording, so the whole reader
-runs in CI on Linux with no game and no Windows.
+`ReplayProcess` implements `ProcessMemory` over a recording, so the whole reader runs
+in CI with no game — and, in principle, on a runner that is not Windows. That
+portability is now a property of the design rather than a thing CI uses: since
+2026-08-25 the test leg runs on Windows only, because that is the one target.
 
 Recordings must cover, per map: lobby, task phase, meeting, a player in a vent, a
 player on cameras, comms sabotaged, doors closed, a player dead, a player
@@ -113,7 +115,10 @@ the parsing layer has to be pure — `&dyn ProcessMemory` in, `Result` out, no
 the harness. That is a decision taken before the crate exists, not after.
 
 `cargo-fuzz` needs a nightly toolchain and runs on Linux only, which the single
-pinned stable channel in §7.1 does not provide. It runs as a scheduled job on its
+pinned stable channel in §7.1 does not provide. That survives the client's Linux
+support going: it fuzzes state parsing over `Arbitrary` bytes and an RTP path, neither
+of which is platform code, so it is a runner choice rather than a supported
+platform. It runs as a scheduled job on its
 own toolchain, outside the blocking matrix.
 
 ### Network emulation (receive path)
@@ -161,7 +166,9 @@ each release milestone:
 3. Same, across a symmetric NAT.
 4. Three clients, mixed generations — 1.0.2, hardened 1.x and Rust — in one
    lobby, one leaves and rejoins. This row is also a `G3` criterion.
-5. Windows x64 ↔ Linux; Windows i686 ↔ Windows x64.
+5. ~~Windows x64 ↔ Linux; Windows i686 ↔ Windows x64.~~ Struck 2026-08-25: ia32 went
+   with the Windows 11 floor and Linux with its support, so there is one build to pair
+   against itself and this row tests nothing the rows above it do not.
 
 A written checklist, recorded results, in the release notes.
 
@@ -179,16 +186,15 @@ measured on the **current Electron build first**, before there is a Rust client 
 compare it to. Until that exists the order-of-magnitude claim should not be quoted
 publicly.
 
-It is a matrix of three configurations rather than one, because
-`src/main/index.ts:37-39` already disables hardware acceleration unconditionally
-on Linux and on demand on Windows — three configurations are what the project
-actually ships:
+It is a matrix of two configurations rather than one, because the client ships a
+setting that turns hardware acceleration off and the slow path has to be measured
+too. (A third row, Linux software-rendered, went on 2026-08-25 with the
+unconditional Linux arm in `src/main/index.ts` that justified it.)
 
 | Configuration | Measured |
 | --- | --- |
 | Windows, GPU | Idle CPU, RSS, GPU memory, cold start to a usable window |
 | Windows, software-rendered | Same |
-| Linux, software-rendered | Same |
 
 Two further numbers are taken in the configuration users actually run — GUI
 visible, overlay up, game running: **audio callback overruns and dropped frames
@@ -292,17 +298,23 @@ code that calls it.
 
 ## 5.4 CI
 
+**"Runs on" is a runner, not a target.** Since 2026-08-25 the only target anything is
+built for is `x86_64-pc-windows-msvc`; the jobs below that say Linux are checking
+something with no target at all — formatting, licences, advisories, a query database —
+and a Linux runner is simply the cheap way to do it.
+
 | Job | Runs on | Blocking |
 | --- | --- | --- |
 | `fmt` | Linux | yes |
-| `clippy -D warnings` | Linux, Windows | yes |
-| `test` (unit + golden + replay) | Linux, Windows x64, Windows i686 | yes |
+| `clippy -D warnings` | Windows | yes |
+| `test` (unit + golden + replay) | Windows x64 | yes |
 | `network-emulation` | Linux | yes on `acl-audio` changes |
 | `cargo-deny` (advisories, bans, licenses, sources) | Linux | yes |
 | `cargo-vet` | Linux | yes |
 | `no-alloc-in-audio-callback` | Linux | yes |
 | CodeQL | Linux | yes |
-| `cargo-dist` build | all three targets | yes on tags |
+| `cargo-dist` build | `x86_64-pc-windows-msvc` | yes on tags |
+| `cargo-auditable` + `cargo audit bin` | Windows | yes |
 | `fuzz` (RTP path, game reader) | Linux, nightly toolchain | scheduled, not on pull requests |
 | Interop checklist | manual | before each milestone |
 | Audio device hot-plug checklist | manual | before `G2` sign-off |
@@ -339,26 +351,27 @@ there exempts the whole update path.
 
 ## 5.5 Cross-platform coverage
 
-The current CI matrix is Windows x64 and Linux x64. The port adds
-Windows i686, because the shellcode path is 32-bit-only and is currently built
-but never exercised in CI.
+> **Rewritten 2026-08-25.** This section planned for three targets and now has one.
+> `i686-pc-windows-msvc` went on 2026-08-24 with the injection path that was its only
+> reason, taking the G2 build criterion and the sonora-on-i686 worry with it;
+> `x86_64-unknown-linux-gnu` went on 2026-08-25 with the client's Linux support. What
+> the section said, and what survives it, is below.
 
-Reader and injection tests that need a real process run on Windows runners
-against a stub target process built for the purpose — not against Among Us,
-which cannot be installed on CI. The stub reproduces the memory layout the
-recordings captured, which is enough to test `ProcessMemory`, the scanner and
-`VirtualAllocEx`/`WriteProcessMemory` without the game.
+There is one target: `x86_64-pc-windows-msvc`. "Cross-platform coverage" is therefore
+about runners rather than platforms — see the note above the table in §5.4.
 
-The i686 leg also carries a gate item rather than only coverage. `G2` requires a
-green `cargo build --target i686-pc-windows-msvc` of whichever audio processing
-module ships. The default is `sonora` 0.2.0, whose i686 status is genuinely
-unproven — its own validation is Ubuntu x86_64 and its SIMD paths are SSE2, AVX2
-and NEON. The fallback is not the previous default: `webrtc-audio-processing`
-2.1.0 does not build on **either** Windows target, so it is kept only as a
-Linux-only baseline for the A/B echo-return-loss measurement. If neither builds,
-Windows ships without an echo canceller, which is an audible regression on day one
-for the overwhelming majority of this app's users. That is why it is a gate and
-not a CI convenience.
+Reader tests that need a real process run on Windows runners against a stub target
+process built for the purpose — not against Among Us, which cannot be installed on CI.
+The stub reproduces the memory layout the recordings captured, which is enough to test
+`ProcessMemory` and the scanner without the game.
+
+The echo-canceller question the i686 leg used to gate is still live and is no longer a
+build question at all: `sonora` 0.2.0 builds, links and runs on x64, and so does
+`libwebrtc` 0.3.45. `webrtc-audio-processing` 2.1.0 does not build on Windows and is
+out rather than held as a baseline, because the baseline could only be measured on
+Linux. If the shipped canceller were ever to fail on x64, Windows would ship without
+one — an audible regression on day one for effectively every user — which is why it
+stays a gate item and not a CI convenience.
 
 The whole leg exists for one reason: the 32-bit target is required by the
 injection path and nothing else. If the open decision to split injection into a
@@ -460,16 +473,19 @@ call under the identical profile. (b) The three-client mixed-generation row from
 equipment; both are the existing rigs run against a pairing the clean-network
 version of this gate never exercises.
 
-**`G4` — bridge rehearsal.** On **real 1.0.2 installs**, not dev builds: Windows
-x64, Windows ia32 and Linux each update from a staging feed to the bridge
-release. Silent install, correct install directory, working uninstall entry,
-migrated config, and on Linux the old process exiting within two seconds rather
-than hanging. The architecture-selection leg is the one that is easy to skip and
-expensive to get wrong: electron-updater's `findFile` prefers a filename
-containing the literal `x64` or `ia32` and otherwise takes the first `.exe` in the
-feed, so a misnamed artefact hands every 32-bit user a 64-bit installer and
-nothing anywhere reports an error. It cannot be substituted with a dev build,
-because the thing under test is what the *shipped* 1.0.2 updater does.
+**`G4` — bridge rehearsal.** On **real 1.0.2 installs**, not dev builds: Windows x64
+updates from a staging feed to the bridge release. Silent install, correct install
+directory, working uninstall entry, migrated config. It cannot be substituted with a
+dev build, because the thing under test is what the *shipped* 1.0.2 updater does.
+
+> **Narrowed 2026-08-25.** Two of three legs are gone — ia32 with the Windows 11 floor,
+> Linux with its support — and with them the criterion that was hardest to get right:
+> `findFile` prefers a filename containing the literal `x64` or `ia32` and otherwise
+> takes the first `.exe` in the feed, so a misnamed artefact would have handed every
+> 32-bit user a 64-bit installer with no error anywhere. Checking the shipped releases
+> settles it rather than arguing it: 1.0.1 through 1.0.5 each published exactly one
+> `AnotherCrewLink-Setup-<version>.exe` and no token at all, so `findFile` has always
+> been taking the first `.exe` — which is now the only one, and the right one.
 
 `G4` is a prerequisite of the 2.0 release, not a checkpoint taken after it. The
 1.x wire protocol is switched off when 2.0 ships — no dated sunset, no

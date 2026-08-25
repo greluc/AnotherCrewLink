@@ -14,23 +14,28 @@ older or an exactly pinned one is carried instead.
 | Rust | **1.98.0** (2026-08-20) | pinned in `rust-toolchain.toml` |
 | Edition | 2024 | |
 | MSRV policy | = pinned stable | no back-compat burden; this is an application |
-| Targets | `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc`, `x86_64-unknown-linux-gnu` | i686 is required for the injection path |
+| Target | `x86_64-pc-windows-msvc` | the only one. i686 went 2026-08-24 with the injection path; Linux went 2026-08-25 with the client's Linux support |
 
 ```toml
 # rust-toolchain.toml
 [toolchain]
 channel = "1.98.0"
 components = ["rustfmt", "clippy", "rust-src"]
-targets = [
-  "x86_64-pc-windows-msvc",
-  "i686-pc-windows-msvc",
-  "x86_64-unknown-linux-gnu",
-]
+targets = ["x86_64-pc-windows-msvc"]
 ```
 
 The toolchain is bumped deliberately, one commit at a time, not floated on
 `stable` — a floating channel means CI can break on a day nobody touched the
 code.
+
+> **Resolved 2026-08-24, and the resolution is the good news this section was asking
+> for.** The injection path was removed, `i686-pc-windows-msvc` went with it, and every
+> cost below was paid off at once: `libwebrtc` is reachable and has since been measured
+> building, linking and running on x64; NASM is not required; the alignment hazard is
+> gone with the target. The open decision at the end of the section — a small 32-bit
+> helper talking to a 64-bit client — does not need taking. What follows is the
+> reasoning as it stood, kept because the alignment rule is still worth knowing if the
+> target ever returns.
 
 `i686-pc-windows-msvc` exists for one reason: the injection path, which is
 feature-gated and 32-bit-Windows-only. It is also the most expensive line in
@@ -61,7 +66,7 @@ explicitly rather than inherited from a target list.
 | `cpal` | 0.18.2 | Device enumeration, input/output streams | 18.5 M downloads; the standard choice. 0.18 is a ground-up rework whose PipeWire host now takes priority over PulseAudio on Linux, and four open issues sit on the WASAPI device-change path — hot-plug is a G2 item, not a follow-up |
 | `opus` | **=0.3.1** | Opus encode/decode | binds libopus, the same library Chromium uses. 0.4.0's entire content is a `-sys` backend swap; it waits until `opusic-sys` is shown to link on `i686-pc-windows-msvc` |
 | `sonora` | **=0.2.0** | AEC3, noise suppression, AGC, HPF | the default APM. Pure Rust: no C++ toolchain, no meson, no ninja, no git submodule. Conditional on a green i686 build at G2 |
-| `webrtc-audio-processing` | **=2.1.0** | The same, as a comparison baseline | **Linux only.** It does not build on either Windows target: PR #102 "Support MSVC targets" has been open and unmerged since 2026-08-08, issue #34 "Windows build" since 2023-09-27, and its CI runs on `ubuntu-latest` alone |
+| ~~`webrtc-audio-processing`~~ | ~~**=2.1.0**~~ | Struck 2026-08-25: a Linux-only baseline with no Linux to run it on, and already out on merit — see `experiments/README.md`, 2026-08-24 | **Was Linux only.** It does not build on either Windows target: PR #102 "Support MSVC targets" has been open and unmerged since 2026-08-08, issue #34 "Windows build" since 2023-09-27, and its CI runs on `ubuntu-latest` alone |
 | `neteq` | **=0.9.1** | Adaptive jitter buffer, PLC | `default-features = false` is mandatory, with an `AudioDecoder` implementation over the `opus` crate so libopus stays the only codec in the binary. Young (38 k downloads); measured at gate G2 |
 | `rubato` | **=5.0.0** | Sample-rate conversion | four breaking majors in four months, each locked to a matching `audioadapter`. `process_into_buffer` only, and scoped to devices that are not already at 48 kHz |
 | `realfft` | 3.5.0 | FFT for the analyser | `process_with_scratch` with preallocated scratch; `process` allocates |
@@ -73,10 +78,12 @@ The APM sits behind a trait, and which implementation is behind it changed once
 the Windows build was actually attempted. `webrtc-audio-processing` was the
 conservative choice for as long as nobody checked; on the platform that has the
 overwhelming majority of the users it does not compile at all, and an APM that
-does not exist on Windows ships an audible regression on day one. It stays in
-the tree as a Linux-only baseline to measure against, which is worth keeping —
-an A/B echo-return-loss-enhancement measurement of the two, on the one platform
-where both build, is the only honest way to judge the replacement.
+does not exist on Windows ships an audible regression on day one. ~~It stays in
+the tree as a Linux-only baseline to measure against~~ — struck 2026-08-25. The A/B
+echo-return-loss-enhancement measurement it was kept for could only be run on the one
+platform where both build, and there is no such platform in scope any more. It had
+already stopped being the comparison that matters on 2026-08-24, when `libwebrtc` came
+back into reach.
 
 `sonora`'s risks are real but they are not the ones a young crate usually
 carries. It is ported from WebRTC M145 and its README states it is validated
@@ -173,14 +180,14 @@ unreachable.
 | Crate | Version | Role | Note |
 | --- | --- | --- | --- |
 | `windows-sys` | 0.61.2 | Win32: process memory, key polling, window styles | replaces `windows` 0.62.2 once `sysinfo` is gone — 2 dependencies against 15, a 3.5x faster clean build, the same five `unsafe` blocks at the call site, and binaries within 4 KB of each other |
-| `x11rb` | 0.14.0 | X11: key polling, XFixes input regions | features `["xfixes", "shape"]` only, never `all-extensions`; `forbid(unsafe_code)` and no RustSec advisory ever |
-| `nix` | 0.31.3 | Linux: `process_vm_readv` | a safe `fn` whose lengths derive from the slices passed in, so the Linux reader contains no `unsafe` at all. `rustix` has no equivalent |
+| ~~`x11rb`~~ | ~~0.14.0~~ | Struck 2026-08-25 with the client's Linux support | was: X11 key polling and XFixes input regions |
+| ~~`nix`~~ | ~~0.31.3~~ | Struck 2026-08-25 with the Linux reader; it was the workspace's only use of the crate | was: `process_vm_readv`, a safe `fn` whose lengths derive from the slices passed in |
 | `directories` | 6.0.0 | Config, cache and log paths | archived on GitHub and moved to Codeberg, frozen since release; pulls MPL-2.0 `option-ext` and an unbounded `windows-sys >=0.59` |
 
 Process enumeration is written here rather than taken from a crate: about 25
 lines of `CreateToolhelp32Snapshot` and `Process32FirstW`/`NextW` on Windows,
-one `unsafe` block around a frozen API, and a `read_dir("/proc")` scan on Linux
-that is a direct transliteration of code already in `native/`. `sysinfo` bought
+one `unsafe` block around a frozen API, and a direct transliteration of code already
+in `native/`. (A `read_dir("/proc")` scan stood beside it until 2026-08-25.) `sysinfo` bought
 3 ms per call over that, and cost 25 crates, 26 seconds of clean build,
 `winapi` 0.3.9 and 107 MB of MinGW import libraries for targets this project
 never builds. It is also what forced `windows` 0.62.2 into the tree, and
@@ -194,8 +201,8 @@ with a wholesale restructure — feature names move from `Win32_Foundation`-styl
 paths to lowercase header names, edition 2024, MSRV 1.95. The next release
 rewrites every `use` and every feature name in the Win32 layer.
 
-The Windows key hook stays what it is today: a 60 ms `GetAsyncKeyState` poll,
-aliased to `XQueryKeymap` on Linux. The plan has until now named
+The Windows key hook stays what it is today: a 60 ms `GetAsyncKeyState` poll. (It was
+aliased to `XQueryKeymap` on Linux until 2026-08-25.) The plan has until now named
 `SetWindowsHookEx(WH_KEYBOARD_LL)` as the Windows key hook and described it as a
 port. There is no such hook anywhere in the current code — `native/` and `src/`
 contain no `SetWindowsHookEx`, no `WH_KEYBOARD_LL` and no
@@ -204,10 +211,9 @@ clothes. A `WH_KEYBOARD_LL` callback runs on the installing thread's
 message pump, and until it returns every keystroke on the desktop waits behind
 it; exceed `LowLevelHooksTimeout` and Windows silently unhooks it. That is a
 desktop-wide latency dependency in exchange for nothing, over a poll that
-already works and intercepts no key from the game. One free improvement on the
-Linux side while porting it: the current code calls
-`XOpenDisplay`/`XCloseDisplay` on every key check — with x11rb, open one
-connection at startup.
+already works and intercepts no key from the game. (A free improvement on the Linux
+side stood here — one x11rb connection held open instead of
+`XOpenDisplay`/`XCloseDisplay` per key check — and went with Linux on 2026-08-25.)
 
 `rdev` was rejected: last released 2023-06-26.
 
@@ -222,7 +228,7 @@ connection at startup.
 | `wgpu` | 30.0.1 | Rendering (via eframe) | not in wgpu's own CI for i686 |
 | `raw-window-handle` | 0.6.2 | Overlay: reaching the native handle | already transitive; 27 months old because it is finished |
 | `image` | 0.25.10 | Avatar recolouring, hat compositing | `default-features = false, features = ["png"]` — the default pulls a full AV1 encoder plus exr, tiff, webp, gif, jpeg and rayon. Set `image::Limits` explicitly |
-| `rfd` | 0.17.2 | File dialogs | kept for the XDG portal conversation on Linux, which is genuinely fiddly and publicly debugged |
+| `rfd` | 0.17.2 | File dialogs | the XDG-portal handling that was the original reason is moot since 2026-08-25; it stays as the ordinary choice for a native dialog |
 
 egui and `eframe` are MIT OR Apache-2.0, both compatible with GPL-3.0-or-later;
 `winit` is Apache-2.0 only, which is compatible in the same direction.
@@ -244,9 +250,9 @@ nobody reopens the question on the strength of one interpolation.
 
 Rendering needs a fallback chain, and it is required rather than desirable. The
 evidence is first-party: the Electron client already disables hardware
-acceleration unconditionally on Linux and on demand on Windows, through a
-setting it shipped because the field made it necessary. Linux therefore defaults
-to software, matching what users already run. Windows tries wgpu on DX12, then
+acceleration on demand through a setting it shipped because the field made it
+necessary. (It also disabled it unconditionally on Linux; that arm and the Linux rung
+it justified both went on 2026-08-25.) Windows tries wgpu on DX12, then
 wgpu with `force_fallback_adapter` (WARP), then a CPU rasteriser. There is no
 glow rung: glow needs GL 3.3 or ES 3.0, and a Windows machine without a vendor
 driver offers software GL 1.1, so the rung does not save the RDP and bare-VM
@@ -256,8 +262,9 @@ non-persistent by default — a key written by a process in the act of crashing
 pins users to the slow rung for reasons that may have nothing to do with the
 GPU.
 
-A transparent, click-through window must be prototyped on Windows x64, Windows
-i686 and Linux in P1+, before the GUI phase begins. eframe's transparency issue
+A transparent, click-through window must be prototyped in P1+, before the GUI phase
+begins — which it was, on Windows x64, Windows i686 and Linux, when all three were
+targets. eframe's transparency issue
 has been open since 2024-05-03 with activity this month, transparent windows
 render solid black for many users, and the known workarounds are
 renderer-specific — which matters because eframe picks one renderer per process
@@ -429,8 +436,9 @@ does not solve the frame cap above; nothing at that layer does.
 | `cargo-auditable` | 0.7.5 | Embeds the dependency list in the shipped binary, so `cargo audit bin` works on an artefact months after the build. One line; cargo-dist already integrates it |
 
 GitHub Actions keep the current convention: **every action pinned to a commit
-SHA**, matrix over Windows x64, Windows i686 and Linux x64, `fail-fast: false`,
-and workflow-name-scoped concurrency groups. CodeQL stays.
+SHA** and workflow-name-scoped concurrency groups. The matrix over three targets with
+`fail-fast: false` went on 2026-08-25: one target needs no matrix, and has no sibling
+whose failure it could hide. CodeQL stays.
 
 Renovate or Dependabot is configured for `Cargo.toml` and for the workflow SHAs,
 grouped so that a routine bump is one review rather than twenty.
@@ -610,7 +618,7 @@ the commit that adds it, and §7.7 records it as not usable even briefly.
    shared sets, and the policy must state what that does and does not buy.
    Across all three sets there are **zero** audits for `cpal`, `opus`,
    `webrtc-audio-processing`, `neteq`, `sonora`, `rubato`, `ringbuf`, `webrtc`,
-   `tokio-tungstenite`, `windows-sys`, `x11rb`, `directories`, `eframe`,
+   `tokio-tungstenite`, `windows-sys`, `directories`, `eframe`,
    `egui`, `winit`, `rfd` or `self-replace` — that is, for very nearly every
    crate whose failure would matter here. Making it blocking from P1 produces a
    large exemptions block and no assurance, so the policy states that here
@@ -655,8 +663,15 @@ crates.io page.
 ## 7.8 What the toolchain does not yet cover
 
 `cargo-fuzz` needs nightly, and libFuzzer with sanitizers is in practice a Linux
-story. Neither fits §7.1 as written: one pinned stable channel and a
-three-target matrix. The resolution is cheap but it has to be decided now rather
+story. Neither fits §7.1 as written: one pinned stable channel and, as it then was, a
+three-target matrix.
+
+> **Still true after 2026-08-25, and worth saying because it looks as though it should
+> not be.** Dropping Linux as a *target* does not drop it as a *runner*. Fuzzing
+> `x86_64-unknown-linux-gnu` remains the plan: what is fuzzed is an RTP parser and a
+> `FuzzProcess` over `Arbitrary` bytes, neither of which is platform code. The
+> qualification in the last sentence below is the one that matters, and it is
+> unchanged. The resolution is cheap but it has to be decided now rather
 than discovered in the phase that needs it — a second pinned toolchain entry
 used by the fuzz job alone, pinned by date so it does not float, and an explicit
 statement that fuzzing runs on `x86_64-unknown-linux-gnu` only. That is an

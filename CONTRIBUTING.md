@@ -24,8 +24,7 @@ C++ toolchain is needed alongside Node.js:
 
 * [Node.js](https://nodejs.org/en/download/) 22 or later
 * [Python](https://www.python.org/downloads/) 3, for node-gyp
-* **Windows**: Visual Studio with the "Desktop development with C++" workload
-* **Linux**: `build-essential`, `libxcb1-dev`, `libx11-dev`
+* Visual Studio with the "Desktop development with C++" workload
 
 ### Setup
 

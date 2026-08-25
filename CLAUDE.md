@@ -18,14 +18,12 @@ npm run typecheck     # tsc --noEmit
 npm run lint          # biome check (lint + format)
 npm run lint:fix      # biome check --write
 npm run dist:64       # Windows x64 installer
-npm run dist:linux    # Linux AppImage
 npm run audit         # npm audit --audit-level=high
 ```
 
-Building needs Node 22+ and a C++ toolchain. On Windows: Visual Studio with the
-"Desktop development with C++" workload and Python 3. On Linux:
-`build-essential`, `libxcb1-dev`, `libx11-dev`, `libasound2-dev`, `libxtst-dev`,
-`libxrandr-dev`, `libxt-dev`.
+**Windows 11 x64 only.** Linux support and the 32-bit build were removed on
+2026-08-25; nobody on this project can test either. Building needs Node 22+,
+Visual Studio with the "Desktop development with C++" workload, and Python 3.
 
 ## Layout
 
@@ -130,5 +128,4 @@ was wrong, what the user saw, and what changed. Read the 1.0.0–1.0.2 entries
 before writing a new one — the register is deliberate.
 
 CI is four GitHub Actions workflows with every action pinned to a commit SHA.
-The Windows and Linux legs use `fail-fast: false` so one broken platform does not
-hide the other.
+Every workflow builds one platform, so none of them carries a matrix.

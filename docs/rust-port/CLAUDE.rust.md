@@ -25,22 +25,25 @@ cargo xtask netemu                       # receive path under emulated loss
 The toolchain is pinned in `rust-toolchain.toml`. Do not float it on `stable`;
 bump it in its own commit.
 
-Targets: `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc` (the injection path is
-32-bit only), `x86_64-unknown-linux-gnu`.
+Target: `x86_64-pc-windows-msvc`, and only that one. `i686-pc-windows-msvc` went on
+2026-08-24 with the injection path it existed for; `x86_64-unknown-linux-gnu` went on
+2026-08-25 with the client's Linux support, because nobody here can test it. Linux CI
+*runners* are still used for work that has no target — formatting, licences,
+advisories, CodeQL, fuzzing — and that is not the same thing as a Linux build.
 
 ## Layout
 
 | Crate | Responsibility |
 | --- | --- |
 | `acl-types` | `AmongUsState`, `Player`, map colliders, settings schema. No I/O. |
-| `acl-game` | Process memory, pattern scanning, offsets, shellcode injection |
+| `acl-game` | Process memory, pattern scanning, offsets. Reads only: the injection path was removed on 2026-08-24 |
 | `acl-audio` | Capture, APM, Opus, jitter buffer, the DSP graph, the mixer |
 | `acl-net` | Socket.IO signalling, WebRTC peer mesh |
 | `acl-platform` | Keyboard poll, overlay window, paths, single instance |
 | `acl-ipc` | Helper ↔ core: `postcard` message types and framing |
 | `acl-app` | The state machine wiring the above together |
 | `acl-ui` | egui views: main, settings, lobby browser, overlay |
-| `acl-helper` | Elevated binary: game reader, injection, key poll, overlay window |
+| `acl-helper` | Elevated binary: game reader, key poll, overlay window |
 | `acl-core` | Unelevated binary: tokio, signalling, WebRTC, audio, GUI |
 | `server/` | `axum` + `socketioxide` signalling relay |
 | `xtask/` | Build and release automation, in Rust rather than shell |
@@ -49,9 +52,9 @@ Targets: `x86_64-pc-windows-msvc`, `i686-pc-windows-msvc` (the injection path is
 **no GUI dependency**. Do not add one.
 
 **Two binaries, not one.** `acl-helper` is the only elevated process and holds
-memory reading, injection, the key poll and the overlay window; `acl-core`
-never elevates and holds tokio, signalling, WebRTC, audio and the GUI. They talk
-length-prefixed `postcard` over a named pipe (Windows) or a Unix socket (Linux).
+memory reading, the key poll and the overlay window; `acl-core` never elevates and
+holds tokio, signalling, WebRTC, audio and the GUI. They talk length-prefixed
+`postcard` over a named pipe.
 `acl-core` starts the helper **on demand, with a per-launch UAC prompt**. There
 is no Windows service, nothing auto-starts and nothing elevated is resident
 between sessions; the prompt is accepted friction, so do not "improve" it away

@@ -6,6 +6,20 @@ project can be rewritten in Rust with a native GUI, and — since they can — h
 Written against version 1.0.2 of the client and 1.0.0 of the server, on
 2026-08-23.
 
+> **Windows only, from 2026-08-25.** The client's Linux support was removed and the
+> minimum Windows raised to 11, because nobody on this project can test either. These
+> documents were written for three targets and still describe Linux in many places.
+> Where a passage states a requirement it now carries a dated note; where it records
+> an analysis or a measurement it is left as it was, because it is a true account of
+> why something was chosen. The single shipping target is
+> `x86_64-pc-windows-msvc`.
+>
+> Two things this does **not** mean. Linux CI runners are still used for work that
+> has no target — formatting, licences, advisories, CodeQL, fuzzing — which is a
+> runner choice and not a supported platform. And the AppImage users who exist are
+> not migrated anywhere: every release from 1.0.1 to 1.0.5 published one, and those
+> clients will sit on a `latest-linux.yml` feed that stops moving.
+
 ## The short version
 
 **Feasible. No hard blockers. Recommended in the staged order below, at roughly
@@ -184,7 +198,7 @@ arithmetic and this page is the summary of it.
 | **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame | Bug; fix and retry |
 | **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss (the `i686-pc-windows-msvc` build criterion was struck on 2026-08-24 with the target) | **Stop the port** |
 | ~~**G3**~~ | Transport | **Struck 2026-08-25.** It asked that a 1.0.2 Electron client and a Rust client hear each other in the same lobby, direct and via TURN; the same call under each impairment profile; and a three-client mixed-generation lobby with one client leaving and rejoining | Was *no staged rollout; reconsider scope*. That is now the standing position rather than a contingency |
-| **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64, Windows ia32 and Linux each update from a staging feed to the bridge, silently, with the correct architecture selected | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |
+| **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64 update from a staging feed to the bridge, silently. Narrowed from three legs on 2026-08-25: ia32 went with the Windows 11 floor and Linux with its support | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |
 
 G0 lost two criteria on 2026-08-24, both belonging to a signature the offsets
 bundle no longer carries: the signed-verification criterion and the revocation

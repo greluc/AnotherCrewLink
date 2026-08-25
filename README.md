@@ -65,7 +65,7 @@ Settings → Server.
 
 ## Requirements
 
-- Windows 10 or later, or Linux
+- Windows 11
 - Among Us
 - A microphone
 
@@ -77,8 +77,7 @@ the game. If the game runs as administrator, so must AnotherCrewLink.
 Building needs Node.js 22 or later and a C++ toolchain, because three native modules
 are compiled from the sources vendored under `native/`:
 
-- **Windows**: Visual Studio with the "Desktop development with C++" workload, and Python 3
-- **Linux**: `build-essential`, `libxcb1-dev`, `libx11-dev`
+- Visual Studio with the "Desktop development with C++" workload, and Python 3
 
 ```bash
 npm ci
@@ -89,7 +88,6 @@ To produce installers:
 
 ```bash
 npm run dist:64      # Windows x64
-npm run dist:linux   # Linux AppImage
 ```
 
 ## Project layout
