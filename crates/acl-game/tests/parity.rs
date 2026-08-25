@@ -519,6 +519,52 @@ fn the_comparison_notices_what_it_is_supposed_to() {
 }
 
 #[test]
+fn a_field_one_reader_does_not_produce_is_a_difference() {
+    // The most likely way this gate actually fails: the Rust reader has not implemented a
+    // field yet, so it is absent rather than wrong. `differences` handles that by reading
+    // an absent key as `null`, which is easy to "simplify" into a lookup that skips keys
+    // the two do not share -- and then a reader producing half a state passes the gate.
+    let electron = serde_json::json!({ "lightRadius": 1.0, "map": 2 });
+    let rust = serde_json::json!({ "map": 2 });
+
+    let mut found = BTreeMap::new();
+    differences(&electron, &rust, "", &mut found);
+    assert!(found.contains_key("lightRadius"), "{found:?}");
+
+    // And the other way, because a field this reader invents is just as wrong as one it
+    // drops -- it means the two are not describing the same thing.
+    let mut found = BTreeMap::new();
+    differences(&rust, &electron, "", &mut found);
+    assert!(found.contains_key("lightRadius"), "{found:?}");
+}
+
+#[test]
+fn an_absent_field_and_an_explicit_null_are_the_same_thing() {
+    // Deliberate, and worth pinning because it is the one case the rule above does not
+    // catch. JavaScript omits an `undefined` field when it serialises; serde writes
+    // `null` for a `None`. Both mean "no value", so treating them as equal is right --
+    // but it has to be a decision rather than an accident of the `unwrap_or` above.
+    let electron = serde_json::json!({ "nameText": serde_json::Value::Null });
+    let rust = serde_json::json!({});
+
+    let mut found = BTreeMap::new();
+    differences(&electron, &rust, "", &mut found);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_nested_field_that_is_missing_is_found_by_its_full_path() {
+    // A player's field, not a top-level one. The report has to name where it was, or a
+    // fourteen-player frame gives nothing to look at.
+    let electron = serde_json::json!({ "players": [{ "name": "a", "inVent": true }] });
+    let rust = serde_json::json!({ "players": [{ "name": "a" }] });
+
+    let mut found = BTreeMap::new();
+    differences(&electron, &rust, "", &mut found);
+    assert!(found.contains_key("players[0].inVent"), "{found:?}");
+}
+
+#[test]
 fn a_float_within_the_gates_tolerance_is_not_a_difference() {
     // The one allowance, and only for positions: JSON round-trips a float through decimal.
     let electron = serde_json::json!({ "players": [{ "x": 1.000_000_1, "y": -3.5 }] });
