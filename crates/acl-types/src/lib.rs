@@ -8,6 +8,7 @@
 pub mod collider;
 mod collider_data;
 pub mod map;
+pub mod player_colors;
 
 pub use collider::pose_collide;
 pub use map::{MapType, Vector2};
