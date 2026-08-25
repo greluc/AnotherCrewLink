@@ -154,14 +154,49 @@ async fn talks_to_a_real_server() {
 
     // The whole handshake, end to end: the server's OPEN, our CONNECT, its answer, and a
     // socket id that is not the Engine.IO one.
-    let connected = pump(&mut connection, |action| {
-        matches!(action, Action::Connected(_))
+    //
+    // **The connect is not over when the CONNECT packet lands**, and waiting only for it
+    // is what made this test fail intermittently in CI. socketioxide answers the
+    // handshake and *then* polls the namespace's connect handler, and the server
+    // registers every one of this socket's event handlers inside it -- `on_join`,
+    // `on_id`, `on_signal`, all of them. An event emitted the moment CONNECT arrives can
+    // therefore reach a socket that has no handler for it yet, and an event nobody is
+    // listening for is dropped without a word: no error, no ack, no disconnect. What that
+    // looks like from here is thirty seconds of pongs and no answer to a join.
+    //
+    // The failing log named the ordering rather than hinting at it. `clientPeerConfig` is
+    // the first thing the server emits inside that handler, and it arrived *after* the
+    // join had already gone out -- so the handler had not started when we joined.
+    // Reproduced deliberately by sleeping 300 ms at the top of the server's connect
+    // handler, which turns the same trace up every time.
+    //
+    // So `clientPeerConfig` is the readiness signal, not `Connected`. Everything after it
+    // in the server's `on_connect` is synchronous with no await in between, so a client
+    // that has seen it across a network round trip is talking to a socket whose handlers
+    // are all registered.
+    //
+    // **This is a client-side barrier around a server-side ordering bug**, and it is
+    // worth being plain about which. The server should register the handlers before it
+    // emits the peer config; then `clientPeerConfig` would mean "ready" by construction
+    // rather than by timing. The shipped Electron client never meets the window -- it
+    // joins from a game-state change, long after connect, and emits `leave` and `id`
+    // first -- which is why it took a conformance test to find.
+    //
+    // One pump rather than two: `pump` discards the rest of a batch once it matches, so
+    // waiting for `Connected` and then for `clientPeerConfig` loses the second whenever
+    // the two arrive together.
+    let mut connected_id = None;
+    pump(&mut connection, |action| {
+        if let Action::Connected(id) = action {
+            connected_id = Some(id.clone());
+        }
+        matches!(action, Action::Event { name, .. } if name == "clientPeerConfig")
     })
     .await
-    .expect("the server should complete the connect");
-    let Action::Connected(socket_id) = connected else {
-        unreachable!("pump matched on the variant")
-    };
+    .unwrap_or_else(|seen| {
+        panic!("the server should send clientPeerConfig from its connect handler; saw {seen:?}")
+    });
+    let socket_id = connected_id.expect("the CONNECT packet arrives before the peer config");
     assert!(!socket_id.is_empty());
 
     let session = connection.client().session().expect("a session");
