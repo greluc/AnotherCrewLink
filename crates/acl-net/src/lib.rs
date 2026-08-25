@@ -11,6 +11,7 @@
 pub mod client;
 pub mod engineio;
 pub mod ice;
+pub mod mesh;
 pub mod peer;
 pub mod peer_config;
 pub mod reconnect;
