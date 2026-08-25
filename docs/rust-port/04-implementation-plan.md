@@ -703,9 +703,8 @@ fixtures.
 
 ## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
-> **Status, 2026-08-25.** Every item is built and `crates/acl-audio` carries 423 tests.
-> Five of the six gate criteria are met; the sixth is three-quarters met and its remaining
-> leg needs a transport to exist.
+> **Status, 2026-08-25.** Every item is built, `crates/acl-audio` carries 424 tests, and
+> every gate criterion that has not been struck is met.
 >
 > Closing it changed two things it was supposed only to measure: the jitter buffer's depth
 > had to become adaptive, and the FEC controller turned out to have been doing nothing at
@@ -725,7 +724,7 @@ fixtures.
 > | 2. `voice_params` parity | **met** |
 > | 3. Latency and quality against Chromium | **met** — every profile within the 30 ms budget, and less invented audio than Chromium under loss |
 > | 4. Zero allocations on the render callback | **met**, and it moved the APM off the capture callback to stay met |
-> | 5. FEC recovery with a Chromium sender | three of its four legs verified; the fourth needs a Chromium receiver, which needs a transport |
+> | 5. FEC recovery with a Chromium sender | **met** — all four legs, against Chromium's own encoder and its own receiver |
 > | 6. `i686` build | struck; the target no longer exists |
 >
 > **Criteria 3 and 5 were parked behind P4 and did not belong there.** Both were read
@@ -765,15 +764,22 @@ fixtures.
 > | Chromium emits redundancy | yes | 862 of 1001 packets, inspected |
 > | our receiver recovers it | yes | 39 frames at 5% loss; 0 with the redundancy stripped |
 > | we emit redundancy | yes | 171 of 200 packets, told mid-call |
-> | a Chromium receiver recovers ours | **no** | needs a Chromium peer receiving our stream |
+> | a Chromium receiver recovers ours | yes | it conceals 1.43% of our stream against 4.42% of the same audio without redundancy |
 >
-> The fourth is what still needs P4, and it needs a transport rather than a network:
-> something has to carry our packets to a Chromium receiver. `scripts/receive-reference`
-> cannot stand in for it, and neither can the `fecPacketsSent` counter itself — dropping
-> frames in an encoded transform happens before packetisation, so the sequence numbers
-> close up and Chromium never learns there was loss to protect against. A WebRTC field
-> trial for a simulated lossy network was tried and had no effect on a loopback: 504
-> packets sent, 504 received, none lost.
+> The fourth had been parked behind P4 on the grounds that Chromium has to *receive* our
+> stream and nothing exists to carry it. Something does: an encoded transform can **replace**
+> a frame's payload, not only drop it. So Chromium packetises our Opus, sends it to itself,
+> and its own receive path — NetEQ, libopus, its FEC recovery — decodes it.
+>
+> The loss goes in on the **receiving** side, after depacketisation. Injected before
+> packetisation the sequence numbers close up and nothing downstream learns a frame is
+> missing, which is why `scripts/receive-reference` reports `fecPacketsSent` as zero and why
+> a WebRTC field trial for a simulated lossy network changed nothing on a loopback — 504
+> packets sent, 504 received.
+>
+> `fecPacketsSent` itself is still zero and is not the thing to chase. It is a counter
+> meaning "this encoder emitted redundancy", and that question is answered directly, about
+> the actual bytes, by `opus_packet_has_lbrr` — for both encoders.
 
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.

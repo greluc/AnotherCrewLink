@@ -20,7 +20,7 @@
 //! measured against a Chromium sender, not this. The loss reports below stand in for the
 //! ones `ReceiverReportInterceptor` will produce.
 
-use acl_audio::codec::{has_redundancy, Encoder, FRAME_SAMPLES};
+use acl_audio::codec::{Encoder, FRAME_SAMPLES, has_redundancy};
 use acl_audio::fec::{FecController, MAX_APPLIED};
 use acl_audio::impairment::{Profile, apply};
 use acl_audio::jitter::{DEFAULT_DEPTH, FrameSource, JitterBuffer};
@@ -219,7 +219,10 @@ fn the_controller_works_mid_call_and_not_only_before_it() {
     }
 
     println!("redundancy: told first {early} of 200, told later {late} of 200");
-    assert!(early > 150, "told before its first frame, it protected only {early} of 200");
+    assert!(
+        early > 150,
+        "told before its first frame, it protected only {early} of 200"
+    );
     assert!(
         late * 10 >= early * 9,
         "telling it mid-call is materially worse than telling it first: {late} against {early}"

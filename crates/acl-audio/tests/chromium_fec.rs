@@ -23,14 +23,19 @@
 //! what it wrote. This is the same move `scripts/golden-vectors` makes for the DSP: let
 //! Chromium be the reference rather than a specification read carefully.
 //!
-//! # What it still cannot say
+//! # The other direction
 //!
-//! The `getStats()` half. `fecPacketsSent` is a property of a peer connection, and there
-//! is no connection here — that half is P4's, and it is the *sending* direction, which
-//! this crate's `fec` module drives and cannot observe without a peer to report to it.
+//! Whether a *Chromium* receiver recovers **our** redundancy is the fourth leg, and it is
+//! the one thing here that cannot be settled by looking at bytes: what is in question is
+//! not our packets but what Chromium's decoder does with them.
 //!
-//! So: the receiving direction of criterion 5 is met here, against a real Chromium sender.
-//! The sending direction's confirmation is not, and no arrangement of this crate makes it.
+//! `scripts/our-fec` settles it. An encoded transform can replace a frame's payload rather
+//! than only drop it, so Chromium packetises our Opus, sends it to itself, and its own
+//! receive path decodes it — with the loss injected on the *receiving* side, after
+//! depacketisation, because loss injected before packetisation closes the sequence numbers
+//! up and nothing downstream learns a frame is missing.
+//!
+//! `the_chromium_receiver_recovers_ours` below reads what it measured.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,5 +198,56 @@ fn the_recovery_is_the_redundancys_and_not_concealment_wearing_its_name() {
     assert!(
         with_redundancy > without_redundancy,
         "the same number came back either way ({with_redundancy} against {without_redundancy}), which means the counter is measuring concealment"
+    );
+}
+
+/// What `scripts/our-fec` measured, parsed by hand for the same reason the rest of this
+/// crate parses fixtures by hand: two numbers do not justify a JSON dependency in the
+/// audio path's tree.
+fn concealed_share(block: &str) -> Option<f64> {
+    let at = block.find("\"concealedShare\":")? + "\"concealedShare\":".len();
+    let rest = block.get(at..)?;
+    let start = rest.find(|c: char| c.is_ascii_digit())?;
+    let tail = rest.get(start..)?;
+    let end = tail
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'e' || c == '-'))
+        .unwrap_or(tail.len());
+    tail.get(..end)?.parse().ok()
+}
+
+#[test]
+fn the_chromium_receiver_recovers_ours() {
+    // Criterion 5's fourth leg, and the only one that is about Chromium's behaviour rather
+    // than about bytes. Two runs of the same audio through Chromium's receive path, losing
+    // the same frames: one encoded with the redundancy, one without.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/receive/our-fec.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "{} is missing ({error}). Run `npm run our-fec` to measure it.",
+            path.display()
+        )
+    });
+
+    let with = raw
+        .split("\"withRedundancy\":")
+        .nth(1)
+        .and_then(concealed_share)
+        .expect("a concealed share for the protected run");
+    let without = raw
+        .split("\"withoutRedundancy\":")
+        .nth(1)
+        .and_then(concealed_share)
+        .expect("a concealed share for the bare run");
+
+    println!("Chromium concealed {with:.2}% of ours with redundancy, {without:.2}% without");
+    assert!(
+        without > with,
+        "Chromium concealed no less from a stream carrying redundancy ({with:.2}% against {without:.2}%)"
+    );
+    // A margin, so a run that differed by measurement noise could not read as a recovery.
+    assert!(
+        without - with > 0.5,
+        "the difference is {:.2} points, small enough to be noise",
+        without - with
     );
 }

@@ -17,7 +17,9 @@
 //! ladder's bottom rung would switch the error correction off exactly when the network is
 //! bad enough to need it — which is the opposite of what a ladder is for.
 
-use opus::{Application, Bitrate, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder, Signal};
+use opus::{
+    Application, Bitrate, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder, Signal,
+};
 
 /// The rate everything in this client runs at.
 pub const SAMPLE_RATE: u32 = 48000;
