@@ -8,6 +8,13 @@
 [graph]
 all-features = false
 no-default-features = false
+# The only target anything is built for, since Linux went on 2026-08-25. Without this the
+# checks below run over the whole resolved graph, which still carries wayland-*, x11rb and
+# nix -- winit and cpal declare them for targets nothing here compiles. An advisory
+# against one of those would turn this gate red over code that cannot reach a shipped
+# binary, and a gate that fails for reasons nobody can act on is a gate that gets
+# switched off.
+targets = ["x86_64-pc-windows-msvc"]
 
 [output]
 feature-depth = 1

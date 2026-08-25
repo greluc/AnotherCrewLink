@@ -18,14 +18,12 @@ npm run typecheck     # tsc --noEmit
 npm run lint          # biome check (lint + format)
 npm run lint:fix      # biome check --write
 npm run dist:64       # Windows x64 installer
-npm run dist:linux    # Linux AppImage
 npm run audit         # npm audit --audit-level=high
 ```
 
-Building needs Node 22+ and a C++ toolchain. On Windows: Visual Studio with the
-"Desktop development with C++" workload and Python 3. On Linux:
-`build-essential`, `libxcb1-dev`, `libx11-dev`, `libasound2-dev`, `libxtst-dev`,
-`libxrandr-dev`, `libxt-dev`.
+**Windows 11 x64 only.** Linux support and the 32-bit build were removed on
+2026-08-25; nobody on this project can test either. Building needs Node 22+,
+Visual Studio with the "Desktop development with C++" workload, and Python 3.
 
 ## Layout
 
@@ -90,12 +88,14 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 - **Connect an effect before disconnecting the direct path.** The other order
   leaves the player with no output at all if the second step throws.
 - **Tests are node-environment only.** Anything touching Electron or the DOM is
-  not unit-tested; it is covered by running the app. Six files have tests:
+  not unit-tested; it is covered by running the app. Ten files have tests:
   `ColliderMap`, `reconnectPolicy`, `validateClientPeerConfig`, `offsetStore`,
-  `offsetsValidator`, `vdf`. The last two read `test/fixtures/offsets`, a vendored
-  copy of the real offsets tree — gate G0 requires the validator to accept every
-  real file unchanged, so that half is tested against the whole corpus rather than
-  a sample.
+  `offsetsValidator`, `vdf`, `keyBindings`, `recorder`, `iceServers` and
+  `signalRoute`. `offsetsValidator` and `vdf` read `test/fixtures/offsets`, a
+  vendored copy of the real offsets tree — gate G0 requires the validator to accept
+  every real file unchanged, so that half is tested against the whole corpus rather
+  than a sample. `keyBindings` reads the vendored `uiohook-napi` declaration and
+  fails if a scancode has drifted.
 - **Native modules are vendored on purpose.** They used to be installed from
   unpinned branch HEADs. Do not replace a `file:native/...` dependency with a
   git or registry one.
@@ -103,9 +103,20 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 ## Wire protocol
 
 Socket.IO 4 (Engine.IO v4). **This client cannot talk to the official
-BetterCrewLink server**, which runs Socket.IO 2. Eleven events, one namespace:
-`join`, `leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`,
-`join_lobby`, `lobbybrowser`, `disconnect`.
+BetterCrewLink server**, which runs Socket.IO 2. One namespace, and two
+directions — the second half used to be missing here, which mattered because of
+the warning below it.
+
+**Client to server**, the eleven the server registers a handler for: `join`,
+`leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`, `join_lobby`,
+`lobbybrowser`, `disconnect`.
+
+**Server to client**, which is just as much of the contract: `join`, `left`,
+`signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`, `VAD`,
+`lobbybrowser`, `new_lobbies`, `update_lobby`, `remove_lobby`.
+
+Both lists are read out of `src/socket.rs` in the server repository, which is the
+only place that knows all of them.
 
 Changing an event name or payload shape breaks every player who has not updated.
 Add alongside; do not repurpose.
@@ -117,5 +128,4 @@ was wrong, what the user saw, and what changed. Read the 1.0.0–1.0.2 entries
 before writing a new one — the register is deliberate.
 
 CI is four GitHub Actions workflows with every action pinned to a commit SHA.
-The Windows and Linux legs use `fail-fast: false` so one broken platform does not
-hide the other.
+Every workflow builds one platform, so none of them carries a matrix.

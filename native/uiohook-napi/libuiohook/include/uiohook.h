@@ -42,12 +42,8 @@
 #define UIOHOOK_ERROR_SET_WINDOWS_HOOK_EX        0x30
 #define UIOHOOK_ERROR_GET_MODULE_HANDLE          0x31
 
-// Darwin specific errors.
-#define UIOHOOK_ERROR_AXAPI_DISABLED             0x40
-#define UIOHOOK_ERROR_CREATE_EVENT_PORT          0x41
-#define UIOHOOK_ERROR_CREATE_RUN_LOOP_SOURCE     0x42
-#define UIOHOOK_ERROR_GET_RUNLOOP                0x43
-#define UIOHOOK_ERROR_CREATE_OBSERVER            0x44
+// Darwin specific errors were 0x40-0x44 and were removed with the darwin sources on
+// 2026-08-25. Every code here is an explicit value, so nothing below them moved.
 /* End Error Codes */
 
 /* Begin Log Levels and Function Prototype */

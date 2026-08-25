@@ -87,8 +87,8 @@ pub const MAX_ELEMENTS: usize = 4096;
 
 /// Somewhere bytes can be read from.
 ///
-/// Implemented by the Windows and Linux readers, by `ReplayProcess` over a recording, and
-/// by `FuzzProcess` over arbitrary bytes.
+/// Implemented by the Windows reader, by `ReplayProcess` over a recording, and by
+/// `FuzzProcess` over arbitrary bytes.
 pub trait ProcessMemory {
     /// Fills `into` completely, or fails.
     ///

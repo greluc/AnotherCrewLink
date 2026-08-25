@@ -86,6 +86,8 @@ pub enum CoreMessage {
 /// disk. Refusing to talk is better than reading a struct that has changed shape.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+pub mod stream;
+
 /// Why a frame could not be read or written.
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {

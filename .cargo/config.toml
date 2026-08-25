@@ -2,7 +2,7 @@
 # every Chromium this app ships today.
 #
 # Control Flow Guard checks indirect call targets against a compiler-built table. It is
-# the one that matters here: this process reads another process's memory and, on 32-bit
-# Windows, writes an injection stub into it.
+# the one that matters here: this process parses attacker-reachable bytes -- RTP, Opus and
+# another process's memory -- in the same address space as its own control flow.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "control-flow-guard=yes", "-C", "link-arg=/CETCOMPAT"]

@@ -7,18 +7,6 @@
          ],
          "conditions":[
             [
-               'OS=="linux"',
-               {
-                  "sources":[
-                     "lib/linux/memoryjs.cc",
-                     "lib/linux/memory.cc",
-                     "lib/linux/process.cc",
-                     "lib/linux/module.cc",
-                     "lib/linux/pattern.cc"
-                  ]
-               }
-            ],
-            [
                'OS=="win"',
                {
                   "sources":[
@@ -39,9 +27,6 @@
             "VCCLCompilerTool":{
                "AdditionalOptions":[ "/std:c++20" ]
             }
-         },
-         "xcode_settings":{
-            "CLANG_CXX_LANGUAGE_STANDARD":"c++20"
          }
       }
    ]

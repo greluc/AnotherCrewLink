@@ -1,7 +1,6 @@
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
 import { windowStateKeeper } from './windowState';
-import { platform } from 'node:os';
 import { join as joinPath, dirname, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { format as formatUrl } from 'node:url';
@@ -37,12 +36,11 @@ global.overlay = null;
 const store = new Store<ISettings>();
 app.commandLine.appendSwitch('disable-pinch');
 
-if (platform() === 'linux' || !store.get('hardware_acceleration', true)) {
+// Windows only, so the unconditional half of this is gone: it used to read
+// `platform() === 'linux' || !store.get(...)`, because Linux ran software rendering
+// whatever the setting said. What is left is the setting a player can actually change.
+if (!store.get('hardware_acceleration', true)) {
 	app.disableHardwareAcceleration();
-}
-
-if (platform() === 'linux') {
-	app.commandLine.appendSwitch('disable-gpu-sandbox');
 }
 
 // The layout was designed at this size, so it stays the floor and the default.
@@ -368,7 +366,6 @@ ${logDirectory()}`
 
 	// quit application when all windows are closed
 	app.on('window-all-closed', () => {
-		// on macOS it is common for applications to stay open until the user explicitly quits
 		try {
 			const mainWindow = global.mainWindow;
 			const overlay = global.overlay;
@@ -381,28 +378,6 @@ ${logDirectory()}`
 			/* empty */
 		}
 		app.quit();
-	});
-
-	app.on('activate', () => {
-		console.log('ACTIVATE???');
-		// on macOS it is common to re-create a window even after all windows have been closed
-		if (global.mainWindow === null) {
-			global.mainWindow = createMainWindow();
-		}
-
-		session.fromPartition('default').setPermissionRequestHandler((_webContents, permission, callback) => {
-			const allowedPermissions = ['audioCapture']; // Full list here: https://developer.chrome.com/extensions/declare_permissions#manifest
-			console.log('permission requested ', permission);
-			if (allowedPermissions.includes(permission)) {
-				callback(true); // Approve permission request
-			} else {
-				console.error(
-					`The application tried to request permission for '${permission}'. This permission was not whitelisted and has been blocked.`
-				);
-
-				callback(false); // Deny
-			}
-		});
 	});
 
 	// create main BrowserWindow when electron is ready
@@ -442,6 +417,24 @@ ${logDirectory()}`
 				console.warn('generate: handler failed', error);
 				callback({ error: -6 });
 			}
+		});
+
+		// Deny every permission this session can be asked for except the microphone. With no
+		// handler installed Electron grants them all, so this is a tightening rather than a
+		// formality. The version that shipped until 2026-08-25 was wrong three ways over and
+		// never ran: it sat in `app.on('activate')`, which Electron marks `@platform darwin`;
+		// it allowed `audioCapture`, a Chrome *extension* manifest permission that is never
+		// passed here, where `getUserMedia` asks for `media`; and it installed on
+		// `session.fromPartition('default')`, which is a different session from the
+		// `defaultSession` the windows actually run on. Choosing an output device needs nothing
+		// added: `setSinkId` on a non-default device never reaches this handler. Chromium checks
+		// some permissions before it requests them, and that path keeps its default here.
+		session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+			const granted = permission === 'media';
+			if (!granted) {
+				console.warn(`Denied a permission request for '${permission}', which is not on the allow-list.`);
+			}
+			callback(granted);
 		});
 
 		// No CSP was ever set, which Electron warns about at runtime. Scripts and styles

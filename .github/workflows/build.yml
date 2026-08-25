@@ -10,9 +10,14 @@ on:
   push:
     # The Rust workspace has its own workflow. A push that touches only it changes nothing
     # this job builds, lints or tests, so skip it rather than rerunning the Electron build
-    # and both installers for it. rust.yml carries the mirror image of this filter.
-    # Everything else — src/, static/, package.json — still triggers a run, because
-    # paths-ignore only skips when every changed path matches.
+    # and both installers for it. Everything else — src/, static/, package.json — still
+    # triggers a run, because paths-ignore only skips when every changed path matches.
+    #
+    # **Nearly the mirror of rust.yml's filter, and deliberately not exactly.** That one
+    # also lists `src/common/ColliderMap.ts`, because `collider_data.rs` is generated from
+    # it and the drift check has to run when the source moves. It must *not* be added here
+    # to restore the symmetry: it is a client source too, and skipping the Electron build
+    # for it would stop testing the file both sides read.
     paths-ignore:
       - 'crates/**'
       - 'experiments/**'
@@ -38,33 +43,15 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    # One platform, so no matrix. Linux was dropped on 2026-08-25 -- there was nobody who
+    # could test an AppImage, and a green CI leg for a platform nobody runs says the
+    # product works there when all it says is that it compiles.
+    runs-on: windows-latest
 
     permissions:
       contents: read
 
-    strategy:
-      # Without this a failure on one platform cancels the other job before it
-      # finishes, so a single broken build hides the state of the second one.
-      fail-fast: false
-      matrix:
-        include:
-         - os: windows-latest
-           dist: 'dist'
-           installer: 'dist/AnotherCrewLink Setup*.exe'
-         - os: ubuntu-latest
-           dist: 'dist:linux'
-           installer: 'dist/AnotherCrewLink-*.AppImage'
-
     steps:
-      - name: Install Linux dependencies
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: |
-          sudo apt-get update
-          # libXtst, libXrandr and libXt are libuiohook's: it records input through the
-          # XRecord extension, which the old key watcher did not use.
-          sudo apt-get install -y libxcb1-dev libx11-dev libxtst-dev libxrandr-dev libxt-dev
-
       - name: Check out Git repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -108,18 +95,17 @@ jobs:
       # name straight through to the script, so "npm run dist --publish never"
       # appended a bare "never" to the electron-builder command line.
       - name: Build App
-        run: npm run ${{ matrix.dist }} -- --publish never
+        run: npm run dist:64 -- --publish never
 
       - name: Upload Installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: AnotherCrewLink Installer ${{ runner.os }}
-          path: ${{ matrix.installer }}
+          name: AnotherCrewLink Installer Windows
+          path: 'dist/AnotherCrewLink Setup*.exe'
           if-no-files-found: error
 
       - name: Upload Unpacked
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: ${{ matrix.os == 'windows-latest'}}
         with:
           name: AnotherCrewLink Unpacked 64bit
           path: 'dist/win-unpacked'

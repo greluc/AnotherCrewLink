@@ -1,6 +1,6 @@
 [package]
 name = "overlay-probe"
-description = "P1+ experiment 1: is a transparent, click-through, always-on-top window available on all three targets?"
+description = "P1+ experiment 1: is a transparent, click-through, always-on-top window available on Windows?"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-# Defaults off, then back on by name. Two of the names are not optional on Linux: winit
-# has no backend of its own and refuses to compile without `x11` or `wayland`, which the
-# default set would have supplied. wgpu and accesskit stay off — this probe answers a
+# Defaults off, then back on by name. `x11` and `wayland` were here until 2026-08-25 —
+# winit has no backend of its own on Linux and refuses to compile without one — and went
+# with the client's Linux support. wgpu and accesskit stay off: this probe answers a
 # question about the window, not about the renderer or the accessibility tree.
 eframe = { version = "0.36.1", default-features = false, features = [
     "glow",
     "default_fonts",
-    "x11",
-    "wayland",
 ] }
 egui = "0.36.1"
 

@@ -1,0 +1,21 @@
+[package]
+name = "acl-core"
+description = "The unelevated half of the client: what it can do, and when it may ask for the other half."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+acl-ipc.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# `product_name_still_matches_package_json` reads the Electron manifest, because the
+# directory 1.x writes into is `productName` and a rename there is silent here.
+serde_json.workspace = true
+
+[lints]
+workspace = true

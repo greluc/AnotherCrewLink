@@ -114,7 +114,15 @@ the program is about to read another program's memory. Declining it is a
 supported state and not a crash: the unelevated helper stays up and keeps polling
 keys, and reports that it cannot read the game, so the client has no proximity
 data and an overlay that cannot attach. §3.3 makes that a named UI state with a
-way to ask again, rather than a blank screen. On Linux nothing elevates:
+way to ask again, rather than a blank screen.
+
+> **Superseded 2026-08-25** with the client's Linux support. The passage below
+> observed that on Linux nothing elevates, so the split was a fault boundary rather
+> than a privilege boundary there and was kept for the second reason alone. On the one
+> remaining platform it is both, which was always the harder case and is now the only
+> one. Original text follows.
+
+On Linux nothing elevates:
 `process_vm_readv` against a same-uid process needs only the documented
 `setcap cap_sys_ptrace+ep` on the common `ptrace_scope=1` default, so there the
 split is a fault boundary and not a privilege boundary, and it is kept for the
@@ -132,12 +140,12 @@ the elevated process.
 ┌─ acl-helper — elevated when the game is ─────────────────────┐
 │  game thread (5 Hz, blocking)                                 │
 │    acl-game: read process memory → AmongUsState              │
-│  key thread (60 ms poll): GetAsyncKeyState / XQueryKeymap     │
+│  key thread (60 ms poll): GetAsyncKeyState                    │
 │  overlay window (winit: transparent, click-through, topmost)  │
 └──────────────┬────────────────────────────────▲───────────────┘
  AmongUsState  │  length-prefixed postcard over │  overlay geometry
- + key edges   │  a named pipe (Windows) or a   │  + pre-rasterised
- (~200 B, 5 Hz)│  Unix socket (Linux)           │  sprites
+ + key edges   │  a named pipe                  │  + pre-rasterised
+ (~200 B, 5 Hz)│                                │  sprites
 ┌──────────────▼────────────────────────────────┴───────────────┐
 │ acl-core — never elevated                                    │
 │                                                               │
@@ -232,11 +240,10 @@ pub trait ProcessMemory {
 }
 ```
 
-Two implementations: `WindowsProcess` (`OpenProcess` +
-`ReadProcessMemory`/`WriteProcessMemory`/`VirtualAllocEx` over `windows-sys`)
-and `LinuxProcess` (`process_vm_readv` through `nix`'s safe wrapper, whose
-lengths derive from the slices handed in, so the Linux reader contains no
-`unsafe` at all, plus `/proc/<pid>/maps`). Plus `ReplayProcess`, which serves a
+One real implementation: `WindowsProcess` (`OpenProcess` + `ReadProcessMemory` over
+`windows-sys`). A `LinuxProcess` was written and deleted on 2026-08-25 —
+`process_vm_readv` through `nix`'s safe wrapper plus `/proc/<pid>/maps`, and the one
+part of this project that contained no `unsafe` at all. Plus `ReplayProcess`, which serves a
 recorded memory snapshot — that is what makes the game reader testable in CI
 with no Among Us installed — and `FuzzProcess`, which answers from `Arbitrary`
 bytes so the state parsing is fuzzable without a game. See
@@ -248,8 +255,7 @@ and nothing more. `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` and
 removed on 2026-08-24. `PROCESS_ALL_ACCESS` is not carried over — and is gone
 from `native/memoryjs` as well, so the 1.x client already opens the game with
 exactly the two rights named above. Finding the process is ~25 lines of
-`CreateToolhelp32Snapshot` on Windows and a `/proc` scan on Linux, done once
-with the handle kept, rather than a crate and a rescan on every poll.
+`CreateToolhelp32Snapshot`, done once with the handle kept, rather than a crate and a rescan on every poll.
 
 Above the trait: pattern scanning, pointer-chain resolution, .NET dictionary and
 array walking, offset fetching and caching, and mod detection. An injection
@@ -355,8 +361,10 @@ meson/ninja/clang build entirely.
 > test that measures the cancellation with and without the far-end reference,
 > 12.3 dB against 0.1 dB, because a canceller with the reference wired wrongly
 > reports success and removes nothing.
-`webrtc-audio-processing` `=2.1.0` stays only as a Linux-only baseline to A/B
-echo-return-loss-enhancement against: it does not build on either Windows target
+~~`webrtc-audio-processing` `=2.1.0` stays only as a Linux-only baseline to A/B
+echo-return-loss-enhancement against~~ — struck 2026-08-25, and already pointless
+before that: the 2026-08-24 measurement made the real comparison sonora against
+`libwebrtc`. It does not build on either Windows target
 (PR #102 "Support MSVC targets" open and unmerged since 2026-08-08, issue #34
 "Windows build" open since 2023-09-27, CI on `ubuntu-latest` only), and Windows
 is where the users are. Either way the APM sits behind the trait, so the gate can
@@ -467,13 +475,17 @@ and Chromium interop is the whole constraint; the `P4+` spike against a real
 
 ### `acl-platform`
 
-| Concern | Windows | Linux |
-| --- | --- | --- |
-| Key state | `GetAsyncKeyState` poll on an owned thread, as today | `XQueryKeymap` poll, as today |
-| Overlay attach | `SetWinEventHook` + `SetWindowLongPtrW` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT\|WS_EX_TOPMOST` | `XFixes` input region + `_NET_WM_STATE_ABOVE` |
-| Paths | `directories` | `directories` |
-| Single instance | named mutex | abstract socket |
-| Helper launch | spawned unelevated on demand; `ShellExecuteW` `runas` only after `OpenProcess` is denied, one UAC prompt per session (§3.2) | ordinary `Command::spawn`; no elevation, `setcap cap_sys_ptrace+ep` documented instead |
+The Linux column was struck on 2026-08-25. It named `XQueryKeymap`, an `XFixes`
+input region with `_NET_WM_STATE_ABOVE`, an abstract socket for the single-instance
+lock, and an unelevated `Command::spawn` with a documented `setcap`.
+
+| Concern | Windows |
+| --- | --- |
+| Key state | `GetAsyncKeyState` poll on an owned thread, as today |
+| Overlay attach | `SetWinEventHook` + `SetWindowLongPtrW` for `WS_EX_LAYERED\|WS_EX_TRANSPARENT\|WS_EX_TOPMOST` |
+| Paths | Electron's `userData` rule, reproduced; **not** `directories`, which resolves elsewhere and would read an empty tree |
+| Single instance | undecided — see §4.7, it is a measurement rather than a judgement |
+| Helper launch | spawned unelevated on demand; `ShellExecuteW` `runas` only after `OpenProcess` is denied, one UAC prompt per session (§3.2) |
 
 The Windows key path stays a 60 ms `GetAsyncKeyState` poll. The Electron client
 no longer polls: `native/node-keyboard-watcher` carried no licence and was
@@ -483,9 +495,9 @@ it is worse: the callback runs on the installing thread's message pump, every
 keystroke on the desktop is blocked until it returns, and exceeding
 `LowLevelHooksTimeout` (300 ms by default) gets it silently unhooked. That is a
 desktop-wide latency dependency for no gain over a poll that already works and
-intercepts nothing. On Linux the one free improvement is to stop calling
-`XOpenDisplay`/`XCloseDisplay` per key check and hold one x11rb connection open
-from startup.
+intercepts nothing. (A second free improvement stood here — holding one x11rb
+connection open instead of calling `XOpenDisplay`/`XCloseDisplay` per key check —
+and went with Linux on 2026-08-25.)
 
 The overlay window lives in `acl-helper` (§3.2) and receives pre-rasterised
 sprites; the ported UIPI access check becomes a first-class UI state, so a user
@@ -498,20 +510,18 @@ detection comes with it: with Fullscreen Optimizations off a layered window will
 not appear at all, and the alternative — hooking the swapchain — is not something
 this project ships.
 
-`winit`'s `set_cursor_hittest(false)` handles click-through on all three targets,
-X11 included: winit's X11 backend sets an input shape through the X server
-(`shape_rectangles(SO::SET, SK::INPUT, …)`), so it is not window-manager
-dependent. What *is* window-manager dependent is the other half of an overlay —
-`_NET_WM_STATE_ABOVE`, override-redirect, staying above a fullscreen game — and
-that is the half `x11rb` is kept for, and the half
-`native/electron-overlay-window/src/lib/x11.c` actually implements. *(The audit
-reports that `x11.c` includes only `<xcb/xcb.h>` and contains no XFixes or Shape
-code at all, so the Linux input region may be new code rather than a port; that
-reading was not independently re-verified and should be checked before the
-estimate is trusted.)*
+`winit`'s `set_cursor_hittest(false)` handles click-through.
 
-A transparent, click-through, always-on-top window is prototyped on Windows x64,
-Windows i686 and Linux in `P1+`, before the GUI phase starts. eframe's own
+> **Struck 2026-08-25.** Most of this paragraph was about X11: that winit sets an
+> input shape through the X server rather than depending on the window manager, that
+> the window-manager-dependent half is `_NET_WM_STATE_ABOVE` and staying above a
+> fullscreen game, and an unverified audit reading that `x11.c` includes only
+> `<xcb/xcb.h>` and might therefore not implement an input region at all. `x11.c` is
+> deleted and `x11rb` is out of the dependency set, so the question it left open never
+> has to be answered.
+
+A transparent, click-through, always-on-top window was prototyped on Windows x64,
+Windows i686 and Linux in `P1+`, before the GUI phase started. eframe's own
 transparency issues are open and their known workarounds are renderer-specific,
 so this is hours of work that either confirms the design or changes it while
 changing it is still cheap.
@@ -553,7 +563,7 @@ startup by a loader of under 100 lines over the `serde_json` already in the tree
 flattening the nested keys once into a map behind `fn t(&self, key: &str) -> &str`
 with an English fallback chain. Measured, the corpus has 128 keys per locale,
 zero key difference against `en`, and **zero** interpolation placeholders,
-plurals or selectors across all 4,736 strings — every feature that would
+plurals or selectors across all 4,631 strings — every feature that would
 distinguish Fluent from a flat map is unused. Converting would also not leave
 translation content untouched: Fluent identifiers cannot contain dots and the
 keys are dotted throughout, and those keys are what Crowdin and every call site
@@ -561,8 +571,9 @@ key on. Two things the loader must carry that a bare `HashMap<String, String>`
 loses: per-locale base text direction, and a note that `format!` covers the first
 string that ever needs formatting, so nobody reopens the question by reflex.
 
-The renderer is a chain, not a choice. Linux defaults to software, which is what
-the Electron client already does unconditionally; Windows tries wgpu on DX12,
+The renderer is a chain, not a choice. (A Linux rung that defaulted to software was
+struck on 2026-08-25 along with the Electron client's unconditional arm.) Windows
+tries wgpu on DX12,
 then wgpu with `force_fallback_adapter` (WARP), then a CPU rasteriser. There is
 no glow rung: glow needs GL 3.3 / ES 3.0, and a Windows machine without a vendor
 driver offers software GL 1.1, so the rung would fail in exactly the RDP and

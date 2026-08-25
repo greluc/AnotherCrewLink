@@ -66,7 +66,7 @@ body:
       label: Desktop
       description: Your OS info, game version etc.
       value: |
-         - OS: [e.g. Windows 10]
+         - OS: [e.g. Windows 11 24H2]
          - Version: [e.g. 2.7.2]
     validations:
       required: true

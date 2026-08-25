@@ -13,8 +13,10 @@ enum ow_event_type {
   OW_BLUR,
   // target window is destroyed
   OW_DETACH,
-  // target window fullscreen changed
-  // only emitted on X11 backend
+  // target window fullscreen changed.
+  // X11 only, so never emitted since the Linux backend was removed on 2026-08-25.
+  // The member stays: this enum is positional and the TypeScript side numbers its own
+  // copy explicitly, so deleting it would renumber OW_MOVERESIZE on one side only.
   OW_FULLSCREEN,
   // target window changed position or resized
   OW_MOVERESIZE,
@@ -30,7 +32,7 @@ struct ow_window_bounds {
 struct ow_event_attach {
   // defined only on Windows
   int has_access;
-  // defined only on Linux, only if changed
+  // was Linux-only and is now never set; kept so the struct layout does not move
   int is_fullscreen;
   //
   struct ow_window_bounds bounds;

@@ -1,15 +1,21 @@
 # Experiments
 
-Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9. Both take
-hours to answer now and are, in the plan's words, brutal to discover in month nine — each
-one decides how a later phase is planned rather than how it is written.
+Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9, and one from
+§4.6 item 1. All three take hours to answer now and are, in the plan's words, brutal to
+discover in month nine — each one decides how a later phase is planned rather than how it
+is written.
 
-They stay in the workspace rather than being deleted once answered, because both check a
+They stay in the workspace rather than being deleted once answered, because each checks a
 property that a dependency update can take away again.
 
 ## 1. `overlay-probe` — a transparent, click-through, always-on-top window
 
-**Answered 2026-08-24: available on both Windows targets. Linux is checked in CI.**
+**Answered 2026-08-24: available on both Windows targets.**
+
+> **Superseded 2026-08-25.** This said "Linux is checked in CI". Linux support was
+> removed from the client, and the probe's Linux arm and the `overlay-linux` job went
+> with it. The Windows answer is unchanged and is the only one that describes something
+> shipped.
 
 The overlay is its own Electron `BrowserWindow` today, so whatever replaces it has to do
 three things at once: be transparent, let clicks through to the game, and stay above it.
@@ -39,11 +45,11 @@ click-through window with no taskbar button never *becomes* the foreground windo
 was reading the console's styles. It now finds the window by title. Any probe that asks
 the OS a question has to be sure it is asking about the right object.
 
-Linux has no equivalent read-back here: on X11 the same property is an empty input region
-set through the shape extension, and reading it back needs an X connection of the probe's
-own. The Linux leg answers what the experiment exists for — does it start, is the surface
-transparent, does the renderer survive — and the passthrough claim there rests on winit's
-implementation.
+There was a Linux arm here until 2026-08-25 with no equivalent read-back: on X11 the same
+property is an empty input region set through the shape extension, and reading it back
+needs an X connection of the probe's own. It could report that the window started and was
+transparent and no more, so the passthrough claim there rested on winit's implementation
+rather than on a measurement. It went with the client's Linux support.
 
 ## 2. `apm-probe` — does the echo canceller exist on 32-bit Windows?
 
@@ -77,10 +83,17 @@ cargo test --target i686-pc-windows-msvc --workspace \
 The release number is the one that counts: it is where the SIMD paths the plan was
 worried about are actually taken.
 
-Two of G2's preconditions remain open and neither is a build question. The A/B
-echo-return-loss-enhancement measurement against `webrtc-audio-processing` needs real
-speaker-and-mic captures on Linux, where both crates build. And sonora's bus factor is
-one — 209 of its 221 commits are from a single author — which no test run changes.
+One of G2's preconditions remains open and it is not a build question: sonora's bus
+factor is one — 209 of its 221 commits are from a single author — which no test run
+changes.
+
+> **Superseded 2026-08-25.** A second precondition stood here: an A/B
+> echo-return-loss-enhancement measurement against `webrtc-audio-processing`, which
+> needed real speaker-and-mic captures on Linux because that is the only place both
+> crates build. Dropping Linux would have made it impossible — except that the section
+> below had already made it pointless on 2026-08-24, when `webrtc-audio-processing` was
+> ruled out on MSVC and the comparison became sonora against `libwebrtc`. A measurement
+> whose whole purpose was to rank a candidate that is out is not one this project owes.
 
 ### The comparison is no longer sonora against `webrtc-audio-processing`
 
@@ -155,3 +168,49 @@ was there all along. The build ran under a path 298 characters deep, and `cl.exe
 opt in to long paths whatever `LongPathsEnabled` says. Anyone repeating this must build
 from a short directory, or they will record "libwebrtc does not build on Windows" and be
 wrong.
+
+## 3. `webrtc-probe` — does the pinned WebRTC crate connect, and what does it cost?
+
+**Answered 2026-08-25: yes, and 141 crates.**
+
+§4.6 item 1 budgets three weeks to prove `webrtc` `=0.20.3` against a real 1.0.2 Chromium
+client. Gate G3, which that spike fed, was struck on 2026-08-25 — but the crate still has
+to work, and three of the spike's four questions never needed a Chromium peer.
+
+```
+cargo run -p webrtc-probe
+```
+
+Two peer connections in one process on loopback: offer, answer, candidates trickled in
+both directions *after* the descriptions are set, a data channel, and one message through
+it. It exits non-zero if any step does not settle within twenty seconds.
+
+| Question | Answer |
+| --- | --- |
+| Does it build and run? | Yes, `x86_64-pc-windows-msvc` |
+| Does a connection establish? | Yes — both ends reach `connected` |
+| Trickle both ways, data channel, a message? | Yes |
+| Crypto backend | `ring` 0.17.14 |
+| New crates in the tree | 141 |
+| `cargo deny` | advisories ok, bans ok, licenses ok, sources ok |
+| `cargo audit` | clean |
+| `cargo vet` | 141 new exemptions; see `supply-chain/README.md` |
+
+**The crypto answer is the one worth having early.** The plan called the backend "nearly
+free to discover while the rig is standing and expensive to discover in P7+". It resolves
+to `ring` 0.17.14 — the exact version the tree already carries for `rustls`, so there is
+no second TLS backend and no version split. What `webrtc` *does* add beside it is a full
+RustCrypto software stack — `aes-gcm`, `ccm`, `chacha20poly1305`, `p256`, `p384`,
+`x25519-dalek` — because DTLS and SRTP need primitives `ring` does not expose. Two crypto
+implementations in one binary is a fact about the shipped artefact, not a bug, and it is
+better known now than at packaging time.
+
+**`rtc-turn` is in the tree.** §4.6 gives TURN as the reason `webrtc` wins over `str0m`,
+which "explicitly does not implement TURN". The dependency list confirms the premise
+rather than leaving it as a claim.
+
+**What it does not prove, and nothing else now does either.** Both ends are this same
+crate, on loopback, with no relay and no NAT. G3 was the thing that would have proved
+interoperability with a 1.0.2 Chromium client, through coturn, across a NAT — and it was
+struck. So "the crate is usable" is established and "the client is interoperable" is not,
+by anything, until the field says so.

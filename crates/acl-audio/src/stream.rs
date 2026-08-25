@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn a_range_that_spans_48_counts_as_having_it() {
         // ALSA in particular reports ranges rather than points, and a check for equality
-        // would resample every Linux device for no reason.
+        // would resample half the devices on the machine for no reason.
         let range = Supported {
             min_rate: 8_000,
             max_rate: 192_000,

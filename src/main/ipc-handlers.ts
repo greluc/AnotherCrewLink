@@ -1,5 +1,4 @@
 import { app, dialog, ipcMain, shell } from 'electron';
-import { platform, homedir } from 'node:os';
 import registry from 'registry-js';
 const { enumerateValues, enumerateKeys, HKEY } = registry;
 import {
@@ -9,7 +8,6 @@ import {
 	type GamePlatformMap,
 	PlatformRunType,
 } from '../common/GamePlatform';
-import { parseVdf, type VdfObject } from './vdf';
 import spawn from 'cross-spawn';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -97,65 +95,46 @@ export const initializeIpcHandlers = (): void => {
 	});
 
 	ipcMain.handle(IpcMessages.REQUEST_PLATFORMS_AVAILABLE, (_, customPlatforms: GamePlatformMap) => {
-		const desktop_platform = platform();
-
 		// Assume all game platforms are unavailable unless proven otherwise
 		const availableGamePlatforms: GamePlatformMap = {};
 
-		// Deal with default platforms first
-		if (desktop_platform === 'win32') {
-			// Steam
-			if (
-				enumerateValues(HKEY.HKEY_CLASSES_ROOT, 'steam').find((value) =>
-					value ? value.name === 'URL Protocol' : false
-				)
-			) {
-				availableGamePlatforms[GamePlatform.STEAM] = DefaultGamePlatforms[GamePlatform.STEAM];
-			}
+		// Windows only since 2026-08-25. There used to be a Linux arm here that read
+		// ~/.steam/registry.vdf, and the VDF parser existed for it alone.
 
-			// Epic Games
-			if (
-				enumerateValues(HKEY.HKEY_CLASSES_ROOT, 'com.epicgames.launcher').find((value) =>
-					value ? value.name === 'URL Protocol' : false
-				)
-			) {
-				availableGamePlatforms[GamePlatform.EPIC] = DefaultGamePlatforms[GamePlatform.EPIC];
-			}
+		// Steam
+		if (
+			enumerateValues(HKEY.HKEY_CLASSES_ROOT, 'steam').find((value) => (value ? value.name === 'URL Protocol' : false))
+		) {
+			availableGamePlatforms[GamePlatform.STEAM] = DefaultGamePlatforms[GamePlatform.STEAM];
+		}
 
-			// Microsoft Store
-			// Search for 'Innersloth.Among Us....' key and grab it
-			const microsoft_regkey = enumerateKeys(
+		// Epic Games
+		if (
+			enumerateValues(HKEY.HKEY_CLASSES_ROOT, 'com.epicgames.launcher').find((value) =>
+				value ? value.name === 'URL Protocol' : false
+			)
+		) {
+			availableGamePlatforms[GamePlatform.EPIC] = DefaultGamePlatforms[GamePlatform.EPIC];
+		}
+
+		// Microsoft Store
+		// Search for 'Innersloth.Among Us....' key and grab it
+		const microsoft_regkey = enumerateKeys(
+			HKEY.HKEY_CURRENT_USER,
+			'SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages'
+		).find((reg_key) => reg_key.startsWith('Innersloth.AmongUs' as string));
+
+		if (microsoft_regkey) {
+			// Grab the game path from the above key
+			const value_found = enumerateValues(
 				HKEY.HKEY_CURRENT_USER,
-				'SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages'
-			).find((reg_key) => reg_key.startsWith('Innersloth.AmongUs' as string));
-
-			if (microsoft_regkey) {
-				// Grab the game path from the above key
-				const value_found = enumerateValues(
-					HKEY.HKEY_CURRENT_USER,
-					'SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages' +
-						'\\' +
-						microsoft_regkey
-				).find((value) => (value ? value.name === 'PackageRootFolder' : false));
-				if (value_found) {
-					availableGamePlatforms[GamePlatform.MICROSOFT] = DefaultGamePlatforms[GamePlatform.MICROSOFT];
-					availableGamePlatforms[GamePlatform.MICROSOFT].runPath = value_found.data as string;
-				}
-			}
-		} else if (desktop_platform === 'linux') {
-			// Add platform to availableGamePlatforms and setup data if platform is available, do nothing otherwise
-			try {
-				const vdfString = fs.readFileSync(`${homedir()}/.steam/registry.vdf`).toString();
-				const vdfObject = parseVdf(vdfString);
-				// Values are always strings in KeyValues, so '1' rather than 1.
-				const apps = (((vdfObject.Registry as VdfObject)?.HKCU as VdfObject)?.Software as VdfObject)
-					?.Valve as VdfObject;
-				const amongUs = ((apps?.Steam as VdfObject)?.Apps as VdfObject)?.['945360'] as VdfObject | undefined;
-				if (amongUs?.installed === '1') {
-					availableGamePlatforms[GamePlatform.STEAM] = DefaultGamePlatforms[GamePlatform.STEAM];
-				}
-			} catch {
-				/* empty */
+				'SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages' +
+					'\\' +
+					microsoft_regkey
+			).find((value) => (value ? value.name === 'PackageRootFolder' : false));
+			if (value_found) {
+				availableGamePlatforms[GamePlatform.MICROSOFT] = DefaultGamePlatforms[GamePlatform.MICROSOFT];
+				availableGamePlatforms[GamePlatform.MICROSOFT].runPath = value_found.data as string;
 			}
 		}
 

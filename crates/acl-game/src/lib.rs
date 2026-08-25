@@ -1,9 +1,13 @@
 //! Reading Among Us out of another process.
 //!
 //! Phase 2 of `docs/rust-port/04-implementation-plan.md`. The layer that touches the
-//! operating system is small and lives in [`windows`] and [`linux`]; everything above it
-//! takes a `&dyn ProcessMemory` and returns a `Result`, which is what lets gate G1 replay
-//! recorded frames and a fuzzer explore the same code without a game running.
+//! operating system is small and lives in [`windows`]; everything above it takes a
+//! `&dyn ProcessMemory` and returns a `Result`, which is what lets gate G1 replay recorded
+//! frames and a fuzzer explore the same code without a game running.
+//!
+//! There was a `linux` module beside it until 2026-08-25, reading through
+//! `process_vm_readv`. It went with the client's Linux support: it was the only thing in
+//! the workspace that pulled in `nix`, and nobody here could run it.
 
 pub mod dotnet;
 pub mod memory;
@@ -17,8 +21,6 @@ pub mod state;
 pub mod store;
 pub mod systems;
 
-#[cfg(target_os = "linux")]
-pub mod linux;
 #[cfg(windows)]
 pub mod windows;
 

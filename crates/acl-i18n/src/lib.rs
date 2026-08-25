@@ -1,7 +1,7 @@
 //! The localisation loader.
 //!
 //! The 37 locale directories under `static/locales` stay i18next JSON and are read as-is.
-//! `docs/rust-port/04-implementation-plan.md` §4.8 measured all 4,736 strings and found no
+//! `docs/rust-port/04-implementation-plan.md` §4.8 measured all 4,631 strings and found no
 //! plural key and no selector, so every feature that would distinguish a localisation
 //! framework from a flat map is unused. Keeping the JSON also means the Electron client
 //! and this one consume the identical tree during the beta: one Crowdin project, one
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn fills_in_the_one_placeholder_in_the_tree() {
-        // §4.8 measured no interpolation at all across 4,736 strings. H2 added exactly
+        // §4.8 measured no interpolation at all across the corpus. H2 added exactly
         // one, and this is it — the loader carries the substitution because of it.
         let english = Catalogue::load(&locales(), "en").expect("english");
         let filled = english.t_with(

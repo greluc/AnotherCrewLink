@@ -31,11 +31,6 @@ windows-sys = { version = "0.61", features = [
 	"Win32_System_Diagnostics_Debug",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# process_vm_readv is a safe fn whose lengths derive from the slices passed in, so the
-# Linux reader contains no unsafe at all.
-nix = { version = "0.30", default-features = false, features = ["uio", "process"] }
-
 [dev-dependencies]
 flate2.workspace = true
 serde.workspace = true

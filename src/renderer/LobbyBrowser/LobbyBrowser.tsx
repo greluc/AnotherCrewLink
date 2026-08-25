@@ -16,6 +16,7 @@ import i18next from 'i18next';
 import { Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Tooltip } from '@mui/material';
 import languages from '../language/languages';
 import type { PublicLobbyMap, PublicLobby } from '../../common/PublicLobby';
+import { sortLobbies } from './sortLobbies';
 import { modList, type ModsType } from '../../common/Mods';
 import { GameState } from '../../common/AmongUsState';
 import SettingsStore from '../settings/SettingsStore';
@@ -53,24 +54,6 @@ const useStyles = makeStyles()({
 		maxHeight: 'calc(100vh - 130px)',
 	},
 });
-
-function sortLobbies(a: PublicLobby, b: PublicLobby) {
-	if (a.gameState === GameState.LOBBY && b.gameState !== GameState.LOBBY) {
-		return -1;
-	} else if (b.gameState === GameState.LOBBY && a.gameState !== GameState.LOBBY) {
-		return 1;
-	} else {
-		if (b.current_players === b.max_players && a.current_players !== a.max_players) {
-			return -1;
-		}
-		if (a.current_players < b.current_players) {
-			return 1;
-		} else if (a.current_players > b.current_players) {
-			return -1;
-		}
-		return 0;
-	}
-}
 
 function getModName(mod: string): string {
 	return modList.find((o) => o.id === mod)?.label || (mod ?? 'None');

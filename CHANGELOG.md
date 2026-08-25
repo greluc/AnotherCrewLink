@@ -1,5 +1,57 @@
 # AnotherCrewLink Changelog
 
+## v1.0.6
+
+This release drops Linux and raises the minimum Windows to 11. If you run AnotherCrewLink
+on Linux, this release will not reach you: 1.0.5 was the last one with an AppImage, and
+your client will go on reporting that it is up to date. The first note below says what
+that means and what your options are.
+
+### Removed
+
+- **Linux is no longer supported.** There is no AppImage in this release and there will
+  not be one again. The reason is not that it was broken: it is that nobody working on
+  this project has a Linux machine to run it on, and every release was going out with the
+  Linux build tested by nothing but the fact that it compiled. Shipping a build under
+  those conditions is a promise this project cannot keep.
+
+  What this means if you are on Linux. The 1.0.5 AppImage keeps working exactly as it
+  does today — nothing switches off, and the voice server does not stop talking to it.
+  What stops is updates. Your client checks a feed of its own that only ever lists Linux
+  builds; that feed stops at 1.0.5, so the client will keep saying you are up to date,
+  and it will be telling the truth. When a
+  future release changes something on the wire, or Among Us moves and the memory offsets
+  change, 1.0.5 will stop working and no update will arrive to fix it.
+
+  If you want to keep playing on Linux, [BetterCrewLink](https://github.com/OhMyGuus/BetterCrewLink)
+  still publishes Linux builds. It uses a different, incompatible voice server, so
+  everyone in your group has to move together.
+
+- **Windows 10 and older are no longer supported, and there is no 32-bit build.**
+  Windows 11 is the floor, for the same reason: it is what can actually be tested here.
+  The installer is unchanged in name and in how it updates, so nothing about installing
+  or updating looks different on a supported machine.
+
+  If you are on Windows 10 this release will very likely still install and run — nothing
+  was added that requires 11, and nothing checks your version. It is simply no longer
+  tested, so a future release may break it without anyone noticing. There is no 32-bit
+  Windows 11, so the 32-bit half of the installer had nothing left to install onto.
+
+### Fixed
+
+- **The public lobby list reshuffled itself, and full lobbies could sit above the
+  ones you could actually join.** The list is meant to put lobbies you can join
+  first, then the fullest of those, because a lobby with eight players is a game
+  about to start. One of those rules only worked in one direction, and the result
+  was that the same two lobbies came out in a different order depending on the
+  order the server happened to send them — so the list rearranged itself between
+  refreshes for no reason you could see, and a lobby with no room could appear at
+  the top.
+
+  A lobby the server reports as over its own limit now counts as full as well. It
+  used to be treated as joinable, and because it also had the most players it went
+  straight to the top.
+
 ## v1.0.5
 
 A removal release. Two features are gone — hosting for mobile players, and the OBS

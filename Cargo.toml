@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/acl-types", "crates/acl-audio", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "experiments/overlay-probe", "experiments/apm-probe"]
+members = ["crates/acl-types", "crates/acl-audio", "crates/acl-core", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "crates/acl-ui", "experiments/overlay-probe", "experiments/apm-probe", "experiments/webrtc-probe"]
 
 # CI checks the server repository out into `server/` to run the conformance test against
 # it. Without this, cargo folds that crate into this workspace and refuses to build it —
@@ -45,6 +45,7 @@ indexing_slicing = "warn"
 # unversioned path dependency through unnoticed.
 acl-types = { path = "crates/acl-types", version = "0.0.0" }
 acl-audio = { path = "crates/acl-audio", version = "0.0.0" }
+acl-ipc = { path = "crates/acl-ipc", version = "0.0.0" }
 kurbo = "0.13.1"
 serde = { version = "1.0", features = ["derive"] }
 # platform-verifier reads the operating system's certificate store, which is what
@@ -98,6 +99,14 @@ tokio = { version = "1.53", features = ["rt", "net", "time", "macros"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tracing = "0.1"
+# Pinned exactly for the reason the codec and the resampler are: this one decides what
+# goes on the wire between two clients, and a patch release that changes a default would
+# be heard before it was noticed. The maintainer also states that a minor bump may carry
+# breaking changes, which is unusual enough to pin against on its own.
+webrtc = "=0.20.3"
+# The WHATWG URL algorithm, for the one setting that decides where every signal goes.
+# Already in the tree beneath `webrtc`, so this is a direct edge rather than a crate.
+url = "2.5"
 
 [profile.release]
 # A panic in the elevated helper must not unwind through the FFI boundary into the game's
