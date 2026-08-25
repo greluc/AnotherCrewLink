@@ -702,15 +702,28 @@ fixtures.
 > arrives the test stops skipping, and either it passes or it names the field it differs
 > on.
 >
-> **Status: the harness is built and the corpus is empty.**
-> `src/main/recorder.ts` and `crates/acl-game/tests/parity.rs` both exist and the
-> replay works; `test/recordings/` has nothing in it, so the test skips loudly
-> rather than passing. Tracked as
-> [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10), because the
-> input cannot be produced at a keyboard — a fixture written by hand would only
-> prove the two implementations share an author's assumptions, which is the one
-> thing this gate is not for. It needs somebody to play the game with
-> `ACL_RECORD` set.
+> **Status, corrected 2026-08-25: the corpus is not empty and the gate runs.**
+> This paragraph said "the corpus is empty" and was left behind when the first
+> recordings landed on 2026-08-24. `test/recordings/` holds three sessions — a
+> menu, 64-bit freeplay, and a real nine-player lobby on 32-bit — and
+> `cargo test -p acl-game --test parity` reports **4653 frames, no differences**.
+> Getting there took eleven fixes to the Rust reader that nothing but real frames
+> could have found.
+>
+> What is missing is narrower than "a corpus": **a live online round**. Freeplay
+> holds the raw game state at 1 or 3 throughout, so every frame in it derives to
+> `LOBBY` — the meeting-hud branch is unreachable, and so is everything guarded by
+> `state === TASKS`. Cameras, doors and comms sabotage are never read on either
+> side, and the gate passes over them because both readers skip them identically,
+> which says nothing about whether either is right. `isDead` and `lightRadius`
+> under a lights sabotage are in the same position.
+>
+> So G1 is met for the states the corpus reaches and open for the rest. It is
+> tracked as [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10) and
+> needs somebody to play an online game with `ACL_RECORD` set;
+> `test/recordings/README.md` has the procedure. A fixture written by hand would
+> only prove the two implementations share an author's assumptions, which is the
+> one thing this gate is not for.
 
 > **Gate G1 — parity of the reader.**
 > For every recorded frame, the Rust reader's `AmongUsState` must equal the
