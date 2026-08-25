@@ -1355,6 +1355,17 @@ against the same game.
 > running 1.x actually holds, and that is either a name added to 1.x in a patch
 > release first, or the userData path Electron already keys on. Decided in P5, not
 > here — but not by assuming.
+>
+> **How to find out, since it is a measurement and not a judgement.** Chromium's
+> `ProcessSingleton` on Windows is a hidden message window plus a mutex, both named
+> from the user-data directory rather than from the product — which is why no name
+> in this tree matches it. Start 1.x, enumerate its window classes and named kernel
+> objects, and the answer is whichever one a second launch collides with.
+>
+> One negative result already, taken on 2026-08-25 with the client not running:
+> `%APPDATA%\AnotherCrewLink` carries no `SingletonLock`. That is the POSIX half of
+> the same mechanism, so its absence confirms the Windows path is the in-memory one
+> rather than a file a second implementation could take.
 
 ## 4.8 Phase 6 — GUI (11.5 weeks)
 
