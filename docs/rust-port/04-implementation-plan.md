@@ -692,6 +692,16 @@ per map (Skeld, Mira, Polus, Airship, Fungle) covering lobby, tasks, meeting,
 vents, cameras, sabotage, and deaths. Those recordings become `ReplayProcess`
 fixtures.
 
+> **Deferred 2026-08-25, with an owner and a trigger.** The recording session happens
+> when the maintainer can get a play group together again. That is a commitment with a
+> precondition rather than an open question, and it is the difference between a gate
+> waiting on somebody and a gate waiting on nobody — but the gate itself is unchanged, so
+> P2 is not complete and nothing downstream may assume the reader has been proved.
+>
+> Nothing here is blocked on it. The parity harness is built and idle; when the corpus
+> arrives the test stops skipping, and either it passes or it names the field it differs
+> on.
+>
 > **Status: the harness is built and the corpus is empty.**
 > `src/main/recorder.ts` and `crates/acl-game/tests/parity.rs` both exist and the
 > replay works; `test/recordings/` has nothing in it, so the test skips loudly
