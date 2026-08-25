@@ -11,3 +11,4 @@
 //! feature, because nothing could reach it to check.
 
 pub mod lobby_list;
+pub mod renderer;
