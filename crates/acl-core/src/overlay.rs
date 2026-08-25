@@ -1,51 +1,29 @@
 //! Whether the in-game overlay can appear, and the honest answer when it cannot.
 //!
-//! Two of §4.7's items, and both are named there because both have an obvious wrong
-//! implementation:
+//! **Windows only since 2026-08-25.** This module used to hold two decisions, and the
+//! larger one was Linux's: a `Backend` enum of `Windows`, `X11` and `Wayland`, gated
+//! on the live winit backend rather than on `XDG_SESSION_TYPE`, so that an `XWayland`
+//! session — which has a working overlay — was not greyed out by a variable that
+//! describes the session instead of the backend the process actually got. That was the
+//! subtle half, and it went with the client's Linux support.
 //!
-//! **Wayland detection gated on the live backend, not on `XDG_SESSION_TYPE`.** That
-//! variable describes the session, not the backend the process actually got. A player on
-//! a Wayland session whose window system handed them `XWayland` has a working overlay
-//! today, and reading the variable would grey it out for them — a regression delivered as
-//! a feature, to the users least able to argue with it.
-//!
-//! **Exclusive fullscreen.** With Fullscreen Optimizations off, a layered window does not
-//! appear at all. The alternative is a swapchain hook, which this project must not ship:
+//! What is left is one bit: with Fullscreen Optimizations off, a layered window does not
+//! appear at all. The alternative is a swapchain hook, which this project must not ship —
 //! it is the technique anti-cheat systems exist to detect, in a client that already asks
-//! players to run it beside a game. So the overlay says it cannot appear and why, and the
-//! setting the player can change is named.
+//! players to run it beside a game. So the overlay says it cannot appear, and names the
+//! setting the player can change.
 //!
-//! Neither decision touches a platform API here. What the backend is and whether the game
-//! is in exclusive fullscreen are questions for the platform layer; what to do with the
-//! answers is this.
-
-/// The windowing backend the process actually got.
-///
-/// Deliberately not "the session type". `winit` reports which backend it initialised, and
-/// that is the only thing that decides whether a layered, click-through, always-on-top
-/// window is available.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Backend {
-    /// Win32. `experiments/overlay-probe` measured `layered=true transparent=true
-    /// topmost=true` here.
-    Windows,
-    /// X11, including `XWayland`.
-    X11,
-    /// Wayland proper.
-    Wayland,
-}
+//! One bit does not need a module, and this one keeps its name anyway. A `bool` at the
+//! call site says nothing about *which* way round it runs or what to tell the player; the
+//! enum below is the message, and `availability` is where the commitment not to hook a
+//! swapchain is written down. Whether the game is in exclusive fullscreen is a question
+//! for the platform layer; what to do with the answer is this.
 
 /// Whether the overlay can be shown, and if not, what to say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayAvailability {
     /// It can be shown.
     Available,
-    /// Wayland gives no protocol for an always-on-top, click-through window that follows
-    /// another application's.
-    ///
-    /// Not a bug and not something a setting fixes. An `XWayland` session works, which is
-    /// worth saying, because for most players it is one login-screen choice away.
-    UnsupportedCompositor,
     /// The game is in exclusive fullscreen, where a layered window is not composited.
     ///
     /// Recoverable, and by the player: turning Fullscreen Optimizations on, or running
@@ -60,30 +38,20 @@ impl OverlayAvailability {
     pub const fn is_available(self) -> bool {
         matches!(self, Self::Available)
     }
-
-    /// Whether the player can do something about it.
-    ///
-    /// The two unavailable cases are not the same and must not share a message: one is a
-    /// setting away and the other is a session away.
-    #[must_use]
-    pub const fn is_recoverable_by_the_player(self) -> bool {
-        matches!(self, Self::HiddenByExclusiveFullscreen)
-    }
 }
 
-/// What the overlay can do, given the backend and what the game is doing.
+/// What the overlay can do, given what the game is doing.
 ///
-/// The compositor is checked first. On Wayland the overlay cannot appear whatever the
-/// game does, so reporting a fullscreen problem there would send the player to change a
-/// setting that changes nothing.
+/// There was a `backend` argument here until Linux went. `is_recoverable_by_the_player`
+/// went with it: it distinguished the fullscreen case, which a setting fixes, from
+/// Wayland, which a setting does not, and with one unavailable case left it was only
+/// `!is_available()` under another name.
 #[must_use]
-pub const fn availability(backend: Backend, exclusive_fullscreen: bool) -> OverlayAvailability {
-    match backend {
-        Backend::Wayland => OverlayAvailability::UnsupportedCompositor,
-        Backend::Windows | Backend::X11 if exclusive_fullscreen => {
-            OverlayAvailability::HiddenByExclusiveFullscreen
-        }
-        Backend::Windows | Backend::X11 => OverlayAvailability::Available,
+pub const fn availability(exclusive_fullscreen: bool) -> OverlayAvailability {
+    if exclusive_fullscreen {
+        OverlayAvailability::HiddenByExclusiveFullscreen
+    } else {
+        OverlayAvailability::Available
     }
 }
 
@@ -96,86 +64,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn xwayland_keeps_the_overlay_it_has_today() {
-        // The trap §4.7 names. `XDG_SESSION_TYPE=wayland` with an X11 backend is an
-        // ordinary XWayland session, and the overlay works there. A check on the variable
-        // would grey it out — a regression shipped as a feature.
-        //
-        // This function cannot make that mistake, because the session type is not one of
-        // its arguments. The test says so, so that adding it later is a visible change.
-        assert_eq!(
-            availability(Backend::X11, false),
-            OverlayAvailability::Available
-        );
-    }
-
-    #[test]
-    fn wayland_proper_is_unsupported_and_says_so_as_a_compositor_problem() {
-        assert_eq!(
-            availability(Backend::Wayland, false),
-            OverlayAvailability::UnsupportedCompositor
-        );
-        assert!(!availability(Backend::Wayland, false).is_available());
-    }
-
-    #[test]
-    fn wayland_does_not_blame_the_game_for_the_compositor() {
-        // Reporting a fullscreen problem on Wayland sends the player to change a setting
-        // that changes nothing, and they conclude the client is broken rather than
-        // unsupported.
-        assert_eq!(
-            availability(Backend::Wayland, true),
-            OverlayAvailability::UnsupportedCompositor
-        );
-    }
-
-    #[test]
-    fn exclusive_fullscreen_hides_the_overlay_on_a_backend_that_otherwise_works() {
-        // With Fullscreen Optimizations off, a layered window is not composited. The
-        // alternative is a swapchain hook, which this client will not ship.
-        for backend in [Backend::Windows, Backend::X11] {
-            assert_eq!(
-                availability(backend, true),
-                OverlayAvailability::HiddenByExclusiveFullscreen,
-                "{backend:?}"
-            );
-        }
-    }
-
-    #[test]
     fn windows_has_the_overlay_the_probe_measured() {
         // `experiments/overlay-probe`: layered, transparent, topmost, exstyle 0x000c0138.
-        assert_eq!(
-            availability(Backend::Windows, false),
-            OverlayAvailability::Available
-        );
+        assert_eq!(availability(false), OverlayAvailability::Available);
+        assert!(availability(false).is_available());
     }
 
     #[test]
-    fn the_two_unavailable_cases_do_not_share_a_message() {
-        // One is a setting away, the other is a session away. A single "the overlay is
-        // unavailable" would send half the affected players looking in the wrong place.
-        assert!(OverlayAvailability::HiddenByExclusiveFullscreen.is_recoverable_by_the_player());
-        assert!(!OverlayAvailability::UnsupportedCompositor.is_recoverable_by_the_player());
+    fn exclusive_fullscreen_hides_it() {
+        // With Fullscreen Optimizations off, a layered window is not composited. The
+        // alternative is a swapchain hook, which this client will not ship.
+        assert_eq!(
+            availability(true),
+            OverlayAvailability::HiddenByExclusiveFullscreen
+        );
+        assert!(!availability(true).is_available());
+    }
+
+    #[test]
+    fn the_unavailable_case_is_named_rather_than_being_a_bare_false() {
+        // The point of keeping an enum for one bit. A player told only "the overlay is
+        // unavailable" has nowhere to go; this variant names Fullscreen Optimizations,
+        // and a future second cause has somewhere to be added without changing callers
+        // from `bool`.
         assert_ne!(
             OverlayAvailability::HiddenByExclusiveFullscreen,
-            OverlayAvailability::UnsupportedCompositor
+            OverlayAvailability::Available
         );
-    }
-
-    #[test]
-    fn every_combination_is_decided() {
-        for backend in [Backend::Windows, Backend::X11, Backend::Wayland] {
-            for fullscreen in [true, false] {
-                let answer = availability(backend, fullscreen);
-                // Nothing falls through to a default, and `Available` is only ever the
-                // answer when it is really available.
-                assert_eq!(
-                    answer.is_available(),
-                    backend != Backend::Wayland && !fullscreen,
-                    "{backend:?} fullscreen={fullscreen}"
-                );
-            }
-        }
     }
 }

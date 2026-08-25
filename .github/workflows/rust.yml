@@ -99,16 +99,10 @@ jobs:
           git diff --exit-code crates/acl-types/src/collider_data.rs
 
   test:
-    strategy:
-      # One target's failure must not hide another's.
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.os }}
+    # One target since 2026-08-25. There was an `x86_64-unknown-linux-gnu` leg with an apt
+    # step for GTK, xkbcommon, Wayland and ALSA; it went with the client's Linux support,
+    # and so did the `fail-fast: false` that kept one leg from hiding the other.
+    runs-on: windows-latest
     steps:
       - name: Check out Git repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -116,22 +110,9 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
 
-      # eframe links against the system's windowing and GL stack. Without these the Linux
-      # leg fails at link time with an error about a missing .so rather than anything to
-      # do with this code.
-      - name: Install the Linux windowing and audio libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
-            libxi-dev libgl1-mesa-dev libegl1-mesa-dev libasound2-dev xvfb
-
       - name: Build
-        run: cargo build --locked --workspace --all-targets --target ${{ matrix.target }}
+        run: cargo build --locked --workspace --all-targets --target x86_64-pc-windows-msvc
 
-      # 32-bit binaries run on a 64-bit Windows host, so this is a real run rather than a
-      # cross-compile check.
       # The conformance test drives this client against the Rust server, which is itself
       # verified against the reference socket.io-client from Node. Checking out a second
       # repository to run it is the price of testing against an implementation that did
@@ -148,40 +129,8 @@ jobs:
 
       - name: Test
         env:
-          ACL_SERVER_BIN: ${{ runner.os == 'Windows' && 'server/target/debug/acl-server.exe' || 'server/target/debug/acl-server' }}
-        run: cargo test --locked --workspace --target ${{ matrix.target }}
-
-  overlay-linux:
-    # The Linux leg of experiment 1. Windows answers it locally by asking the OS for the
-    # window's extended styles; here the question is narrower and still worth asking —
-    # does eframe start, get a transparent surface and exit cleanly under a software
-    # renderer, or does it take the whole process down.
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out Git repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install the pinned Rust toolchain
-        run: rustup show active-toolchain
-
-      - name: Install the Linux windowing and audio libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev \
-            libxi-dev libgl1-mesa-dev libegl1-mesa-dev libasound2-dev xvfb
-
-      - name: Run the overlay probe under a virtual display
-        env:
-          # llvmpipe. A runner has no GPU, and the failure this experiment is looking for
-          # is renderer-specific — so naming the renderer is part of the result rather
-          # than an implementation detail.
-          LIBGL_ALWAYS_SOFTWARE: '1'
-        run: |
-          set -o pipefail
-          xvfb-run -a --server-args='-screen 0 1280x800x24' \
-            cargo run --locked -p overlay-probe 2>&1 | tee probe.log
-          grep -q 'RESULT arch=linux' probe.log
+          ACL_SERVER_BIN: server/target/debug/acl-server.exe
+        run: cargo test --locked --workspace --target x86_64-pc-windows-msvc
 
   deny:
     # Advisories, licences, duplicate versions and crate sources — the policy is in
@@ -245,7 +194,12 @@ jobs:
     # against an artefact months after the tree that built it moved on. Proving that here
     # means the release build in P7 inherits a mechanism that is known to work rather than
     # one that was written down.
-    runs-on: ubuntu-latest
+    #
+    # On Windows, unlike the two jobs above it: this one compiles a binary rather than
+    # reading metadata, and since 2026-08-25 that is the only target anything ships for.
+    # `deny` and `attribution` stay on Linux runners -- they resolve a dependency graph,
+    # and about.toml names the target it describes.
+    runs-on: windows-latest
     steps:
       - name: Check out Git repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -260,4 +214,4 @@ jobs:
         run: cargo auditable build --locked --release -p apm-probe
 
       - name: The list is actually in the binary
-        run: cargo audit bin target/release/apm-probe
+        run: cargo audit bin target/release/apm-probe.exe

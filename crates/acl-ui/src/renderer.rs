@@ -2,8 +2,12 @@
 //!
 //! §4.8: "No GPU is not a failure to launch." Chromium gives every user `SwiftShader` for
 //! free today, and this project has already met the problem in the field — hardware
-//! acceleration is off unconditionally on Linux and switchable on Windows through a
-//! shipped setting.
+//! acceleration is switchable through a shipped setting.
+//!
+//! There was a `Platform` enum here until 2026-08-25. Its `Linux` arm never offered
+//! hardware at all, matching an Electron client that disabled acceleration
+//! unconditionally there. Both went with the client's Linux support, and the Electron
+//! side lost the unconditional arm in the same change.
 //!
 //! Three decisions, and two of them are about what *not* to do.
 //!
@@ -28,15 +32,6 @@
 /// an absent key means every player who turned acceleration off gets it back on.
 pub const HARDWARE_ACCELERATION_KEY: &str = "hardware_acceleration";
 
-/// Which platform's chain to build.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
-    /// wgpu over DX12, then WARP, then the CPU.
-    Windows,
-    /// Software from the start, matching what ships today.
-    Linux,
-}
-
 /// One rung of the chain.
 ///
 /// Deliberately three. A `Glow` variant is not missing by oversight — see the module
@@ -45,7 +40,7 @@ pub enum Platform {
 pub enum Renderer {
     /// wgpu on the platform's own graphics API.
     Hardware,
-    /// wgpu's fallback adapter: WARP on Windows, lavapipe or llvmpipe on Linux.
+    /// wgpu's fallback adapter: WARP.
     SoftwareAdapter,
     /// A CPU rasteriser, with no graphics API beneath it at all.
     CpuRasteriser,
@@ -53,14 +48,12 @@ pub enum Renderer {
 
 /// The renderers to try, best first.
 ///
-/// Linux never offers [`Renderer::Hardware`], whatever the setting says. That is not this
-/// phase's judgement: the Electron client disables acceleration unconditionally there,
-/// and matching it means the port does not introduce a class of GPU bug on the platform
-/// with the fewest users to report it.
+/// wgpu over DX12, then WARP, then the CPU. Only the first rung is the setting's to
+/// remove: the two below it are what "no GPU is not a failure to launch" means.
 #[must_use]
-pub fn chain(platform: Platform, hardware_acceleration: bool) -> Vec<Renderer> {
+pub fn chain(hardware_acceleration: bool) -> Vec<Renderer> {
     let mut rungs = Vec::with_capacity(3);
-    if platform == Platform::Windows && hardware_acceleration {
+    if hardware_acceleration {
         rungs.push(Renderer::Hardware);
     }
     rungs.push(Renderer::SoftwareAdapter);
@@ -99,7 +92,7 @@ mod tests {
     #[test]
     fn windows_tries_hardware_then_warp_then_the_cpu() {
         assert_eq!(
-            chain(Platform::Windows, true),
+            chain(true),
             [
                 Renderer::Hardware,
                 Renderer::SoftwareAdapter,
@@ -114,7 +107,7 @@ mod tests {
         // ES 3.0, and a Windows machine without a vendor driver offers software GL 1.1.
         // The RDP and bare-VM cases a GL rung would exist for are the ones it cannot
         // serve. The chain goes straight from the native API to WARP.
-        let windows = chain(Platform::Windows, true);
+        let windows = chain(true);
         assert_eq!(windows.len(), 3);
         assert_eq!(windows[1], Renderer::SoftwareAdapter);
     }
@@ -122,38 +115,22 @@ mod tests {
     #[test]
     fn turning_acceleration_off_starts_at_software() {
         assert_eq!(
-            chain(Platform::Windows, false),
+            chain(false),
             [Renderer::SoftwareAdapter, Renderer::CpuRasteriser]
         );
-    }
-
-    #[test]
-    fn linux_never_offers_hardware_whatever_the_setting_says() {
-        // The Electron client disables acceleration unconditionally there. Matching it
-        // means the port does not introduce a class of GPU bug on the platform with the
-        // fewest users to report it.
-        for accelerated in [true, false] {
-            assert_eq!(
-                chain(Platform::Linux, accelerated),
-                [Renderer::SoftwareAdapter, Renderer::CpuRasteriser],
-                "hardware_acceleration={accelerated}"
-            );
-        }
     }
 
     #[test]
     fn every_chain_ends_at_something_that_cannot_fail_for_want_of_a_gpu() {
         // "No GPU is not a failure to launch." The last rung has no graphics API beneath
         // it, so there is always somewhere left to go.
-        for platform in [Platform::Windows, Platform::Linux] {
-            for accelerated in [true, false] {
-                let rungs = chain(platform, accelerated);
-                assert_eq!(
-                    rungs.last(),
-                    Some(&Renderer::CpuRasteriser),
-                    "{platform:?} {accelerated}"
-                );
-            }
+        for accelerated in [true, false] {
+            let rungs = chain(accelerated);
+            assert_eq!(
+                rungs.last(),
+                Some(&Renderer::CpuRasteriser),
+                "hardware_acceleration={accelerated}"
+            );
         }
     }
 

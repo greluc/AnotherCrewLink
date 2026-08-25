@@ -6,10 +6,11 @@
 # removed the target lost its only reason, and with it went the NASM requirement on the
 # build machine, the MSVC alignment hazard in struct parsing, and the foreclosure of
 # LiveKit's libwebrtc binding.
+#
+# `x86_64-unknown-linux-gnu` went on 2026-08-25 with the client's Linux support. The host
+# target is still installed automatically wherever this runs, which is what lets the
+# supply-chain and attribution jobs keep using Linux runners for work that has no target.
 [toolchain]
 channel = "1.98.0"
 components = ["rustfmt", "clippy"]
-targets = [
-	"x86_64-pc-windows-msvc",
-	"x86_64-unknown-linux-gnu",
-]
+targets = ["x86_64-pc-windows-msvc"]

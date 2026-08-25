@@ -31,13 +31,11 @@ accepted = [
     "Zlib",
 ]
 
-# All three shipping targets, so a Windows-only or Linux-only dependency is not missing
-# from the attribution of the build that actually contains it.
-targets = [
-    "x86_64-pc-windows-msvc",
-    "i686-pc-windows-msvc",
-    "x86_64-unknown-linux-gnu",
-]
+# The one shipping target. This listed three until 2026-08-25: `i686-pc-windows-msvc` was
+# already stale -- it lost its reason when the injection path went and rust-toolchain.toml
+# dropped it on 2026-08-24 -- and `x86_64-unknown-linux-gnu` went with the client's Linux
+# support. Attribution for a target nothing is built for describes a binary nobody has.
+targets = ["x86_64-pc-windows-msvc"]
 
 # Build-time-only crates are not distributed, so their licences are not distributed
 # either.

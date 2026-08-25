@@ -14,8 +14,11 @@
 //!
 //! Electron's rule is `app.getPath('userData')`, which is the platform's application-data
 //! directory joined with the application's name — `productName` from `package.json`, not
-//! `name`. On Windows that is `%APPDATA%`; on Unix `$XDG_CONFIG_HOME`, falling back to
-//! `$HOME/.config`.
+//! `name`. On Windows that is `%APPDATA%`.
+//!
+//! There was a `Platform` enum here until 2026-08-25, with a `Unix` arm resolving
+//! `$XDG_CONFIG_HOME` and falling back to `$HOME/.config`, and the enum existed so both
+//! rules were testable from either host. One rule needs no enum to choose between.
 //!
 //! **Confirmed against a real installation on 2026-08-25**, not only against the source
 //! that produces it: `%APPDATA%\AnotherCrewLink` holds `config.json`, `lookup.json`,
@@ -32,52 +35,26 @@ use std::path::{Path, PathBuf};
 /// used to be — with no error anywhere, only defaults.
 pub const APP_DIRECTORY: &str = "AnotherCrewLink";
 
-/// Which rule to resolve by.
-///
-/// Passed in rather than read from `cfg!`, so both are testable from either host. A
-/// path layout that can only be checked on the platform it describes is a path layout
-/// that gets checked once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
-    /// `%APPDATA%\AnotherCrewLink`.
-    Windows,
-    /// `$XDG_CONFIG_HOME/AnotherCrewLink`, or `$HOME/.config/AnotherCrewLink`.
-    Unix,
-}
-
-impl Platform {
-    /// The one this build is for.
-    #[must_use]
-    pub const fn host() -> Self {
-        if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::Unix
-        }
-    }
-}
-
 /// Why the directory could not be worked out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PathsError {
-    /// Neither `%APPDATA%` nor, on Unix, `$XDG_CONFIG_HOME` or `$HOME` was set.
+    /// `%APPDATA%` was not set.
     ///
     /// Not a case to paper over with a relative path: writing the configuration into the
     /// working directory would scatter it wherever the client happened to be launched
     /// from, and the next launch would find none of it.
-    #[error("no application-data directory: none of APPDATA, XDG_CONFIG_HOME or HOME is set")]
+    #[error("no application-data directory: APPDATA is not set")]
     NoHome,
 }
 
 /// What the environment supplies, so the rule can be tested without one.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Environment<'a> {
-    /// `%APPDATA%`, on Windows.
+    /// `%APPDATA%`.
+    ///
+    /// An empty variable counts as unset, for the reason the XDG arm used to give: a
+    /// shell that exports it empty otherwise puts the configuration in a filesystem root.
     pub app_data: Option<&'a str>,
-    /// `$XDG_CONFIG_HOME`, on Unix.
-    pub xdg_config_home: Option<&'a str>,
-    /// `$HOME`, on Unix.
-    pub home: Option<&'a str>,
 }
 
 /// Every location the client reads or writes.
@@ -92,25 +69,13 @@ impl Paths {
     /// # Errors
     ///
     /// [`PathsError::NoHome`] when nothing in the environment names a place to put files.
-    pub fn resolve(platform: Platform, environment: Environment<'_>) -> Result<Self, PathsError> {
-        let base: PathBuf = match platform {
-            Platform::Windows => environment
-                .app_data
-                .map(PathBuf::from)
-                .ok_or(PathsError::NoHome)?,
-            Platform::Unix => match environment.xdg_config_home {
-                // An empty variable is unset. The XDG specification says so, and a shell
-                // that exports `XDG_CONFIG_HOME=` otherwise puts the configuration in the
-                // filesystem root.
-                Some(configured) if !configured.is_empty() => PathBuf::from(configured),
-                _ => {
-                    let home = environment.home.filter(|home| !home.is_empty());
-                    PathBuf::from(home.ok_or(PathsError::NoHome)?).join(".config")
-                }
-            },
-        };
+    pub fn resolve(environment: Environment<'_>) -> Result<Self, PathsError> {
+        let base = environment
+            .app_data
+            .filter(|app_data| !app_data.is_empty())
+            .ok_or(PathsError::NoHome)?;
         Ok(Self {
-            user_data: base.join(APP_DIRECTORY),
+            user_data: PathBuf::from(base).join(APP_DIRECTORY),
         })
     }
 
@@ -180,13 +145,9 @@ mod tests {
     use super::*;
 
     fn windows(app_data: &str) -> Paths {
-        Paths::resolve(
-            Platform::Windows,
-            Environment {
-                app_data: Some(app_data),
-                ..Environment::default()
-            },
-        )
+        Paths::resolve(Environment {
+            app_data: Some(app_data),
+        })
         .unwrap()
     }
 
@@ -203,77 +164,16 @@ mod tests {
     }
 
     #[test]
-    fn unix_prefers_xdg_config_home() {
-        let paths = Paths::resolve(
-            Platform::Unix,
-            Environment {
-                xdg_config_home: Some("/home/p/.config-elsewhere"),
-                home: Some("/home/p"),
-                ..Environment::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            paths.user_data(),
-            Path::new("/home/p/.config-elsewhere/AnotherCrewLink")
-        );
-    }
-
-    #[test]
-    fn unix_falls_back_to_home_dot_config() {
-        let paths = Paths::resolve(
-            Platform::Unix,
-            Environment {
-                home: Some("/home/p"),
-                ..Environment::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            paths.user_data(),
-            Path::new("/home/p/.config/AnotherCrewLink")
-        );
-    }
-
-    #[test]
-    fn an_empty_xdg_variable_counts_as_unset() {
-        // The XDG specification says so, and a shell that exports `XDG_CONFIG_HOME=`
-        // would otherwise put the configuration in the filesystem root.
-        let paths = Paths::resolve(
-            Platform::Unix,
-            Environment {
-                xdg_config_home: Some(""),
-                home: Some("/home/p"),
-                ..Environment::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            paths.user_data(),
-            Path::new("/home/p/.config/AnotherCrewLink")
-        );
-    }
-
-    #[test]
     fn nothing_in_the_environment_is_an_error_rather_than_a_relative_path() {
         // Writing into the working directory would scatter the configuration wherever the
         // client was launched from, and the next launch would find none of it.
         assert_eq!(
-            Paths::resolve(Platform::Unix, Environment::default()),
+            Paths::resolve(Environment::default()),
             Err(PathsError::NoHome)
         );
+        // An exported-but-empty APPDATA is unset, not a root directory.
         assert_eq!(
-            Paths::resolve(Platform::Windows, Environment::default()),
-            Err(PathsError::NoHome)
-        );
-        assert_eq!(
-            Paths::resolve(
-                Platform::Unix,
-                Environment {
-                    home: Some(""),
-                    ..Environment::default()
-                }
-            ),
+            Paths::resolve(Environment { app_data: Some("") }),
             Err(PathsError::NoHome)
         );
     }
@@ -312,14 +212,5 @@ mod tests {
             Some(APP_DIRECTORY),
             "productName moved; 1.x's files are no longer where APP_DIRECTORY points"
         );
-    }
-
-    #[test]
-    fn the_host_platform_is_the_one_this_build_targets() {
-        if cfg!(windows) {
-            assert_eq!(Platform::host(), Platform::Windows);
-        } else {
-            assert_eq!(Platform::host(), Platform::Unix);
-        }
     }
 }

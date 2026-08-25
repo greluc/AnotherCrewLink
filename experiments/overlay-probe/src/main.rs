@@ -6,10 +6,16 @@
 //! design. Today the overlay is its own Electron `BrowserWindow`, so whatever replaces it
 //! has to do the same three things at once.
 //!
-//! It does not print "looks right". On Windows it asks the OS what it actually did:
-//! mouse passthrough is `WS_EX_TRANSPARENT | WS_EX_LAYERED` on the window's extended
-//! style, and if those bits are missing the window swallows clicks meant for the game
-//! however transparent it looks.
+//! It does not print "looks right". It asks the OS what it actually did: mouse
+//! passthrough is `WS_EX_TRANSPARENT | WS_EX_LAYERED` on the window's extended style, and
+//! if those bits are missing the window swallows clicks meant for the game however
+//! transparent it looks. The answer was `layered=true transparent=true topmost=true`,
+//! `exstyle=0x000c0138`.
+//!
+//! There was a second arm here until 2026-08-25, run under `xvfb` with `llvmpipe`. It
+//! could only report `RESULT arch=linux windowed=true` — reading an X11 input region back
+//! needs an X connection of the probe's own — and it went with the client's Linux
+//! support, along with the CI job that ran it.
 
 use std::time::{Duration, Instant};
 
@@ -58,7 +64,6 @@ impl eframe::App for Experiment {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn report(_ctx: &egui::Context) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
@@ -89,17 +94,6 @@ fn report(_ctx: &egui::Context) {
         ex & WS_EX_TOOLWINDOW != 0,
         ex
     );
-}
-
-#[cfg(not(target_os = "windows"))]
-fn report(_ctx: &egui::Context) {
-    // On X11 the equivalent is an empty input region set through the shape extension.
-    // winit applies it for `with_mouse_passthrough`; reading it back needs an X
-    // connection of our own, which is more apparatus than this experiment is worth. The
-    // Linux leg answers the question this experiment exists for -- does it start, is the
-    // surface transparent, does it not crash the renderer -- and the passthrough claim
-    // rests on winit's implementation there.
-    println!("RESULT arch=linux windowed=true");
 }
 
 fn main() -> eframe::Result<()> {

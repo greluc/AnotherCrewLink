@@ -1,7 +1,7 @@
 //! [`crate::Transport`] over anything that reads and writes bytes.
 //!
-//! A named pipe on Windows and a Unix socket on Linux are both `Read + Write`, so the
-//! part that can be wrong is not the pipe — it is what happens between one and a frame.
+//! A named pipe is `Read + Write`, so the part that can be wrong is not the pipe — it is
+//! what happens between one and a frame.
 //! Four things go wrong with a length-prefixed protocol on a stream, and none of them is
 //! visible in a test that hands the decoder a whole frame at once:
 //!

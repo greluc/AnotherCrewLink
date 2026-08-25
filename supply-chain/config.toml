@@ -57,10 +57,6 @@ criteria = "safe-to-deploy"
 version = "0.7.8"
 criteria = "safe-to-deploy"
 
-[[exemptions.as-raw-xcb-connection]]
-version = "1.0.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.asn1-rs]]
 version = "0.6.2"
 criteria = "safe-to-deploy"
@@ -175,10 +171,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.calloop]]
 version = "0.14.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.calloop-wayland-source]]
-version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.calloop-wayland-source]]
@@ -397,10 +389,6 @@ criteria = "safe-to-deploy"
 version = "0.36.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.egui-wgpu]]
-version = "0.36.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.egui-winit]]
 version = "0.36.1"
 criteria = "safe-to-deploy"
@@ -526,10 +514,6 @@ version = "0.2.17"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
-version = "0.3.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.getrandom]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
@@ -559,10 +543,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.glutin_egl_sys]]
 version = "0.7.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.glutin_glx_sys]]
-version = "0.6.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.glutin_wgl_sys]]
@@ -709,10 +689,6 @@ criteria = "safe-to-deploy"
 version = "0.8.9"
 criteria = "safe-to-deploy"
 
-[[exemptions.libm]]
-version = "0.2.16"
-criteria = "safe-to-deploy"
-
 [[exemptions.libredox]]
 version = "0.1.20"
 criteria = "safe-to-deploy"
@@ -785,14 +761,6 @@ criteria = "safe-to-deploy"
 version = "0.4.7"
 criteria = "safe-to-deploy"
 
-[[exemptions.naga]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.naga-types]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.ndk]]
 version = "0.9.0"
 criteria = "safe-to-deploy"
@@ -807,10 +775,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.neteq]]
 version = "0.9.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.nix]]
-version = "0.30.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.nix]]
@@ -1037,14 +1001,6 @@ criteria = "safe-to-deploy"
 version = "0.6.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.portable-atomic]]
-version = "1.15.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.portable-atomic-util]]
-version = "0.2.7"
-criteria = "safe-to-deploy"
-
 [[exemptions.potential_utf]]
 version = "0.1.6"
 criteria = "safe-to-deploy"
@@ -1094,10 +1050,6 @@ version = "0.6.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
-version = "5.3.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
 
@@ -1135,10 +1087,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rend]]
 version = "0.5.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.renderdoc-sys]]
-version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rfc6979]]
@@ -1378,10 +1326,6 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.smithay-client-toolkit]]
-version = "0.19.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.smithay-client-toolkit]]
 version = "0.20.0"
 criteria = "safe-to-deploy"
 
@@ -1537,10 +1481,6 @@ criteria = "safe-to-deploy"
 version = "0.30.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.type-map]]
-version = "0.5.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.typenum]]
 version = "1.20.1"
 criteria = "safe-to-deploy"
@@ -1657,10 +1597,6 @@ criteria = "safe-to-deploy"
 version = "0.3.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.wayland-protocols-plasma]]
-version = "0.3.12"
-criteria = "safe-to-deploy"
-
 [[exemptions.wayland-protocols-wlr]]
 version = "0.3.12"
 criteria = "safe-to-deploy"
@@ -1699,30 +1635,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.weezl]]
 version = "0.1.12"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu-core]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu-core-deps-windows-linux-android]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu-hal]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu-naga-bridge]]
-version = "30.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.wgpu-types]]
-version = "30.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.winapi]]
@@ -1887,10 +1799,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.writeable]]
 version = "0.6.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.x11-dl]]
-version = "2.21.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.x11rb]]
