@@ -15,6 +15,8 @@
 //! The first two are [`Capabilities`]; the third is [`may_prompt`]. Neither touches a
 //! platform API, which is why both are here and tested rather than discovered.
 
+use std::time::Duration;
+
 /// Where the helper is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HelperState {
@@ -97,6 +99,61 @@ impl Capabilities {
     }
 }
 
+/// How long the helper has to say [`acl_ipc::HelperMessage::Ready`] after it starts.
+///
+/// The elevation prompt is the user's time and is not counted: this starts when the
+/// process exists. A helper that elevated and then died before its first message is the
+/// case this covers — an installer left a broken binary, a driver refused, an antivirus
+/// quarantined it — and without a bound the client waits for it silently, showing a
+/// player a game reader that is "starting" for the rest of the round.
+///
+/// Five seconds is generous for a process whose first act is to write one frame, and
+/// short enough that the degraded state arrives while the player is still looking at the
+/// screen that caused it. This bound is a judgement rather than a quotation; §4.7 names
+/// the refusal and the crash but not the silence between them.
+pub const READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Why two halves of one install will not talk to each other.
+///
+/// Which way round it is decides what to tell the user, because the fix differs: the
+/// installer replaced one binary and failed on the other, and knowing which one is the
+/// difference between "reinstall" and "your antivirus quarantined the helper".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionMismatch {
+    /// The helper speaks an older protocol than this core.
+    HelperOlder {
+        /// What the helper said.
+        helper: u32,
+        /// What this build speaks.
+        core: u32,
+    },
+    /// The helper speaks a newer one.
+    HelperNewer {
+        /// What the helper said.
+        helper: u32,
+        /// What this build speaks.
+        core: u32,
+    },
+}
+
+/// What to do with a helper that has just announced itself.
+///
+/// Refusing is not a fallback to a degraded-but-working mode with a mismatched peer. An
+/// elevated process reading a struct that has changed shape is the one thing this
+/// boundary exists to prevent, and the client already knows how to run without a helper.
+///
+/// # Errors
+///
+/// Returns the mismatch when the two protocol versions differ.
+pub fn check_protocol(helper: u32) -> Result<(), VersionMismatch> {
+    let core = acl_ipc::PROTOCOL_VERSION;
+    match helper.cmp(&core) {
+        std::cmp::Ordering::Equal => Ok(()),
+        std::cmp::Ordering::Less => Err(VersionMismatch::HelperOlder { helper, core }),
+        std::cmp::Ordering::Greater => Err(VersionMismatch::HelperNewer { helper, core }),
+    }
+}
+
 /// What made the client consider asking for elevation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
@@ -173,6 +230,51 @@ mod tests {
         Trigger::UserAskedForIt,
         Trigger::Background,
     ];
+
+    #[test]
+    fn a_matching_protocol_is_accepted() {
+        assert_eq!(check_protocol(acl_ipc::PROTOCOL_VERSION), Ok(()));
+    }
+
+    #[test]
+    fn a_mismatch_says_which_half_is_behind() {
+        // The fix differs. An older helper means the installer replaced the core and
+        // failed on the helper -- often because an antivirus took it. A newer one means
+        // the opposite. Telling the user "versions differ" makes them guess.
+        let core = acl_ipc::PROTOCOL_VERSION;
+        assert_eq!(
+            check_protocol(core - 1),
+            Err(VersionMismatch::HelperOlder {
+                helper: core - 1,
+                core
+            })
+        );
+        assert_eq!(
+            check_protocol(core + 1),
+            Err(VersionMismatch::HelperNewer {
+                helper: core + 1,
+                core
+            })
+        );
+    }
+
+    #[test]
+    fn a_mismatch_is_refused_rather_than_downgraded() {
+        // There is no partial mode with a mismatched peer. An elevated process reading a
+        // struct that changed shape is what this boundary exists to prevent, and the
+        // client already knows how to run without a helper at all.
+        assert!(check_protocol(0).is_err());
+        assert!(check_protocol(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn the_ready_timeout_is_short_enough_to_be_seen_and_long_enough_to_be_fair() {
+        // A helper whose first act is to write one frame does not need longer, and a
+        // player watching the screen that triggered the prompt should not be left with
+        // "starting" for the rest of the round.
+        assert!(READY_TIMEOUT >= Duration::from_secs(2));
+        assert!(READY_TIMEOUT <= Duration::from_secs(10));
+    }
 
     #[test]
     fn voice_never_depends_on_the_helper() {
