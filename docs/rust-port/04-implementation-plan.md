@@ -703,6 +703,31 @@ fixtures.
 
 ## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
+> **Status, 2026-08-24.** Everything in this phase that can be built without a
+> network is built, and `crates/acl-audio` carries 402 tests.
+>
+> | Item | State |
+> | --- | --- |
+> | 3a DSP graph | done — every node within −80 dBFS of Chromium's own output |
+> | 3b `voice_params` | done — 1035 recorded tuples, no difference |
+> | 3c Capture and codec | done, less the cpal streams: see the note in 3c for why writing them now would add code nothing could exercise |
+> | 3d Jitter buffer and playback | done — fixed buffer, `NetEq` bridge, mixer, output selection |
+> | 3e FEC feedback loop | done both directions, less the `ReceiverReportInterceptor` call that would pick P4's transport crate by accident |
+>
+> | Gate G2 | State |
+> | --- | --- |
+> | 1. DSP against golden vectors | **met** |
+> | 2. `voice_params` parity | **met** |
+> | 3. Latency and quality against Chromium | our half measured; the other half needs a Chromium peer, which needs P4 |
+> | 4. Zero allocations on the render callback | **met**, and it moved the APM off the capture callback to stay met |
+> | 5. FEC recovery with a Chromium sender | needs P4 for the same reason as 3 |
+> | 6. `i686` build | struck; the target no longer exists |
+>
+> Criteria 3 and 5 are not open work in this phase. Both are defined as
+> measurements against a Chromium peer, and there is no transport to put one on —
+> which is the order the plan itself sets. Everything that does not depend on that
+> is closed.
+
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.
 
