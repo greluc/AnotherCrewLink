@@ -25,6 +25,13 @@ on:
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
       - 'test/recordings/**'
+      # The source `collider_data.rs` is generated from. The drift check below only
+      # protected the direction that was already safe: it fired when the generated file
+      # changed, and not when the file it is generated from did. So a collider edited in
+      # the Electron client left the Rust reader holding the old walls, green, until
+      # somebody happened to touch a crate — and a wrong collider does not error, it
+      # silently reports that no wall is ever in the way.
+      - 'src/common/ColliderMap.ts'
   pull_request:
     paths:
       - 'crates/**'
@@ -39,6 +46,13 @@ on:
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
       - 'test/recordings/**'
+      # The source `collider_data.rs` is generated from. The drift check below only
+      # protected the direction that was already safe: it fired when the generated file
+      # changed, and not when the file it is generated from did. So a collider edited in
+      # the Electron client left the Rust reader holding the old walls, green, until
+      # somebody happened to touch a crate — and a wrong collider does not error, it
+      # silently reports that no wall is ever in the way.
+      - 'src/common/ColliderMap.ts'
   workflow_dispatch:
 
 permissions:
