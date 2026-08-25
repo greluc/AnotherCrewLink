@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "acl-core"
+version = "0.0.0"
+dependencies = [
+ "acl-ipc",
+]
+
+[[package]]
 name = "acl-game"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,15 @@
+[package]
+name = "acl-core"
+description = "The unelevated half of the client: what it can do, and when it may ask for the other half."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+acl-ipc.workspace = true
+
+[lints]
+workspace = true
