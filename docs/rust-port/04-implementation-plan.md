@@ -703,16 +703,21 @@ fixtures.
 
 ## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
-> **Status, 2026-08-24.** Everything in this phase that can be built without a
-> network is built, and `crates/acl-audio` carries 402 tests.
+> **Status, 2026-08-25.** Every item is built and `crates/acl-audio` carries 423 tests.
+> Five of the six gate criteria are met; the sixth is three-quarters met and its remaining
+> leg needs a transport to exist.
+>
+> Closing it changed two things it was supposed only to measure: the jitter buffer's depth
+> had to become adaptive, and the FEC controller turned out to have been doing nothing at
+> all. Both were found by comparing against Chromium rather than against the plan.
 >
 > | Item | State |
 > | --- | --- |
 > | 3a DSP graph | done — every node within −80 dBFS of Chromium's own output |
 > | 3b `voice_params` | done — 1035 recorded tuples, no difference |
 > | 3c Capture and codec | done — `stream::choose` decides what to ask a device for, with tests; the `cpal` layer over it is translation only |
-> | 3d Jitter buffer and playback | done — fixed buffer, `NetEq` bridge, mixer, output selection |
-> | 3e FEC feedback loop | done both directions, less the `ReceiverReportInterceptor` call that would pick P4's transport crate by accident |
+> | 3d Jitter buffer and playback | done — the buffer adapts its depth, which measuring against Chromium forced; `NetEq` bridge, mixer, output selection |
+> | 3e FEC feedback loop | done both directions, and the loop was found to have been achieving nothing until `Signal::Voice` was set; less the `ReceiverReportInterceptor` call that would pick P4's transport crate by accident |
 >
 > | Gate G2 | State |
 > | --- | --- |
@@ -720,7 +725,7 @@ fixtures.
 > | 2. `voice_params` parity | **met** |
 > | 3. Latency and quality against Chromium | **met** — every profile within the 30 ms budget, and less invented audio than Chromium under loss |
 > | 4. Zero allocations on the render callback | **met**, and it moved the APM off the capture callback to stay met |
-> | 5. FEC recovery with a Chromium sender | **receiving half met** against Chromium's own encoder; the `fecPacketsSent` half needs a peer |
+> | 5. FEC recovery with a Chromium sender | three of its four legs verified; the fourth needs a Chromium receiver, which needs a transport |
 > | 6. `i686` build | struck; the target no longer exists |
 >
 > **Criteria 3 and 5 were parked behind P4 and did not belong there.** Both were read
@@ -750,10 +755,25 @@ fixtures.
 > grew to 185 ms under 10% loss, buying nothing: a packet that never arrives is loss, and
 > no depth recovers it.
 >
-> What is genuinely left for P4 is criterion 5's `fecPacketsSent` — the *sending*
-> direction, which needs a peer that reports loss back. `scripts/receive-reference`
-> cannot produce it: dropping frames in an encoded transform happens before packetisation,
-> so the sequence numbers close up and the receiver never sees loss to report.
+> **Criterion 5, leg by leg.** Its observable is `fecPacketsSent` climbing in both
+> directions, which is a counter meaning "this encoder emitted redundancy".
+> `opus_packet_has_lbrr` answers the same question about the same bytes, and answers it
+> about *these* packets rather than about a total:
+>
+> | | verified | how |
+> | --- | --- | --- |
+> | Chromium emits redundancy | yes | 862 of 1001 packets, inspected |
+> | our receiver recovers it | yes | 39 frames at 5% loss; 0 with the redundancy stripped |
+> | we emit redundancy | yes | 171 of 200 packets, told mid-call |
+> | a Chromium receiver recovers ours | **no** | needs a Chromium peer receiving our stream |
+>
+> The fourth is what still needs P4, and it needs a transport rather than a network:
+> something has to carry our packets to a Chromium receiver. `scripts/receive-reference`
+> cannot stand in for it, and neither can the `fecPacketsSent` counter itself — dropping
+> frames in an encoded transform happens before packetisation, so the sequence numbers
+> close up and Chromium never learns there was loss to protect against. A WebRTC field
+> trial for a simulated lossy network was tried and had no effect on a loopback: 504
+> packets sent, 504 received, none lost.
 
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.
