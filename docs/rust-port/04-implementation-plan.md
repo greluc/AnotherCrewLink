@@ -25,7 +25,7 @@ P0+ Server                        ──► ships independently          4.0 wk
 P1+ Foundations & toolchain                                        5.0 wk
 P2+ Game reader                   ──► G1: parity with Electron     6.0 wk
 P3+ Audio engine (offline)        ──► G2: golden-vector parity    10.0 wk
-P4+ Transport & signalling        ──► G3: interop with 1.x        10.5 wk
+P4+ Transport & signalling        (G3 struck 2026-08-25)         10.5 wk
 P5+ Platform layer                                                 6.0 wk
 P6+ GUI                                                           11.5 wk
 P7+ Packaging, update, rollout    ──► 2.0 build, opt-in            9.5 wk
@@ -1110,10 +1110,10 @@ Run the same impairments through the Electron client for reference numbers.
 >
 > Criterion 5 is part of the same stop decision. If `neteq` cannot support
 > out-of-order FEC recovery, the cost of vendoring the reference NetEQ is decided
-> here, at the gate, not five weeks later at G3 — which is precisely why the
+> here, at the gate, not five weeks later in P4 — which is precisely why the
 > criterion sits here rather than with the other interop work.
 
-## 4.6 Phase 4 — Transport and signalling (10.5 weeks) → **Gate G3**
+## 4.6 Phase 4 — Transport and signalling (10.5 weeks)
 
 **Why 10.5 and not 5:** since 0.20.0 the `webrtc` crate is a runtime-agnostic
 rewrite on a sans-IO core rather than a Pion port, so this is a port and not a
@@ -1125,8 +1125,8 @@ mapping — and the Socket.IO client that used to be item 1 has moved to P1+.
    `webrtc` `=0.20.3` against a real 1.0.2 Chromium client — direct, relay-only,
    trickle in both directions, SDP captured. The two arms are not symmetric and
    must not be run as though they were: `str0m` explicitly does not implement
-   TURN, and G3 requires relay-only through coturn, so that arm cannot reach the
-   criterion without first importing or writing an RFC 8656 client and its result
+   TURN, and this client requires relay-only through coturn, so that arm cannot meet
+   the requirement without first importing or writing an RFC 8656 client, and its result
    would measure a hand-written I/O loop as much as the crate. Timebox it to a
    written feasibility read answering only "what TURN client and what event loop
    would a 14-peer mesh need". TURN is the reason `webrtc` wins here; its
@@ -1180,18 +1180,26 @@ will otherwise reintroduce them:
 | `offer_glare_does_not_destroy_replacement` | the old connection's `close` tore down the new one for the same peer |
 | `connection_stuck_in_new_times_out` | ICE never starts, so the connection never fails on its own |
 
-> **Gate G3 — interop.**
-> A 1.0.2 Electron client and a Rust client in the same lobby, against the same
-> server, must hear each other in both directions: direct, and with
-> `forceRelayOnly` through coturn. Tested on Windows and Linux, and across a NAT.
-> This is what makes a staged rollout possible; without it, 2.0 must ship to
-> everyone at once, which is not acceptable for a voice app.
+> **Gate G3 — struck 2026-08-25.**
+> It required a 1.0.2 Electron client and a Rust client in the same lobby against
+> the same server, hearing each other both ways — direct and with
+> `forceRelayOnly` through coturn, on Windows and Linux, across a NAT — then the
+> same call repeated under each of P3+'s impairment profiles within 0.2 MOS of a
+> 1.x↔1.x call, plus a three-client mixed-generation row with one client leaving
+> and rejoining.
 >
-> **Amended, because the clean-network version of this gate cannot see the
-> failure mode that matters.** Add (a) the same 1.x↔2.x call repeated under each
-> of P3+'s impairment profiles — 1, 2, 5 and 10% loss — scoring within 0.2 MOS of
-> a 1.x↔1.x call under the identical profile; and (b) a three-client
-> mixed-generation row, with one client leaving and rejoining.
+> **What striking it costs, written down rather than absorbed.** `README.md`'s
+> gate table already priced failing this one: *no staged rollout; reconsider
+> scope*. That is now the standing position rather than a contingency. Interop
+> between the two generations is unproven, so the parallel install in §4.10 no
+> longer rests on a guarantee, and §4.12's assumption that one lobby holds both
+> generations for weeks is an assumption rather than a measurement.
+>
+> Nothing about the work gets smaller. P4 still has to build a mesh that talks to
+> 1.x, the relay rules still hold, and the four named regression tests below still
+> stand. What is gone is the rig that would have caught a mistake before the fleet
+> did — so the first evidence of an interop fault now arrives as a player who
+> cannot be heard.
 
 ## 4.7 Phase 5 — Platform layer (6 weeks)
 
@@ -1417,7 +1425,7 @@ Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
 its CLI contract is tested against real 1.x updaters before it carries anything
 important.
 
-**Rollout.** Because G3 guarantees interop, the 2.0 build goes out first as a
+**Rollout.** The 2.0 build goes out first as a
 parallel install — different appId, different directory, config read forward,
 opt-in by download only — and sits there for a full release cycle while 1.x keeps
 receiving 1.x updates. That parallel install is not the 2.0 release; it is the
@@ -1444,7 +1452,7 @@ too early.
 | M1 | Rust server serves 1.x clients | Yes — ships, then **decision point** |
 | M2 | **G1** reader parity on recorded sessions | No |
 | M3 | **G2** audio parity and impairment results | No — **go/no-go** |
-| M4 | **G3** Rust ↔ Electron in one lobby | No |
+| M4 | Rust ↔ Electron in one lobby — **G3 struck 2026-08-25**, so this is no longer gated | No |
 | M5 | Rust client usable end-to-end, no GUI polish | Internal alpha |
 | M6 | Feature parity | Public beta |
 | M7 | 2.0 build available as an opt-in parallel install | Yes — ships |
@@ -1606,8 +1614,9 @@ signal to stop.
 > each update from a staging feed to the bridge. Silent install; the correct
 > architecture selected; correct install directory; a working uninstall entry;
 > migrated config; and on Linux the old process exits within two seconds rather
-> than hanging. G3 must have passed, because during the staged rollout the same
-> lobby contains both generations, by design, for weeks.
+> than hanging. The staged rollout puts both generations in one lobby, by design,
+> for weeks; G3 was what would have proved that works before the fleet met it, and
+> it was struck on 2026-08-25.
 >
 > **G4 is a prerequisite of the 2.0 release, not of this phase's output.** The
 > 1.x wire format goes off at that release, so an unrehearsed bridge is the
