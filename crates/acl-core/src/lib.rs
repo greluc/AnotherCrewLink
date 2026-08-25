@@ -11,4 +11,5 @@
 
 pub mod helper;
 pub mod logging;
+pub mod overlay;
 pub mod paths;
