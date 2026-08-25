@@ -24,6 +24,7 @@ use acl_audio::biquad::{Biquad, FilterKind};
 use acl_audio::codec::{Encoder, FRAME_SAMPLES};
 use acl_audio::gain::Gain;
 use acl_audio::jitter::JitterBuffer;
+use acl_audio::mixer::Mixer;
 use acl_audio::panner::{Panner, Position};
 use acl_audio::resample::{Resampler, TARGET_RATE};
 
@@ -244,6 +245,35 @@ fn the_jitter_buffer_allocates_per_frame_and_this_says_how_much() {
         "if this reaches zero the comment above is stale and should go"
     );
     eprintln!("jitter buffer: {allocations} allocations over 30 frames");
+}
+
+#[test]
+fn mixing_a_full_lobby_allocates_nothing() {
+    // The last stage of the render callback, and the one whose cost grows with the lobby:
+    // thirteen additions per block rather than one. Everything it writes into is allocated
+    // in `new`, including the mono downmix the echo canceller is handed.
+    const FRAMES: usize = 480;
+    let mut mixer = Mixer::new(FRAMES);
+    let peer = vec![0.05f32; FRAMES * 2];
+
+    mixer.begin();
+    mixer.add(&peer);
+    mixer.finish();
+
+    let allocations = count(|| {
+        for _ in 0..100 {
+            mixer.begin();
+            for _ in 0..13 {
+                mixer.add(&peer);
+            }
+            let _ = mixer.finish();
+            let _ = mixer.reference();
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "the mixer allocated {allocations} times over 100 blocks"
+    );
 }
 
 #[test]

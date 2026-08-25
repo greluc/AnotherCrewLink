@@ -796,6 +796,48 @@ under the same emulation. That is what most peer-to-peer voice apps ship, and
 without it the gate has no baseline to judge NetEQ against — and no fallback
 short of porting the reference implementation, which is a multi-week job.
 
+> **Built and measured 2026-08-24, and the measurement is mostly about the
+> measurement.** `acl-audio::neteq_bridge` is the `AudioDecoder` implementation
+> this item asks for: `neteq` now decodes through the same libopus as everything
+> else, which is what keeps `ropus` out of a binary that already links the
+> reference implementation. `tests/jitter_comparison.rs` runs both buffers through
+> the same twelve impairment profiles.
+>
+> **`neteq` 0.9.1 cannot be evaluated offline.** Its delay manager ignores the
+> `arrival_time` on the packet it is handed and calls `Instant::now()` itself
+> (`delay_manager.rs:245`), measuring the gap between consecutive `insert_packet`
+> calls. There is no clock to inject and no seam to add one. So the network it
+> believes it is on is the timing of whatever process is feeding it.
+>
+> Two versions of the harness drove it from simulated time before this was found.
+> Both produced a tidy table: its estimator saturated at `base_maximum_delay_ms`,
+> it stretched every frame chasing a two-second target, and every frame came back
+> classified `Expand`. One of those runs was very nearly written up as *NetEQ under
+> packet loss*.
+>
+> Running the comparison in real time is the only option left, and a test is not a
+> good clock: Windows' timer granularity is about 15 ms against a 20 ms packet
+> interval, so the harness contributes jitter of the same order as the thing being
+> simulated. The `clean` profile is the control that proves it — `neteq` reports
+> about 11% of frames as concealment on a network with **no impairment at all**.
+>
+> | | fixed | `neteq` |
+> | --- | --- | --- |
+> | clean | 3.1% gaps, 60 ms | 11.2% gaps, 207 ms |
+> | 10% loss | 5.8% gaps, 60 ms | 18.9% gaps, 110 ms |
+> | 500 ms freeze | 11.0% gaps, 60 ms | 19.0% gaps, 149 ms |
+>
+> **Read only the left column.** The right one is this harness's scheduling as much
+> as it is `neteq`, and publishing it as a verdict would be the same mistake the FEC
+> counter made: a number that looks like evidence and measures the instrument.
+>
+> What the item asked for — a baseline to judge NetEQ against — exists now for the
+> fixed buffer, under the same real-time conditions, and those numbers are
+> comparable to each other. Judging `neteq` itself needs either a version whose
+> delay manager takes a clock or a harness that is not a test, and that is P4's
+> problem, at the point there is a real network to put it on. **The fixed buffer
+> ships until then**, which is what 3e's FEC recovery already assumed.
+
 ### 3e. The Opus FEC feedback loop, both directions (2 wk)
 
 libwebrtc emits Opus FEC only once RTCP receiver reports tell it there is loss.
