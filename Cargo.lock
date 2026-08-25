@@ -32,6 +32,8 @@ name = "acl-core"
 version = "0.0.0"
 dependencies = [
  "acl-ipc",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

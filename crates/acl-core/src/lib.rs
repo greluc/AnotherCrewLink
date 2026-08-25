@@ -10,3 +10,4 @@
 //! answers a dialog with No and then cannot speak.
 
 pub mod helper;
+pub mod paths;
