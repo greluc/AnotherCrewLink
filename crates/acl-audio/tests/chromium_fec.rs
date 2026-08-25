@@ -77,7 +77,11 @@ fn chromium_actually_put_redundancy_in_the_packets() {
     // `fec: true` succeeds either way: given no redundancy it produces concealment and
     // returns the same frame size. That is the trap this project already fell into once.
     let packets = chromium_packets();
-    assert!(packets.len() > 900, "only {} packets captured", packets.len());
+    assert!(
+        packets.len() > 900,
+        "only {} packets captured",
+        packets.len()
+    );
 
     let carrying = packets.iter().filter(|p| has_redundancy(p)).count();
     let share = carrying as f64 / packets.len() as f64;
@@ -115,6 +119,9 @@ fn receive(profile: Profile, packets: &[Vec<u8>]) -> (usize, usize, usize) {
                 FrameSource::Packet => from_packet += 1,
                 FrameSource::Recovered => recovered += 1,
                 FrameSource::Concealed | FrameSource::Silence => gaps += 1,
+                // A deliberate delay, not a hole: the packet it holds back is played on
+                // the next pop rather than lost.
+                FrameSource::Stretched => {}
             }
         }
         now_ms += FRAME_MS;

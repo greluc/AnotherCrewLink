@@ -93,7 +93,7 @@ fn recovered_frames(told_the_encoder: bool) -> (usize, usize, u8) {
             match frame.source {
                 FrameSource::Recovered => recovered += 1,
                 FrameSource::Concealed | FrameSource::Silence => concealed += 1,
-                FrameSource::Packet => {}
+                FrameSource::Packet | FrameSource::Stretched => {}
             }
         }
         now_ms += FRAME_MS;

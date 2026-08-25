@@ -290,7 +290,9 @@ mod tests {
         let mut expected = 0.0f32;
         let mut frame = [0.0f32; 480];
         for _ in 0..10_000 {
-            let block: Vec<f32> = (0..480u16).map(|index| expected + f32::from(index)).collect();
+            let block: Vec<f32> = (0..480u16)
+                .map(|index| expected + f32::from(index))
+                .collect();
             ring.write(&block);
             assert!(ring.read_frame(&mut frame));
             assert_eq!(frame[0], expected);

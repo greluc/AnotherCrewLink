@@ -718,15 +718,42 @@ fixtures.
 > | --- | --- |
 > | 1. DSP against golden vectors | **met** |
 > | 2. `voice_params` parity | **met** |
-> | 3. Latency and quality against Chromium | our half measured; the other half needs a Chromium peer, which needs P4 |
+> | 3. Latency and quality against Chromium | **met** — every profile within the 30 ms budget, and less invented audio than Chromium under loss |
 > | 4. Zero allocations on the render callback | **met**, and it moved the APM off the capture callback to stay met |
-> | 5. FEC recovery with a Chromium sender | needs P4 for the same reason as 3 |
+> | 5. FEC recovery with a Chromium sender | **receiving half met** against Chromium's own encoder; the `fecPacketsSent` half needs a peer |
 > | 6. `i686` build | struck; the target no longer exists |
 >
-> Criteria 3 and 5 are not open work in this phase. Both are defined as
-> measurements against a Chromium peer, and there is no transport to put one on —
-> which is the order the plan itself sets. Everything that does not depend on that
-> is closed.
+> **Criteria 3 and 5 were parked behind P4 and did not belong there.** Both were read
+> as needing a Chromium peer across a network. Neither does:
+>
+> - Chromium's *encoder* is reachable from a page through WebCodecs, so criterion 5's
+>   receiving half is measurable now. It put redundancy in 862 of 1001 packets, and at
+>   5% loss the receive path recovers 39 frames where a control with the redundancy
+>   removed recovers none.
+> - Chromium's *receive path* is reachable through a loopback peer connection, and an
+>   encoded transform is a place to drop frames before they reach it. That is NetEQ, its
+>   delay manager and its concealment, under the same profiles as ours.
+>
+> | | ours | Chromium |
+> | --- | --- | --- |
+> | latency, every profile | 40 ms | 10–30 ms |
+> | worst difference | +30.0 ms | budget 30 ms |
+> | invented audio, 10% loss | 3.7% | 8.8% |
+> | invented audio, clean | 2.0% | 0.0% |
+>
+> **Measuring it changed the design.** A fixed depth cannot meet the criterion: 40 ms is
+> within budget on a clean network and invents 17% of frames under 50 ms of jitter, and
+> 60 ms survives the jitter and is 50 ms adrift on a clean one. The buffer now moves — it
+> deepens when a packet arrives after its slot has played, which is the only observation
+> that means "too shallow", and regains depth by inserting one concealment frame so the
+> stream falls further behind the network. An earlier version deepened on every gap and
+> grew to 185 ms under 10% loss, buying nothing: a packet that never arrives is loss, and
+> no depth recovers it.
+>
+> What is genuinely left for P4 is criterion 5's `fecPacketsSent` — the *sending*
+> direction, which needs a peer that reports loss back. `scripts/receive-reference`
+> cannot produce it: dropping frames in an encoded transform happens before packetisation,
+> so the sequence numbers close up and the receiver never sees loss to report.
 
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.

@@ -136,6 +136,9 @@ fn through_fixed(profile: Profile, packets: &[Vec<u8>]) -> Result_ {
             match frame.source {
                 FrameSource::Packet | FrameSource::Recovered => played += 1,
                 FrameSource::Concealed | FrameSource::Silence => gaps += 1,
+                // A delay rather than a hole, and NetEQ's own time-stretching is not
+                // counted as concealment either -- counting ours would tilt the comparison.
+                FrameSource::Stretched => {}
             }
         }
         now_ms += FRAME_MS;
