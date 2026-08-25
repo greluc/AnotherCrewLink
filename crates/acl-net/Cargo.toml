@@ -21,6 +21,9 @@ tokio-tungstenite.workspace = true
 webrtc.workspace = true
 
 [dev-dependencies]
+# The `webrtc` event handler trait is declared with `#[async_trait]`, so the loopback
+# test's handler needs the same macro.
+async-trait = "0.1"
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "process"] }
 
