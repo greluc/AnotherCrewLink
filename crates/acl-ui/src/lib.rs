@@ -12,3 +12,4 @@
 
 pub mod lobby_list;
 pub mod renderer;
+pub mod settings;
