@@ -1124,16 +1124,19 @@ Run the same impairments through the Electron client for reference numbers.
 > | Item | State |
 > | --- | --- |
 > | 1 The crate spike | three of four questions answered by `experiments/webrtc-probe` — it connects, `ring` 0.17.14 is shared with the existing tree, 141 new crates and all four supply-chain gates pass. The Chromium arm is unanswered and, with G3 struck, unanswerable |
-> | 2 `Peer` | decisions done — candidate queue, generation counter for the un-detachable handler, connect timeout. The `webrtc` binding is not written |
-> | 3 The mesh | relay rules one to four done, and `RepairPolicy`: restart before rebuild, initiator only, once per connection. Join, leave and orphan cleanup are not written |
+> | 2 `Peer` | done — candidate queue, generation counter for the un-detachable handler, connect timeout, and `rtc::to_configuration` over the crate. `tests/loopback.rs` drives two real connections through all of it |
+> | 3 The mesh | relay rules one to four, `RepairPolicy` (restart before rebuild, initiator only, once per connection), and `mesh::Membership` — join, leave, orphan reconciliation and the four rebuild guards. What is left is the driver that owns a socket, a membership and a set of connections at once, and that belongs with `acl-core` in P5 rather than here |
 > | 4 `validateClientPeerConfig` | done, with its tests |
 > | The four named regression tests | all four exist and pass |
 >
-> Two things were found by doing it rather than by planning it. `reconnect.rs` claimed to
-> be a straight port and was a port of half the file, with a doc comment carrying the
-> pre-1.0.4 meaning of `should_give_up` — the behaviour relay rule four forbids. And
+> Three things were found by doing it rather than by planning it. `reconnect.rs` claimed
+> to be a straight port and was a port of half the file, with a doc comment carrying the
+> pre-1.0.4 meaning of `should_give_up` — the behaviour relay rule four forbids.
 > `build()` returns `impl PeerConnection` with one un-detachable handler, which item 2
-> predicted and the probe confirmed.
+> predicted and the probe confirmed. And on loopback the answer arrives before the first
+> candidate is gathered, so a naive integration test exercises the candidate queue not at
+> all — the queue's whole reason for existing is the signalling round trip, and a test
+> without one proves nothing about it.
 
 **Why 10.5 and not 5:** since 0.20.0 the `webrtc` crate is a runtime-agnostic
 rewrite on a sans-IO core rather than a Pion port, so this is a port and not a
