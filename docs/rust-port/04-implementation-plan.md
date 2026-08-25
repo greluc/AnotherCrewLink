@@ -710,7 +710,7 @@ fixtures.
 > | --- | --- |
 > | 3a DSP graph | done — every node within −80 dBFS of Chromium's own output |
 > | 3b `voice_params` | done — 1035 recorded tuples, no difference |
-> | 3c Capture and codec | done, less the cpal streams: see the note in 3c for why writing them now would add code nothing could exercise |
+> | 3c Capture and codec | done — `stream::choose` decides what to ask a device for, with tests; the `cpal` layer over it is translation only |
 > | 3d Jitter buffer and playback | done — fixed buffer, `NetEq` bridge, mixer, output selection |
 > | 3e FEC feedback loop | done both directions, less the `ReceiverReportInterceptor` call that would pick P4's transport crate by accident |
 >
@@ -838,19 +838,26 @@ app already has a bug class around, has four open issues on it.
 > overwrite-oldest and the all-or-nothing frame read under test and measured at
 > zero allocations.
 >
-> **Opening the cpal streams themselves is not written, and that is a decision.**
-> §5.2 already names device behaviour as a *manual* test — unplug a microphone,
-> switch the Windows default, connect a Bluetooth headset — "with a call live",
-> before G2 signs off. A live call is P4. So stream code written now would be code
-> that cannot be exercised by anything until the transport exists: not by CI, which
-> has no sound card, and not by the manual pass, which has no call to make.
+> `acl-audio::stream` is the rest of it, split so that the part with decisions in it
+> can be tested and the part that touches a sound card cannot hide any. `choose`
+> takes what a device says it supports and picks a rate, a channel count and a
+> buffer size, with twelve tests: 48 kHz over everything else because Opus, the
+> canceller and the mixer all run there; the fewest channels that carry the audio,
+> because a device offering eight will open with eight; and a buffer of one frame
+> at whatever rate was chosen — 960 at 48 kHz, 882 at 44.1 — clamped into what the
+> device accepts.
 >
-> The two pieces that would have been guesswork are settled instead. The ring is
-> written and tested. And the ring deliberately does **not** split across threads:
-> making it a real single-producer single-consumer queue is either a hand-written
-> `unsafe` implementation in the middle of the audio path's trusted computing base
-> or a dependency, and that is a choice to make with the stream code in front of
-> you rather than a fortnight before it.
+> The `cpal` layer over it translates types and nothing else. It cannot be tested
+> here: CI has no sound card, and §5.2 already puts device behaviour in the manual
+> pass, with a call live, because that is the only place it can be seen. Keeping it
+> that thin is the point — every decision it might have made wrongly has already
+> been made above it, in a function with tests.
+>
+> The ring deliberately does **not** split across threads. Making it a real
+> single-producer single-consumer queue is either hand-written `unsafe` in the
+> middle of the audio path's trusted computing base or a dependency, and that is a
+> choice to make when the streams are wired to a running pipeline rather than
+> ahead of it.
 
 ### 3d. Jitter buffer and playback (2 wk)
 

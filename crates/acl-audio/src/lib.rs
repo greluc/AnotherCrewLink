@@ -21,6 +21,7 @@ pub mod neteq_bridge;
 pub mod panner;
 pub mod resample;
 pub mod ring;
+pub mod stream;
 pub mod vad;
 pub mod voice;
 pub mod wav;
