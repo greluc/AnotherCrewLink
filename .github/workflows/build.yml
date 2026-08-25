@@ -10,9 +10,14 @@ on:
   push:
     # The Rust workspace has its own workflow. A push that touches only it changes nothing
     # this job builds, lints or tests, so skip it rather than rerunning the Electron build
-    # and both installers for it. rust.yml carries the mirror image of this filter.
-    # Everything else — src/, static/, package.json — still triggers a run, because
-    # paths-ignore only skips when every changed path matches.
+    # and both installers for it. Everything else — src/, static/, package.json — still
+    # triggers a run, because paths-ignore only skips when every changed path matches.
+    #
+    # **Nearly the mirror of rust.yml's filter, and deliberately not exactly.** That one
+    # also lists `src/common/ColliderMap.ts`, because `collider_data.rs` is generated from
+    # it and the drift check has to run when the source moves. It must *not* be added here
+    # to restore the symmetry: it is a client source too, and skipping the Electron build
+    # for it would stop testing the file both sides read.
     paths-ignore:
       - 'crates/**'
       - 'experiments/**'
