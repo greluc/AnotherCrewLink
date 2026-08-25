@@ -105,9 +105,20 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 ## Wire protocol
 
 Socket.IO 4 (Engine.IO v4). **This client cannot talk to the official
-BetterCrewLink server**, which runs Socket.IO 2. Eleven events, one namespace:
-`join`, `leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`,
-`join_lobby`, `lobbybrowser`, `disconnect`.
+BetterCrewLink server**, which runs Socket.IO 2. One namespace, and two
+directions — the second half used to be missing here, which mattered because of
+the warning below it.
+
+**Client to server**, the eleven the server registers a handler for: `join`,
+`leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`, `join_lobby`,
+`lobbybrowser`, `disconnect`.
+
+**Server to client**, which is just as much of the contract: `join`, `left`,
+`signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`, `VAD`,
+`lobbybrowser`, `new_lobbies`, `update_lobby`, `remove_lobby`.
+
+Both lists are read out of `src/socket.rs` in the server repository, which is the
+only place that knows all of them.
 
 Changing an event name or payload shape breaks every player who has not updated.
 Add alongside; do not repurpose.
