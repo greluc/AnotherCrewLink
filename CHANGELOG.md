@@ -1,5 +1,22 @@
 # AnotherCrewLink Changelog
 
+## v1.0.6
+
+### Fixed
+
+- **The public lobby list reshuffled itself, and full lobbies could sit above the
+  ones you could actually join.** The list is meant to put lobbies you can join
+  first, then the fullest of those, because a lobby with eight players is a game
+  about to start. One of those rules only worked in one direction, and the result
+  was that the same two lobbies came out in a different order depending on the
+  order the server happened to send them — so the list rearranged itself between
+  refreshes for no reason you could see, and a lobby with no room could appear at
+  the top.
+
+  A lobby the server reports as over its own limit now counts as full as well. It
+  used to be treated as joinable, and because it also had the most players it went
+  straight to the top.
+
 ## v1.0.5
 
 A removal release. Two features are gone — hosting for mobile players, and the OBS
