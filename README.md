@@ -46,7 +46,7 @@ least proves you have the same bytes the build produced. Compare it with the val
 [release page](https://github.com/greluc/AnotherCrewLink/releases):
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\AnotherCrewLink-Setup-1.0.4.exe
+Get-FileHash -Algorithm SHA256 .\AnotherCrewLink-Setup-1.0.5.exe
 ```
 
 The value to compare it against is on the release itself. It is not repeated here: a

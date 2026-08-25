@@ -204,6 +204,17 @@ the upstream release and the merged, purged bundle.
 > deploying the Rust server. The paragraphs below are kept as the record of what was
 > decided and why.
 
+> **Superseded 2026-08-25.** The Electron client no longer has either feature. The
+> `mobileHost` setting, the `<code>_mobile` broadcast, `obsOverlay`, `obsSecret` and the
+> `ObsVoiceState` payload were removed from it, along with the settings that turned them
+> on. Nothing this project ships emits either feed any more, and there is no client left
+> to break.
+>
+> What that changes here: the OBS overlay page is no longer a scheduling constraint on
+> any server release — there is no sender for it to stay compatible with — and the
+> mobile relay is not something the envelope rules break, because it is already gone.
+> The paragraphs around this note are kept as the record of what was decided and why.
+
 **H3 enforces from the first release. There is no logging period.** The signal
 envelope rules — `to` must be a co-member of the sender's lobby, `to != from`, a
 size cap — and first-claimer host go on when the server release ships. No
@@ -703,6 +714,84 @@ fixtures.
 
 ## 4.5 Phase 3 — Audio engine (10 weeks) → **Gate G2**
 
+> **Status, 2026-08-25.** Every item is built, `crates/acl-audio` carries 424 tests, and
+> every gate criterion that has not been struck is met.
+>
+> Closing it changed two things it was supposed only to measure: the jitter buffer's depth
+> had to become adaptive, and the FEC controller turned out to have been doing nothing at
+> all. Both were found by comparing against Chromium rather than against the plan.
+>
+> | Item | State |
+> | --- | --- |
+> | 3a DSP graph | done — every node within −80 dBFS of Chromium's own output |
+> | 3b `voice_params` | done — 1035 recorded tuples, no difference |
+> | 3c Capture and codec | done — `stream::choose` decides what to ask a device for, with tests; the `cpal` layer over it is translation only |
+> | 3d Jitter buffer and playback | done — the buffer adapts its depth, which measuring against Chromium forced; `NetEq` bridge, mixer, output selection |
+> | 3e FEC feedback loop | done both directions, and the loop was found to have been achieving nothing until `Signal::Voice` was set; less the `ReceiverReportInterceptor` call that would pick P4's transport crate by accident |
+>
+> | Gate G2 | State |
+> | --- | --- |
+> | 1. DSP against golden vectors | **met** |
+> | 2. `voice_params` parity | **met** |
+> | 3. Latency and quality against Chromium | **met** — every profile within the 30 ms budget, and less invented audio than Chromium under loss |
+> | 4. Zero allocations on the render callback | **met**, and it moved the APM off the capture callback to stay met |
+> | 5. FEC recovery with a Chromium sender | **met** — all four legs, against Chromium's own encoder and its own receiver |
+> | 6. `i686` build | struck; the target no longer exists |
+>
+> **Criteria 3 and 5 were parked behind P4 and did not belong there.** Both were read
+> as needing a Chromium peer across a network. Neither does:
+>
+> - Chromium's *encoder* is reachable from a page through WebCodecs, so criterion 5's
+>   receiving half is measurable now. It put redundancy in 862 of 1001 packets, and at
+>   5% loss the receive path recovers 39 frames where a control with the redundancy
+>   removed recovers none.
+> - Chromium's *receive path* is reachable through a loopback peer connection, and an
+>   encoded transform is a place to drop frames before they reach it. That is NetEQ, its
+>   delay manager and its concealment, under the same profiles as ours.
+>
+> | | ours | Chromium |
+> | --- | --- | --- |
+> | latency, every profile | 40 ms | 10–30 ms |
+> | worst difference | +30.0 ms | budget 30 ms |
+> | invented audio, 10% loss | 3.7% | 8.8% |
+> | invented audio, clean | 2.0% | 0.0% |
+>
+> **Measuring it changed the design.** A fixed depth cannot meet the criterion: 40 ms is
+> within budget on a clean network and invents 17% of frames under 50 ms of jitter, and
+> 60 ms survives the jitter and is 50 ms adrift on a clean one. The buffer now moves — it
+> deepens when a packet arrives after its slot has played, which is the only observation
+> that means "too shallow", and regains depth by inserting one concealment frame so the
+> stream falls further behind the network. An earlier version deepened on every gap and
+> grew to 185 ms under 10% loss, buying nothing: a packet that never arrives is loss, and
+> no depth recovers it.
+>
+> **Criterion 5, leg by leg.** Its observable is `fecPacketsSent` climbing in both
+> directions, which is a counter meaning "this encoder emitted redundancy".
+> `opus_packet_has_lbrr` answers the same question about the same bytes, and answers it
+> about *these* packets rather than about a total:
+>
+> | | verified | how |
+> | --- | --- | --- |
+> | Chromium emits redundancy | yes | 862 of 1001 packets, inspected |
+> | our receiver recovers it | yes | 39 frames at 5% loss; 0 with the redundancy stripped |
+> | we emit redundancy | yes | 171 of 200 packets, told mid-call |
+> | a Chromium receiver recovers ours | yes | it conceals 1.43% of our stream against 4.42% of the same audio without redundancy |
+>
+> The fourth had been parked behind P4 on the grounds that Chromium has to *receive* our
+> stream and nothing exists to carry it. Something does: an encoded transform can **replace**
+> a frame's payload, not only drop it. So Chromium packetises our Opus, sends it to itself,
+> and its own receive path — NetEQ, libopus, its FEC recovery — decodes it.
+>
+> The loss goes in on the **receiving** side, after depacketisation. Injected before
+> packetisation the sequence numbers close up and nothing downstream learns a frame is
+> missing, which is why `scripts/receive-reference` reports `fecPacketsSent` as zero and why
+> a WebRTC field trial for a simulated lossy network changed nothing on a loopback — 504
+> packets sent, 504 received.
+>
+> `fecPacketsSent` itself is still zero and is not the thing to chase. It is a counter
+> meaning "this encoder emitted redundancy", and that question is answered directly, about
+> the actual bytes, by `opus_packet_has_lbrr` — for both encoders.
+
 The phase that decides the project. No UI, no network — a library plus a
 command-line harness that reads WAV in and writes WAV out.
 
@@ -780,6 +869,33 @@ name `cubeb` 0.38.0 as the documented fallback with a written trigger condition 
 cpal 0.18 is a ten-week-old rework whose WASAPI device-change path, the one this
 app already has a bug class around, has four open issues on it.
 
+> **Where 3c stands, 2026-08-24.** Resampling, the codec, the VAD, the APM and
+> device enumeration are built and tested. `acl-audio::ring` is the buffer between
+> the capture callback and the worker that §3.2 now requires, with the wrap, the
+> overwrite-oldest and the all-or-nothing frame read under test and measured at
+> zero allocations.
+>
+> `acl-audio::stream` is the rest of it, split so that the part with decisions in it
+> can be tested and the part that touches a sound card cannot hide any. `choose`
+> takes what a device says it supports and picks a rate, a channel count and a
+> buffer size, with twelve tests: 48 kHz over everything else because Opus, the
+> canceller and the mixer all run there; the fewest channels that carry the audio,
+> because a device offering eight will open with eight; and a buffer of one frame
+> at whatever rate was chosen — 960 at 48 kHz, 882 at 44.1 — clamped into what the
+> device accepts.
+>
+> The `cpal` layer over it translates types and nothing else. It cannot be tested
+> here: CI has no sound card, and §5.2 already puts device behaviour in the manual
+> pass, with a call live, because that is the only place it can be seen. Keeping it
+> that thin is the point — every decision it might have made wrongly has already
+> been made above it, in a function with tests.
+>
+> The ring deliberately does **not** split across threads. Making it a real
+> single-producer single-consumer queue is either hand-written `unsafe` in the
+> middle of the audio path's trusted computing base or a dependency, and that is a
+> choice to make when the streams are wired to a running pipeline rather than
+> ahead of it.
+
 ### 3d. Jitter buffer and playback (2 wk)
 
 `neteq` integration with `default-features = false` — mandatory, or the audio
@@ -791,10 +907,68 @@ selection (replacing `setSinkId`). NetEQ is pull-based: accelerate, preemptive
 expand and expand all drive decode on demand, so the `AudioDecoder`
 implementation is what makes the pipeline work at all, not an optimisation.
 
+> **The mixer is `acl-audio::mixer`, and it produces two buffers rather than one.**
+> The output the device is handed, and the mono downmix the echo canceller needs as
+> its far-end reference. §3.3 spends a paragraph on why that reference must be this
+> buffer and no other, and putting the downmix anywhere else leaves a caller free to
+> assemble the wrong one — which does not fail, it silently stops cancelling.
+>
+> It clamps, because Chromium's destination node clamps and every other number in
+> this crate is matched against Chromium; differing at the last addition after
+> matching five DSP nodes to −80 dBFS would be strange. Thirteen peers, zero
+> allocations, and the clamping is reported rather than hidden.
+>
+> Output device *selection* is `acl-audio::device`: enumeration, defaults, and
+> `reacquire`, which finds a device again by id and falls back to its name — the
+> failure the Electron client has a bug class around, where a driver update changes
+> the id and `setSinkId` silently sends one player's voice nowhere.
+
 Measure it against a well-tuned fixed jitter buffer with Opus in-band FEC and PLC
 under the same emulation. That is what most peer-to-peer voice apps ship, and
 without it the gate has no baseline to judge NetEQ against — and no fallback
 short of porting the reference implementation, which is a multi-week job.
+
+> **Built and measured 2026-08-24, and the measurement is mostly about the
+> measurement.** `acl-audio::neteq_bridge` is the `AudioDecoder` implementation
+> this item asks for: `neteq` now decodes through the same libopus as everything
+> else, which is what keeps `ropus` out of a binary that already links the
+> reference implementation. `tests/jitter_comparison.rs` runs both buffers through
+> the same twelve impairment profiles.
+>
+> **`neteq` 0.9.1 cannot be evaluated offline.** Its delay manager ignores the
+> `arrival_time` on the packet it is handed and calls `Instant::now()` itself
+> (`delay_manager.rs:245`), measuring the gap between consecutive `insert_packet`
+> calls. There is no clock to inject and no seam to add one. So the network it
+> believes it is on is the timing of whatever process is feeding it.
+>
+> Two versions of the harness drove it from simulated time before this was found.
+> Both produced a tidy table: its estimator saturated at `base_maximum_delay_ms`,
+> it stretched every frame chasing a two-second target, and every frame came back
+> classified `Expand`. One of those runs was very nearly written up as *NetEQ under
+> packet loss*.
+>
+> Running the comparison in real time is the only option left, and a test is not a
+> good clock: Windows' timer granularity is about 15 ms against a 20 ms packet
+> interval, so the harness contributes jitter of the same order as the thing being
+> simulated. The `clean` profile is the control that proves it — `neteq` reports
+> about 11% of frames as concealment on a network with **no impairment at all**.
+>
+> | | fixed | `neteq` |
+> | --- | --- | --- |
+> | clean | 3.1% gaps, 60 ms | 11.2% gaps, 207 ms |
+> | 10% loss | 5.8% gaps, 60 ms | 18.9% gaps, 110 ms |
+> | 500 ms freeze | 11.0% gaps, 60 ms | 19.0% gaps, 149 ms |
+>
+> **Read only the left column.** The right one is this harness's scheduling as much
+> as it is `neteq`, and publishing it as a verdict would be the same mistake the FEC
+> counter made: a number that looks like evidence and measures the instrument.
+>
+> What the item asked for — a baseline to judge NetEQ against — exists now for the
+> fixed buffer, under the same real-time conditions, and those numbers are
+> comparable to each other. Judging `neteq` itself needs either a version whose
+> delay manager takes a clock or a harness that is not a test, and that is P4's
+> problem, at the point there is a real network to put it on. **The fixed buffer
+> ships until then**, which is what 3e's FEC recovery already assumed.
 
 ### 3e. The Opus FEC feedback loop, both directions (2 wk)
 
@@ -858,12 +1032,27 @@ that is why it is a G2 criterion.
 > asks `opus_packet_has_lbrr` instead. With the loop closed: 37 recovered, 22 gaps. With it
 > open: 0 recovered, 59 gaps.
 >
-> The corrected classification also exposed a threshold nothing in the plan anticipated:
-> **below about 5% reported loss libopus emits no usable redundancy at all.** At 1% and 2%
-> the recovery count is zero, not small. That is defensible -- concealment holds quality at
-> 0.995 and 0.984 there -- but it means the controller's output between 1% and 4% is intent
-> without effect, and no reading of the impairment table should attribute those rows to
-> error correction. No bitrate ladder — below roughly 16–20 kbps
+> The corrected classification appeared to expose a threshold -- below about 5% reported
+> loss, no redundancy at all, zero rather than a little -- and it was written down here as
+> a property of libopus.
+>
+> **It was not. Corrected 2026-08-24.** LBRR lives in libopus's SILK layer; libopus decides
+> for itself whether a signal is speech or music, and music is coded by CELT, which carries
+> no LBRR. The encoder had been left to guess. `Encoder::new` now says `Signal::Voice`,
+> which is simply true of this application, and 1% recovers 6 frames where it recovered 0,
+> 2% recovers 20, and 5% recovers 39 instead of 28.
+>
+> **The same mistake also broke the controller outright, which is worse.** Told about 5%
+> before its first frame, the encoder protected 175 of 200 packets. Told the same thing
+> after two hundred frames -- which is what a receiver report does, and the only thing the
+> controller ever does -- it protected **none**: an encoder settled into a mode without LBRR
+> did not go back for it. So the loop §3e exists to close was reporting success and
+> achieving nothing, wearing the costume of the fix for exactly that fault. With
+> `Signal::Voice` it protects 171 of 200.
+>
+> It was found by asking of our own packets the question that had been asked of Chromium's:
+> not "did the call succeed" but `opus_packet_has_lbrr` -- is the redundancy actually in
+> there. No bitrate ladder — below roughly 16–20 kbps
 libopus carries no meaningful LBRR, so a ladder's bottom rung would disable this
 loop exactly when it is needed.
 

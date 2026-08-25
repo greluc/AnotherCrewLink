@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/Dodatne nastavitve",
-			"mobilehost": "Gostitelj za mobilne naprave",
 			"vad_enabled": "VAD omogočen",
 			"hardware_acceleration": "Pospeševanje s pomočjo strojne opreme",
 			"hardware_acceleration_warning": "To onemogoči strojno pospeševanje (lahko vpliva na povečano uporabo procesorja)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Nastavitve za prenašanje v živo",
 			"hidecode": "Pokaži kodo čakalnice",
-			"obs_overlay": "OBS Browser Overlay",
-			"obs_url": "OBS Browser Source URL",
 			"voice_server_comp": "GS združljivostni način",
 			"voice_server_comp_warning": "Priporočeno je, da samo spremenite glasovni strežnik na uradni bettercrewlink strežnik na naslovu https://bettercrewl.ink."
 		},

@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "移动端主机",
 			"vad_enabled": "启用VAD",
 			"hardware_acceleration": "硬件加速",
 			"hardware_acceleration_warning": "禁用硬件加速将会导致CPU占用上升！",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "直播设置",
 			"hidecode": "显示大厅代码",
-			"obs_overlay": "OBS 浏览器覆盖源",
-			"obs_url": "OBS浏览器源URL",
 			"voice_server_comp": "VS 兼容模式",
 			"voice_server_comp_warning": "建议将语音服务器更改为AnotherCrewLink Voice Server ，例如：https://bettercrewl.ink 。"
 		},

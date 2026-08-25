@@ -79,6 +79,12 @@ rubato = "=5.0.0"
 # precisely so it can be replaced, and `cubeb` is the documented fallback. See
 # `acl-audio::device` for the trigger conditions.
 cpal = "0.18"
+# The echo canceller, behind `acl-audio::apm`'s trait for the same reason cpal is behind
+# `device`'s: the gate was allowed to change the answer without changing the graph, and it
+# very nearly did. Pure Rust, BSD-3-Clause, ported from WebRTC M145. Measured against
+# libwebrtc's AEC3 on the same echo path at 11.6 dB against 11.3 dB -- no difference --
+# so the decision fell to AEC3 arriving as a prebuilt 86 MB blob. See `experiments/`.
+sonora = "0.2.0"
 # `default-features = false` is not a preference, it is the whole reason this is usable:
 # the defaults pull in axum, clap, a second cpal three majors behind the pinned one, and
 # `ropus` — a second Opus implementation, in a binary that already carries libopus.

@@ -19,7 +19,7 @@ modules.forEach(module => console.log(module));
 const str = memoryjs.readMemory(0x69085bc0, memoryjs.STRING);
 console.log(str); // "this is a sample string";
 
-/* How to read and write vectors
+/* How to read vectors
  * C++ code:
  * ```
  * struct Vector3 { float x, y, z;    };
@@ -33,14 +33,12 @@ console.log(str); // "this is a sample string";
 let vec3 = {
   x: 0, y: 0, z: 0,
 };
-memoryjs.writeMemory(0x000001, vec3, memoryjs.VEC3);
 vec3 = memoryjs.readMemory(0x000001, memoryjs.VEC3); // { x, y, z }
 console.log(vec3);
 
 let vec4 = {
   w: 0, x: 0, y: 0, z: 0,
 };
-memoryjs.writeMemory(0x000002, vec4, memoryjs.VEC4);
 vec4 = memoryjs.readMemory(0x000002, memoryjs.VEC4); // { w, x, y, z }
 console.log(vec4);
 

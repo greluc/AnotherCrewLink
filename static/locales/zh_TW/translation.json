@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "手機端主機",
 			"vad_enabled": "啟用語音活性檢測 (VAD)",
 			"hardware_acceleration": "硬體加速",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "直播設定",
 			"hidecode": "顯示大廳代碼",
-			"obs_overlay": "OBS Browser 疊層",
-			"obs_url": "OBS Browser Source 網址",
 			"voice_server_comp": "語音伺服器相容模式",
 			"voice_server_comp_warning": "建議將語音伺服器更改為AnotherCrewLink Voice Server，例如: https://bettercrewl.ink 。"
 		},

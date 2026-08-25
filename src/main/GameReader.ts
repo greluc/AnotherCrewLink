@@ -620,7 +620,7 @@ export default class GameReader {
 		this.offsets.miniGame[0] = miniGame;
 		// `connectFunc`, `fixedUpdateFunc`, `showModStampFunc` and `modLateUpdateFunc` were
 		// scanned for here, on 32-bit builds only. All four were addresses to write to, and
-		// the write path was removed on 2026-08-24, so nothing reads them any more.
+		// the write path is gone, so the fields are no longer part of the bundle at all.
 		//
 		// Scanning for them was not merely wasted: on a build where the signature misses,
 		// `findPattern` returns an unsigned wrap of a negative number, which went into the

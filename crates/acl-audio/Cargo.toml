@@ -19,6 +19,7 @@ neteq.workspace = true
 opus.workspace = true
 opusic-sys.workspace = true
 rubato.workspace = true
+sonora.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true

@@ -1,5 +1,39 @@
 # AnotherCrewLink Changelog
 
+## v1.0.5
+
+A removal release. Two features are gone — hosting for mobile players, and the OBS
+browser overlay — and with them the last of the machinery in this app that could write
+into another program's memory. If you used the overlay while streaming, this release
+changes something for you and the note below says what to do instead. If you did not,
+nothing you can see is different.
+
+### Removed
+
+- **Mobile Host is gone.** This was a beta setting that relayed the whole game state —
+  every player's position, whether they were dead, in a vent, or an impostor — to a room
+  on the voice server named after your lobby code, so that a phone app could follow along
+  and place voices for people playing on mobile. That phone app was never released by
+  this project. The setting and the broadcast behind it have both been taken out.
+
+- **The OBS browser overlay is gone.** Streamers could switch this on and paste a URL
+  into OBS as a browser source to show who was talking, who was dead, and where everyone
+  stood. It worked by publishing the same full picture of the lobby through the voice
+  server, addressed to a secret string; anyone who had the string could read it. The
+  setting, the URL and the feed are all gone, and if you had it in your scene the source
+  will now stay blank.
+
+  If you stream and relied on it, the in-game overlay — Settings → Overlay — still shows
+  who is talking, and it is captured by capturing the game window.
+
+- **The bundled memory library can no longer write to another process at all.** 1.0.4
+  already stopped this app writing into Among Us and stopped asking the operating system
+  for permission to. What was left was the ability itself, unused, inside the library
+  that does the reading: routines to write memory, to allocate executable memory, to
+  change what a page of memory is allowed to do, and to assemble machine code and run it
+  inside another program. All of them have been deleted from the library's source. This
+  changes nothing you can see; it means there is no longer anything to switch back on.
+
 ## v1.0.4
 
 Connections that used to fail quietly now recover, say why when they cannot, and stop

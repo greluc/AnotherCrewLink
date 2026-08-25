@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/SAZLAMA",
-			"mobilehost": "Mobil Host",
 			"vad_enabled": "VAD Fəaldır",
 			"hardware_acceleration": "Aparat Təminatı Sürətləndirmə",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Axın tənzimləmələri",
 			"hidecode": "Lobbi Kodunu Göstər",
-			"obs_overlay": "OBS Səyyah Overlay-ı",
-			"obs_url": "OBS Səyyah Mənbə URL-si",
 			"voice_server_comp": "Səs Server Uyğunluq Rejimi",
 			"voice_server_comp_warning": "Məsələn, səs serverini AnotherCrewLink Voice Server (https://bettercrewl.ink) olaraq dəyişdirməyiniz tövsiyə edilir."
 		},

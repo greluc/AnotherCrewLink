@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Permitir jogadores Android/iOS",
 			"vad_enabled": "VAD Ativo",
 			"hardware_acceleration": "Utilizar Aceleração por Hardware",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Definições de Streaming",
 			"hidecode": "Mostrar o Código do Lobby",
-			"obs_overlay": "Sobreposição do OBS",
-			"obs_url": "Link da Sobreposição do OBS",
 			"voice_server_comp": "Modo de Compatibilidade com servidores Crewlink",
 			"voice_server_comp_warning": "É recomendado mudar para o Servidor de Voz predefinido do AnotherCrewLink."
 		},

@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "БЕТА/ТӨЗӘТҮ",
-			"mobilehost": "Телефон өчен бүлмә хуҗасы",
 			"vad_enabled": "VAD кушылган",
 			"hardware_acceleration": "Аппарат тизләнеше",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Стрим көйләүләре",
 			"hidecode": "Бүлмә кодын күрсәтергә",
-			"obs_overlay": "OBS-браузер оверлее",
-			"obs_url": "OBS-браузер чыганак URL",
 			"voice_server_comp": "VS белән яраклашу шарты",
 			"voice_server_comp_warning": "Тавыш серверын AnotherCrewLink тавыш серверына үзгәртү тәкъдим ителә (https://bettercrewl.ink), мәсәлән."
 		},

@@ -11,17 +11,23 @@
 //! > within 30 ms of Chromium's and its objective quality score is no more than 0.2 MOS
 //! > below it.
 //!
-//! This is the harness and the measurement for **our** path. The comparison against
-//! Chromium is the other half and needs a Chromium peer to measure, which needs the
-//! network layer; the numbers here are what that comparison will be made against, and
-//! they are printed rather than only asserted so a change in them is visible in a diff.
+//! This is the harness and the measurement for **our** path, in detail. The comparison
+//! against Chromium's own receive path is `chromium_reference.rs`, which turned out not to
+//! need the network layer after all: a loopback peer connection with an encoded transform
+//! is Chromium's receiver, and dropping frames in the transform is the impairment.
+//!
+//! The numbers here are printed rather than only asserted, so a change in them is visible
+//! in a diff.
 //!
 //! # What is measured
 //!
 //! - **Continuity**: how many output frames came from a real packet, from the redundancy,
 //!   from concealment, or from nothing. The last is the one a listener notices.
-//! - **Added latency**: the buffer's depth in milliseconds. It is fixed here by
-//!   construction, which is the point of a fixed buffer and the thing `NetEQ` varies.
+//! - **Added latency**: the buffer's depth in milliseconds. No longer fixed: measuring
+//!   against Chromium showed that no single depth can meet the criterion, so the buffer
+//!   moves. See `chromium_reference.rs`.
+//! - **Stretched**: frames the buffer inserted on purpose to fall further behind the
+//!   network and regain depth. Not gaps — the packet each one delays is played next.
 //! - **Quality**: correlation with the clean decode of the same stream, per frame,
 //!   averaged. Not PESQ — that is a licensed algorithm and a dependency this does not
 //!   have — but it moves the same way and it is honest about being a proxy.
@@ -35,34 +41,40 @@
 //! and one that never had. The buffer now asks `opus_packet_has_lbrr` before it claims
 //! anything.
 //!
-//! Correcting it exposed a threshold worth knowing:
+//! Correcting it appeared to expose a threshold, and the threshold turned out to be a
+//! second bug:
 //!
-//! | told the encoder | frames recovered | frames concealed |
+//! | told the encoder | recovered, before | recovered, after |
 //! | --- | --- | --- |
-//! | 1% | 0 | 7 |
-//! | 2% | 0 | 24 |
-//! | 5% | 28 | 21 |
-//! | 10% | 79 | 23 |
+//! | 1% | 0 | 6 |
+//! | 2% | 0 | 20 |
+//! | 5% | 28 | 39 |
+//! | 10% | 79 | 79 |
 //!
-//! **Below about five percent, libopus emits no usable redundancy at all.** Not a little:
-//! none. That is not a fault -- at one or two percent concealment holds quality at 0.995
-//! and 0.984, so there is nothing to protect against -- but it does mean the controller's
-//! output between one and four percent is intent without effect, and anybody reading these
-//! rows should not expect error correction to explain them.
+//! The left column read as "below about five percent libopus emits no usable redundancy",
+//! which was written down as a property of libopus. It is not. LBRR lives in the SILK
+//! layer, libopus decides for itself whether a signal is speech or music, and music is
+//! coded by CELT, which has no LBRR at all -- so the encoder was answering a question
+//! nobody had meant to ask. `Encoder::new` now says `Signal::Voice`, which is true of this
+//! application, and the right column is what the same runs produce.
 //!
-//! # Where the quality number lies, and it does
+//! Worth keeping as a warning rather than deleting: a measured number that looks like a
+//! codec's behaviour can be a configuration nobody chose.
 //!
-//! The frames are compared in order, without aligning them in time. A profile that
-//! *delays* the stream rather than damaging it therefore scores badly while sounding
-//! perfect: `freeze-500` reads about 0.5 because after the freeze every output frame is
-//! being compared against a reference frame half a second earlier, not because half a
-//! second of audio is wrong.
+//! # Where the quality number still lies, and where it stopped
 //!
-//! Continuity is the number to read for that profile, and it says what actually happened:
-//! 1000 frames from packets and 3% gaps, against 500 and 52% before the buffer learned to
-//! resynchronise. Aligning the comparison would need a cross-correlation search per
-//! profile, and the gate's real comparison is against Chromium under the same profile,
-//! where both sides carry the same delay.
+//! Each output frame is compared against the source frame it actually carries, not the one
+//! at the same position. That matters because a stall plays a concealment frame and holds
+//! its packet back, so everything after it is one place earlier than a positional
+//! comparison expects. When the buffer first learned to stall, this file reported 0.028 for
+//! a path that had just been made better.
+//!
+//! **`freeze-500` is still wrong, and is left wrong.** Half a second with nothing arriving
+//! ends in a resynchronisation — the buffer abandons the sequence it was waiting for and
+//! starts again from what arrived — and after that there is no mapping from output frame to
+//! source frame to align by. It reads about 0.5 and sounds fine. Continuity is the column
+//! to read there: 1000 frames from packets and 3% gaps, against 500 and 52% before the
+//! resynchronisation existed.
 
 use acl_audio::codec::{Decoder, Encoder, FRAME_SAMPLES};
 use acl_audio::impairment::{Profile, apply};
@@ -78,6 +90,8 @@ const FRAME_MS: u32 = 20;
 #[derive(Debug)]
 struct Measurement {
     from_packet: usize,
+    /// Frames the buffer inserted on purpose to regain depth. Not a gap.
+    stretched: usize,
     recovered: usize,
     concealed: usize,
     silent: usize,
@@ -178,20 +192,45 @@ fn measure(profile: Profile, seed: u32) -> Measurement {
         now_ms += FRAME_MS;
     }
 
-    let quality = if produced.is_empty() {
-        0.0
-    } else {
-        let pairs = produced.len().min(clean.len());
-        let total: f64 = (0..pairs)
-            .map(|index| correlation(&clean[index], &produced[index]))
-            .sum();
-        total / pairs as f64
+    // Compared against the source frame each output frame *is*, not against the one at the
+    // same position. A stall plays a concealment frame and holds the packet back, so from
+    // that point on every output frame carries source audio one place earlier -- and a
+    // positional comparison sees the whole rest of the call as wrong. It read 0.028 where
+    // it had read 0.984, for a buffer that had just been made better.
+    //
+    // The stalls themselves are skipped rather than scored. They are audio the buffer
+    // invented on purpose, and there is no source frame they correspond to.
+    let quality = {
+        let mut source_index = 0usize;
+        let mut total = 0.0f64;
+        let mut compared = 0usize;
+        for (index, frame) in produced.iter().enumerate() {
+            let stalled = sources.get(index) == Some(&FrameSource::Stretched);
+            if stalled {
+                continue;
+            }
+            let Some(reference) = clean.get(source_index) else {
+                break;
+            };
+            total += correlation(reference, frame);
+            compared += 1;
+            source_index += 1;
+        }
+        if compared == 0 {
+            0.0
+        } else {
+            total / compared as f64
+        }
     };
 
     Measurement {
         from_packet: sources
             .iter()
             .filter(|s| **s == FrameSource::Packet)
+            .count(),
+        stretched: sources
+            .iter()
+            .filter(|s| **s == FrameSource::Stretched)
             .count(),
         recovered: sources
             .iter()
@@ -221,12 +260,13 @@ fn the_receive_path_survives_every_profile() {
     for (name, profile) in Profile::suite() {
         let measurement = measure(profile, 20_260_824);
         println!(
-            "{:<12} {:>7} {:>9} {:>9} {:>7} {:>7.1}% {:>9.3}",
+            "{:<12} {:>7} {:>9} {:>9} {:>7} {:>9} {:>7.1}% {:>9.3}",
             name,
             measurement.from_packet,
             measurement.recovered,
             measurement.concealed,
             measurement.silent,
+            measurement.stretched,
             measurement.gap_share() * 100.0,
             measurement.quality
         );

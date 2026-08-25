@@ -163,22 +163,6 @@ const DisabledTooltip: React.FC<DisabledTooltipProps> = ({ disabled, children, t
 	else return <>{children}</>;
 };
 
-/**
- * The secret is the name of the room the overlay feed is published to, so guessing it
- * yields every player's position and role. It used to come from Math.random(), which is
- * neither unpredictable nor uniform in length - toString(36) drops leading zeroes, so it
- * could return fewer than the nine characters the sender checks for. Existing secrets keep
- * working; a user who wants a stronger one regenerates it, and their overlay URL changes
- * with it.
- */
-function generateObsSecret(): string {
-	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-	const bytes = new Uint8Array(16);
-	crypto.getRandomValues(bytes);
-	// Rejection-free because the alphabet is exactly 32 long: five bits per character.
-	return Array.from(bytes, (byte) => alphabet[byte & 31]).join('');
-}
-
 const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) => {
 	const { classes } = useStyles({ open });
 	const [settings, setSettings, setLobbySettings] = useContext(SettingsContext);
@@ -207,7 +191,6 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 		settings.noiseSuppression,
 		settings.oldSampleDebug,
 		settings.echoCancellation,
-		settings.mobileHost,
 		settings.microphoneGainEnabled,
 		settings.micSensitivityEnabled,
 	]);
@@ -1065,13 +1048,6 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 				<div>
 					<FormControlLabel
 						className={classes.formLabel}
-						label={t('settings.beta.mobilehost')}
-						checked={settings.mobileHost}
-						onChange={(_, checked: boolean) => setSettings('mobileHost', checked)}
-						control={<Checkbox />}
-					/>
-					<FormControlLabel
-						className={classes.formLabel}
 						label={t('settings.beta.vad_enabled')}
 						checked={settings.vadEnabled}
 						onChange={(_, checked: boolean) => {
@@ -1166,33 +1142,6 @@ const Settings: React.FC<SettingsProps> = ({ t, open, onClose }: SettingsProps) 
 						onChange={(_, checked: boolean) => setSettings('hideCode', !checked)}
 						control={<Checkbox />}
 					/>
-					<FormControlLabel
-						className={classes.formLabel}
-						label={t('settings.streaming.obs_overlay')}
-						checked={settings.obsOverlay}
-						onChange={(_, checked: boolean) => {
-							setSettings('obsOverlay', checked);
-							if (!settings.obsSecret) {
-								setSettings('obsSecret', generateObsSecret());
-							}
-						}}
-						control={<Checkbox />}
-					/>
-					{settings.obsOverlay && (
-						<TextField
-							fullWidth
-							spellCheck={false}
-							label={t('settings.streaming.obs_url')}
-							value={`${settings.serverURL.includes('https') ? 'https' : 'http'}://obs.aucl.greluc.me/?compact=${
-								settings.compactOverlay ? '1' : '0'
-							}&position=${settings.overlayPosition}&meeting=${settings.meetingOverlay ? '1' : '0'}&secret=${
-								settings.obsSecret
-							}&server=${settings.serverURL}`}
-							variant="outlined"
-							color="primary"
-							slotProps={{ input: { readOnly: true } }}
-						/>
-					)}
 				</div>
 				<Divider />
 				<Typography variant="h6">{t('settings.troubleshooting.title')}</Typography>

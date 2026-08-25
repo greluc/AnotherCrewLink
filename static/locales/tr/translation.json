@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Mobil Oyun Kurucu",
 			"vad_enabled": "VAD Aktif",
 			"hardware_acceleration": "Donanım Hızlandırma",
 			"hardware_acceleration_warning": "Donanım Hızlandırmayı kapatır (İşlemci kullanımını arttırabilir.)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Yayın Ayarları",
 			"hidecode": "Lobi Kodunu Göster",
-			"obs_overlay": "OBS Tarayıcı Arayüzü",
-			"obs_url": "OBS Tarayıcı Kaynağı URL",
 			"voice_server_comp": "Ses Sunucusu Uyumluluk Modu",
 			"voice_server_comp_warning": "Ses sunucusunu, bir AnotherCrewLink sunucusuna değiştirmeniz tavsiye edilir. Örneğin https://bettercrewl.ink ."
 		},

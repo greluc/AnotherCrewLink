@@ -1,0 +1,225 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>receive reference</title>
+<!-- Nothing renders. The page exists because a peer connection and an encoded transform
+     both need a document, and because WebCodecs-adjacent APIs are gated on a secure
+     context, which `about:blank` is not. -->
+<script>
+	/** Opus's frame, and this client's. */
+	const FRAME_MS = 20;
+	const SAMPLE_RATE = 48000;
+	/** The seed `acl-audio::impairment`'s tests use, so both sides drop the same packets. */
+	const SEED = 20260824;
+
+	/**
+	 * The same 32-bit xorshift `acl-audio::impairment` carries.
+	 *
+	 * Reimplemented rather than shared because there is no way to call Rust from here, and
+	 * `chromium_reference.rs` checks the two agree rather than assuming it — the dropped
+	 * sequence numbers go into the output for exactly that comparison.
+	 */
+	function xorshift(seed) {
+		let state = seed >>> 0 || 0x1234_5678;
+		return {
+			next() {
+				state ^= (state << 13) >>> 0;
+				state >>>= 0;
+				state ^= state >>> 17;
+				state ^= (state << 5) >>> 0;
+				state >>>= 0;
+				return state;
+			},
+			rolls(percent) {
+				if (percent === 0) return false;
+				return this.next() % 100 < percent;
+			},
+			upto(max) {
+				if (max === 0) return 0;
+				return this.next() % (max + 1);
+			},
+		};
+	}
+
+	/** `Profile::suite()`, in the order it returns them. */
+	function suite() {
+		const perfect = { loss: 0, jitter: 0, reorder: 0, freeze: 0 };
+		const profiles = [{ name: 'clean', ...perfect }];
+		for (const loss of [1, 2, 5, 10]) profiles.push({ name: `loss-${loss}`, ...perfect, loss });
+		for (const jitter of [20, 50, 100]) profiles.push({ name: `jitter-${jitter}`, ...perfect, jitter });
+		for (const reorder of [1, 5]) profiles.push({ name: `reorder-${reorder}`, ...perfect, reorder });
+		profiles.push({ name: 'freeze-500', ...perfect, freeze: 500 });
+		profiles.push({ name: 'realistic', loss: 2, jitter: 50, reorder: 1, freeze: 0 });
+		return profiles;
+	}
+
+	/**
+	 * Which packet indices the model drops, in the same order `apply` decides them.
+	 *
+	 * Only the loss decision is reproduced. Jitter and reordering are delays rather than
+	 * losses, and an encoded transform can hold a frame back but the connection is already
+	 * carrying whatever timing the machine gives it; injecting more would measure the
+	 * scheduler. The freeze is applied as a run of drops, which is what a receiver sees
+	 * from one anyway.
+	 */
+	function dropList(profile, count) {
+		const random = xorshift(SEED);
+		const dropped = [];
+		const freezeAt = Math.floor(count / 2);
+		const freezeFrames = Math.floor(profile.freeze / FRAME_MS);
+		// Mirrors `apply`'s `pending_swap` exactly, including the branch where the reorder
+		// roll is *not* made because a swap is already held. An earlier version rolled
+		// every time, and `the_two_sides_drop_the_same_packets` caught it: on `realistic`,
+		// where loss and reordering are both on, the generators had drifted apart and the
+		// two sides were measuring different networks under the same profile name.
+		let swapPending = false;
+		for (let index = 0; index < count; index += 1) {
+			if (random.rolls(profile.loss)) {
+				dropped.push(index);
+				continue;
+			}
+			random.upto(profile.jitter);
+			if (swapPending) {
+				swapPending = false;
+			} else if (random.rolls(profile.reorder)) {
+				swapPending = true;
+			}
+			if (profile.freeze > 0 && index >= freezeAt && index < freezeAt + freezeFrames) {
+				dropped.push(index);
+			}
+		}
+		return dropped;
+	}
+
+	/** A continuous tone whose pitch steps, so concealment cannot imitate it. */
+	function source(context) {
+		const oscillator = context.createOscillator();
+		oscillator.type = 'sawtooth';
+		const now = context.currentTime;
+		for (let frame = 0; frame < 2000; frame += 1) {
+			const hertz = 200 + (frame % 7) * 130;
+			oscillator.frequency.setValueAtTime(hertz, now + (frame * FRAME_MS) / 1000);
+		}
+		const gain = context.createGain();
+		gain.gain.value = 0.3;
+		const destination = context.createMediaStreamDestination();
+		oscillator.connect(gain);
+		gain.connect(destination);
+		oscillator.start();
+		return { stream: destination.stream, oscillator };
+	}
+
+	async function measure(profile, seconds) {
+		const packets = Math.floor((seconds * 1000) / FRAME_MS);
+		const dropped = dropList(profile, packets);
+		const toDrop = new Set(dropped);
+
+		const context = new AudioContext({ sampleRate: SAMPLE_RATE });
+		const { stream, oscillator } = source(context);
+
+		const sender = new RTCPeerConnection();
+		const receiver = new RTCPeerConnection();
+		sender.onicecandidate = (e) => e.candidate && receiver.addIceCandidate(e.candidate);
+		receiver.onicecandidate = (e) => e.candidate && sender.addIceCandidate(e.candidate);
+		// The receive pipeline only runs if something consumes the track. Without this the
+		// packets arrive, `packetsReceived` climbs, and `totalSamplesReceived` stays at
+		// zero -- NetEQ is never asked for audio, so there is nothing to measure. Volume
+		// zero rather than muted: muting is allowed to stop the decode, and the decode is
+		// the thing being measured.
+		let sink = null;
+		receiver.ontrack = (event) => {
+			sink = document.createElement('audio');
+			sink.autoplay = true;
+			sink.volume = 0;
+			sink.srcObject = event.streams[0];
+			document.body.appendChild(sink);
+			sink.play().catch(() => {});
+		};
+
+		const [track] = stream.getAudioTracks();
+		const rtpSender = sender.addTrack(track, stream);
+
+		// The impairment. Every encoded frame passes through here on its way out, and the
+		// ones the profile drops are simply not enqueued -- which is what loss is.
+		const streams = rtpSender.createEncodedStreams();
+		let seen = 0;
+		streams.readable
+			.pipeThrough(
+				new TransformStream({
+					transform(frame, controller) {
+						const index = seen;
+						seen += 1;
+						if (!toDrop.has(index)) controller.enqueue(frame);
+					},
+				})
+			)
+			.pipeTo(streams.writable);
+
+		await sender.setLocalDescription(await sender.createOffer());
+		await receiver.setRemoteDescription(sender.localDescription);
+		await receiver.setLocalDescription(await receiver.createAnswer());
+		await sender.setRemoteDescription(receiver.localDescription);
+
+		await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+
+		let inbound = null;
+		let outbound = null;
+		(await receiver.getStats()).forEach((report) => {
+			if (report.type === 'inbound-rtp' && report.kind === 'audio') inbound = report;
+		});
+		(await sender.getStats()).forEach((report) => {
+			if (report.type === 'outbound-rtp' && report.kind === 'audio') outbound = report;
+		});
+
+		oscillator.stop();
+		if (sink) {
+			sink.srcObject = null;
+			sink.remove();
+		}
+		await context.close();
+		sender.close();
+		receiver.close();
+
+		if (!inbound) return { name: profile.name, error: 'no inbound-rtp report' };
+		window.lastDiagnostics = {
+			connection: sender.connectionState,
+			ice: sender.iceConnectionState,
+			packetsReceived: inbound.packetsReceived,
+			bytesReceived: inbound.bytesReceived,
+			totalSamplesReceived: inbound.totalSamplesReceived,
+			packetsSent: outbound && outbound.packetsSent,
+			framesSeenByTransform: seen,
+		};
+
+		// What NetEQ added, in milliseconds: the total delay divided by how many frames it
+		// emitted. This is the figure criterion 3's 30 ms budget is against.
+		const emitted = inbound.jitterBufferEmittedCount || 0;
+		const jitterBufferMs = emitted > 0 ? (inbound.jitterBufferDelay / emitted) * 1000 : 0;
+
+		// The quality proxy. Concealed samples over received samples is what Chromium
+		// itself reports as audio it had to invent, and it is the same quantity the Rust
+		// harness calls a gap.
+		const total = inbound.totalSamplesReceived || 0;
+		const concealedShare = total > 0 ? ((inbound.concealedSamples || 0) / total) * 100 : 0;
+
+		return {
+			name: profile.name,
+			jitterBufferMs: Math.round(jitterBufferMs * 10) / 10,
+			concealedShare,
+			packetsReceived: inbound.packetsReceived || 0,
+			packetsLost: inbound.packetsLost || 0,
+			fecPacketsReceived: inbound.fecPacketsReceived || 0,
+			fecPacketsSent: (outbound && outbound.fecPacketsSent) || 0,
+			dropped,
+		};
+	}
+
+	window.measureAll = async (seconds) => {
+		try {
+			const profiles = [];
+			for (const profile of suite()) profiles.push(await measure(profile, seconds));
+			return { profiles, diagnostics: window.lastDiagnostics };
+		} catch (error) {
+			return { error: String(error && error.stack) || String(error) };
+		}
+	};
+</script>

@@ -43,13 +43,13 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 
 ## The files that matter
 
-- **`src/renderer/Voice.tsx`** (1,733 lines) — socket signalling, the peer mesh,
+- **`src/renderer/Voice.tsx`** (1,855 lines) — socket signalling, the peer mesh,
   the whole Web Audio graph, and `calculateVoiceAudio()`, which decides gain and
   pan per peer on every game frame. Almost every voice bug is in here.
-- **`src/main/GameReader.ts`** (1,223 lines) — pattern-scans `GameAssembly.dll`,
-  walks pointer chains, and on 32-bit Windows injects two hand-assembled x86
-  shellcode stubs. The most fragile file in the project: it depends on the game's
-  build.
+- **`src/main/GameReader.ts`** (1,064 lines) — pattern-scans `GameAssembly.dll`
+  and walks pointer chains. It reads and only reads: the shellcode stubs it used
+  to inject on 32-bit Windows are gone, and so is the ability to write. The most
+  fragile file in the project: it depends on the game's build.
 - **`src/renderer/peer.ts`** — a minimal `RTCPeerConnection` wrapper that
   replaced simple-peer. Small, and four separate audio bugs lived in it.
 - **`src/main/offsetStore.ts`** — fetches memory offsets over HTTP, validates

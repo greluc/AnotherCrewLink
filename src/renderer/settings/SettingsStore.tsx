@@ -115,10 +115,6 @@ export const SettingsStore = new Store<ISettings>({
 			type: 'boolean',
 			default: false,
 		},
-		mobileHost: {
-			type: 'boolean',
-			default: true,
-		},
 		vadEnabled: {
 			type: 'boolean',
 			default: true,
@@ -130,15 +126,6 @@ export const SettingsStore = new Store<ISettings>({
 		enableSpatialAudio: {
 			type: 'boolean',
 			default: true,
-		},
-		obsSecret: {
-			type: 'string',
-			default: undefined,
-		},
-
-		obsOverlay: {
-			type: 'boolean',
-			default: false,
 		},
 		echoCancellation: {
 			type: 'boolean',

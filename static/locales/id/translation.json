@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Host Seluler",
 			"vad_enabled": "VAD Diaktifkan",
 			"hardware_acceleration": "Akselerasi Perangkat Keras",
 			"hardware_acceleration_warning": "Ini menonaktifkan Akselerasi Perangkat Keras (yang bisa mempertinggi pemakaian CPU)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Penyetelan Streaming",
 			"hidecode": "Tunjukkan Kode Lobi",
-			"obs_overlay": "Overlay OBS Browser",
-			"obs_url": "URL OBS Browser Source",
 			"voice_server_comp": "Mode Kompatibilitas Server Suara",
 			"voice_server_comp_warning": "Disarankan untuk hanya mengubah server suara ke Server Suara AnotherCrewLink misalnya (https://bettercrewl.ink)."
 		},

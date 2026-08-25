@@ -20,7 +20,7 @@
 //! measured against a Chromium sender, not this. The loss reports below stand in for the
 //! ones `ReceiverReportInterceptor` will produce.
 
-use acl_audio::codec::{Encoder, FRAME_SAMPLES};
+use acl_audio::codec::{Encoder, FRAME_SAMPLES, has_redundancy};
 use acl_audio::fec::{FecController, MAX_APPLIED};
 use acl_audio::impairment::{Profile, apply};
 use acl_audio::jitter::{DEFAULT_DEPTH, FrameSource, JitterBuffer};
@@ -93,7 +93,7 @@ fn recovered_frames(told_the_encoder: bool) -> (usize, usize, u8) {
             match frame.source {
                 FrameSource::Recovered => recovered += 1,
                 FrameSource::Concealed | FrameSource::Silence => concealed += 1,
-                FrameSource::Packet => {}
+                FrameSource::Packet | FrameSource::Stretched => {}
             }
         }
         now_ms += FRAME_MS;
@@ -177,4 +177,101 @@ fn a_peer_that_falls_silent_stops_costing_bitrate() {
         }
     }
     assert_eq!(encoder.packet_loss(), 0);
+}
+
+#[test]
+fn the_controller_works_mid_call_and_not_only_before_it() {
+    // The controller exists to raise the loss figure *during* a call, when a receiver
+    // report says the network has gone bad. Checking that our own packets carry redundancy
+    // -- the same way Chromium's were checked -- found that they did not: 5% had been set
+    // and libopus put nothing in two hundred packets.
+    //
+    // The cause was not the controller. LBRR lives in libopus's SILK layer, and libopus
+    // decides for itself whether a signal is speech or music; music is coded by CELT, which
+    // has no LBRR at all. An encoder that had already settled on that mode did not go back
+    // for it, so raising the loss figure mid-call achieved exactly nothing -- a control
+    // loop reporting success and doing nothing, which is the fault §3e exists to prevent,
+    // found wearing the costume of the fix for it.
+    //
+    // `Encoder::new` now says `Signal::Voice`, which is true of this application and takes
+    // the decision away from libopus. Told later went from 0 of 200 to 171.
+    let mut from_the_start = Encoder::new().unwrap();
+    from_the_start.set_packet_loss(5).unwrap();
+    let mut told_later = Encoder::new().unwrap();
+
+    let mut packet = Vec::new();
+    let mut early = 0usize;
+    for frame in 0..200 {
+        from_the_start.encode(&source(frame), &mut packet).unwrap();
+        if has_redundancy(&packet) {
+            early += 1;
+        }
+        told_later.encode(&source(frame), &mut packet).unwrap();
+    }
+
+    told_later.set_packet_loss(5).unwrap();
+    let mut late = 0usize;
+    for frame in 200..400 {
+        told_later.encode(&source(frame), &mut packet).unwrap();
+        if has_redundancy(&packet) {
+            late += 1;
+        }
+    }
+
+    println!("redundancy: told first {early} of 200, told later {late} of 200");
+    assert!(
+        early > 150,
+        "told before its first frame, it protected only {early} of 200"
+    );
+    assert!(
+        late * 10 >= early * 9,
+        "telling it mid-call is materially worse than telling it first: {late} against {early}"
+    );
+}
+
+#[test]
+fn our_own_packets_carry_redundancy_once_the_controller_has_spoken() {
+    // The sending direction of gate G2's fifth criterion, asked the same way the receiving
+    // direction is asked of Chromium: by looking inside the packets.
+    //
+    // The criterion names `getStats()`'s `fecPacketsSent` climbing, which is a counter that
+    // means "this encoder emitted redundancy". `opus_packet_has_lbrr` answers the same
+    // question about the same bytes, without needing a peer connection to report it -- and
+    // it answers it about *these* packets rather than about a total.
+    let mut encoder = Encoder::new().unwrap();
+
+    // Silent about loss: libopus has no reason to spend bits on a redundant copy, so this
+    // is the control that makes the number below mean something.
+    let mut packet = Vec::new();
+    let mut unprotected = 0usize;
+    for frame in 0..200 {
+        encoder.encode(&source(frame), &mut packet).unwrap();
+        if has_redundancy(&packet) {
+            unprotected += 1;
+        }
+    }
+
+    // Told what the controller would tell it. Five percent, because below about that
+    // libopus emits none at all -- measured, and recorded in §4.5.
+    encoder.set_packet_loss(5).unwrap();
+    let mut protected = 0usize;
+    for frame in 200..400 {
+        encoder.encode(&source(frame), &mut packet).unwrap();
+        if has_redundancy(&packet) {
+            protected += 1;
+        }
+    }
+
+    println!(
+        "redundancy in our packets: {unprotected} before, {protected} after; bitrate {:?}",
+        encoder.bitrate()
+    );
+    assert!(
+        protected > 0,
+        "the encoder was told about 5% loss and put no redundancy in anything"
+    );
+    assert!(
+        protected > unprotected,
+        "the same number either way ({protected} against {unprotected}), so the controller changes nothing"
+    );
 }

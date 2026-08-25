@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Povolit mobilní uživatele",
 			"vad_enabled": "VAD povoleno",
 			"hardware_acceleration": "Hardwarová Akcelerace",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Nastavení pro streamování",
 			"hidecode": "Zobrazit kód lobby",
-			"obs_overlay": "OBS Webové Překrytí",
-			"obs_url": "OBS URL Webového Překrytí",
 			"voice_server_comp": "Kompatabilita zvukového serveru",
 			"voice_server_comp_warning": "Doporučujeme pouze změnit hlasový server na AnotherCrewLink Voice Server (např: https://bettercrewl.ink.)."
 		},

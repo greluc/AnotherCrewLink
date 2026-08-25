@@ -2,7 +2,7 @@ import type React from 'react';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import Avatar from './Avatar';
-import { GameStateContext, HostSettingsContext, PlayerColorContext, SettingsContext } from './contexts';
+import { GameStateContext, HostSettingsContext, SettingsContext } from './contexts';
 import {
 	type AmongUsState,
 	GameState,
@@ -39,7 +39,6 @@ import reverbOgxUrl from '../../static/sounds/reverb.ogx?url';
 import radioOnSound from '../../static/sounds/radio_on.wav?url';
 
 import { CameraLocation, AmongUsMaps, MapType } from '../common/AmongusMap';
-import type { ObsVoiceState } from '../common/ObsOverlay';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import VolumeOff from '@mui/icons-material/VolumeOff';
@@ -96,7 +95,6 @@ interface AudioElements {
 
 interface ConnectionStuff {
 	socket?: Socket;
-	overlaySocket?: Socket;
 	stream?: MediaStream;
 	instream?: MediaStream;
 
@@ -264,11 +262,9 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const lobbySettingsRef = useRef(lobbySettings);
 	const maxDistanceRef = useRef(2);
 	const gameState = useContext(GameStateContext);
-	const playerColors = useContext(PlayerColorContext);
 
 	const hostRef = useRef({
 		map: MapType.UNKNOWN,
-		mobileRunning: false,
 		gamestate: gameState.gameState,
 		code: gameState.lobbyCode,
 		hostId: gameState.hostId,
@@ -624,37 +620,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		return endGain;
 	}
 
-	/**
-	 * The handle for the mobile-host announcement, so it can be stopped.
-	 *
-	 * It used to reschedule itself unconditionally and nothing ever cancelled it: leaving a
-	 * lobby left it running, and coming back started a second one beside the first. Every
-	 * cycle of the voice effect added another announcer, all emitting on the same socket
-	 * five seconds apart, for as long as the app stayed open.
-	 */
-	const mobileNotifyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-	function notifyMobilePlayers() {
-		if (
-			settingsRef.current.mobileHost &&
-			hostRef.current.gamestate !== GameState.MENU &&
-			hostRef.current.gamestate !== GameState.UNKNOWN
-		) {
-			connectionStuff.current.socket?.emit('signal', {
-				to: `${hostRef.current.code}_mobile`,
-				data: { mobileHostInfo: { isHostingMobile: true, isGameHost: hostRef.current.isHost } },
-			});
-		}
-		mobileNotifyTimer.current = setTimeout(() => notifyMobilePlayers(), 5000);
-	}
-
-	function stopNotifyingMobilePlayers() {
-		if (mobileNotifyTimer.current !== undefined) {
-			clearTimeout(mobileNotifyTimer.current);
-			mobileNotifyTimer.current = undefined;
-		}
-	}
-
 	function disconnectAudioHtmlElement(element: HTMLAudioElement) {
 		console.log('disableing element?', element);
 		element.pause();
@@ -777,73 +742,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			audioElements.current[peer].pan.maxDistance = maxDistanceRef.current;
 		}
 	}, [lobbySettings.maxDistance, lobbySettings.visionHearing]);
-
-	useEffect(() => {
-		// Hosting for mobile players is opt-in, and the opt-in is this setting. The
-		// broadcast below used to depend only on mobileRunning, which any lobby member can
-		// switch on remotely, and it carries the whole game state: every player's position,
-		// impostor flag and vent state, to a room name anyone can join. That made a
-		// six-character lobby code enough to watch the entire lobby through the wall.
-		const hostingMobile = hostRef.current.mobileRunning && settings.mobileHost;
-		if (!gameState?.players || !connectionStuff.current.socket || (!hostingMobile && !settings.obsOverlay)) {
-			return;
-		}
-		if (hostingMobile) {
-			connectionStuff.current.socket?.emit('signal', {
-				to: `${gameState.lobbyCode}_mobile`,
-				data: { gameState, lobbySettings },
-			});
-		}
-
-		if (
-			settings.obsOverlay &&
-			settings.obsSecret &&
-			// A minimum, not an equality: secrets generated from now on are longer.
-			settings.obsSecret.length >= 9 &&
-			((gameState.gameState !== GameState.UNKNOWN && gameState.gameState !== GameState.MENU) ||
-				gameState.oldGameState !== gameState.gameState)
-		) {
-			connectionStuff.current.overlaySocket = connectionStuff.current.socket;
-
-			const obsvoiceState: ObsVoiceState = {
-				overlayState: {
-					gameState: gameState.gameState,
-					players: gameState.players.map((o) => ({
-						id: o.id,
-						clientId: o.clientId,
-						inVent: o.inVent,
-						isDead: o.isDead,
-						name: o.name,
-						colorId: o.colorId,
-						hatId: o.hatId,
-						petId: o.petId,
-						skinId: o.skinId,
-						visorId: o.visorId,
-						disconnected: o.disconnected,
-						isLocal: o.isLocal,
-						shiftedColor: o.shiftedColor,
-						bugged: o.bugged,
-						realColor: playerColors[o.colorId],
-						usingRadio: o.clientId === impostorRadioClientId.current && myPlayer?.isImpostor,
-						connected:
-							(playerSocketIdsRef.current[o.clientId] &&
-								socketClients[playerSocketIdsRef.current[o.clientId]]?.clientId === o.clientId) ||
-							false,
-					})),
-				},
-				otherTalking,
-				otherDead,
-				localTalking: talking,
-				localIsAlive: !myPlayer?.isDead,
-				mod: gameState.mod,
-				oldMeetingHud: gameState.oldMeetingHud,
-			};
-			connectionStuff.current.overlaySocket?.emit('signal', {
-				to: settings.obsSecret,
-				data: obsvoiceState,
-			});
-		}
-	}, [gameState]);
 
 	// Add settings to settingsRef
 	useEffect(() => {
@@ -1051,9 +949,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			currentLobby = 'MENU';
 			console.log('DISCONNECTED??');
 		});
-
-		stopNotifyingMobilePlayers();
-		notifyMobilePlayers();
 
 		let iceConfig: RTCConfiguration = DEFAULT_ICE_CONFIG;
 		socket.on('clientPeerConfig', (clientPeerConfig: ClientPeerConfig) => {
@@ -1534,20 +1429,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						console.warn('SIGNAL FROM UNKOWN SOCKET..');
 						return;
 					}
-					// Below the sender check, not above it: this branch used to run for anyone
-					// who could name this socket, whether or not they were in the lobby.
-					if (Object.hasOwn(data, 'mobilePlayerInfo')) {
-						const mobiledata = data as unknown as mobileHostInfo;
-						if (
-							settingsRef.current.mobileHost &&
-							mobiledata.mobilePlayerInfo.code === hostRef.current.code &&
-							hostRef.current.gamestate !== GameState.MENU
-						) {
-							hostRef.current.mobileRunning = true;
-							console.log('setting mobileRunning to true..');
-						}
-						return;
-					}
 
 					// Only signals carrying a `type` used to be forwarded, so trickled ICE
 					// candidates, which have no type, were dropped outright. Connections then
@@ -1576,8 +1457,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		);
 
 		return () => {
-			hostRef.current.mobileRunning = false;
-			stopNotifyingMobilePlayers();
 			cancelAllReconnects();
 			socket.emit('leave');
 			Object.keys(peerConnections.current).forEach((k) => {
@@ -1606,14 +1485,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		// })();
 	}, []);
 
-	interface mobileHostInfo {
-		mobilePlayerInfo: {
-			code: string;
-			askingForHost: boolean;
-		};
-	}
-
-	//data: { mobilePlayerInfo: { code: this.gamecode, askingForHost: true }
 	const myPlayer = useMemo(() => {
 		if (!gameState?.players) {
 			return undefined;
@@ -1636,7 +1507,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		}
 		hostRef.current = {
 			map: gameState.map,
-			mobileRunning: hostRef.current.mobileRunning,
 			gamestate: gameState.gameState,
 			code: gameState.lobbyCode,
 			hostId: gameState.hostId,
@@ -1782,7 +1652,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 			gameState.gameState === GameState.LOBBY &&
 			(gameState.oldGameState === GameState.DISCUSSION || gameState.oldGameState === GameState.TASKS)
 		) {
-			hostRef.current.mobileRunning = false;
 			connect.connect(gameState.lobbyCode, myPlayer.clientId, gameState.clientId, gameState.isHost);
 		} else if (
 			gameState.oldGameState !== GameState.UNKNOWN &&
@@ -1791,7 +1660,6 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		) {
 			console.log('DISCONNECT TO MENU!');
 			// On change from a game to menu, exit from the current game properly
-			hostRef.current.mobileRunning = false; // On change from a game to menu, exit from the current game properly
 			connectionStuff.current.socket?.emit('leave');
 			Object.keys(peerConnections.current).forEach((k) => {
 				disconnectPeer(k);

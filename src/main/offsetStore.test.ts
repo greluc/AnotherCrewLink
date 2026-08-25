@@ -203,7 +203,7 @@ describe('fetchOffsets', () => {
 	});
 
 	it('refuses offsets that do not validate, and does not cache them', async () => {
-		fetchFailingTimes(0, { ...REAL_OFFSETS, fixedUpdateFunc: 0x7fffffff });
+		fetchFailingTimes(0, { ...REAL_OFFSETS, playerAddrPtr: 0x7fffffff });
 		// The assertion is attached before the timers run: the rejection happens while they
 		// are being advanced, and an unhandled one fails the whole suite even though every
 		// test passes.

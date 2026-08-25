@@ -6,6 +6,7 @@
 //! rather than against an opinion.
 
 pub mod analyser;
+pub mod apm;
 pub mod biquad;
 pub mod codec;
 pub mod convolver;
@@ -15,8 +16,12 @@ pub mod fft;
 pub mod gain;
 pub mod impairment;
 pub mod jitter;
+pub mod mixer;
+pub mod neteq_bridge;
 pub mod panner;
 pub mod resample;
+pub mod ring;
+pub mod stream;
 pub mod vad;
 pub mod voice;
 pub mod wav;

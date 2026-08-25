@@ -26,8 +26,7 @@
                   "lib/windows/memory.cc",
                   "lib/windows/process.cc",
                   "lib/windows/module.cc",
-                  "lib/windows/pattern.cc",
-                  "lib/windows/functions.cc"
+                  "lib/windows/pattern.cc"
                   ]
                }
             ]

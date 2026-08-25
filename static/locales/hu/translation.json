@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "Béta/Hibakeresés",
-			"mobilehost": "Mobile Host",
 			"vad_enabled": "VAD Enabled",
 			"hardware_acceleration": "Hardveres gyorsítás",
 			"hardware_acceleration_warning": "This disables Hardware Acceleration (which can increase CPU usage)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Streaming Settings",
 			"hidecode": "Mutasd a lobby kódját",
-			"obs_overlay": "OBS Böngésző Overlay",
-			"obs_url": "OBS Böngésző Overlay Link",
 			"voice_server_comp": "VS Kompatibilitási mód használata",
 			"voice_server_comp_warning": "It is recommended to just change the voice server to a AnotherCrewLink Voice Server (https://bettercrewl.ink) for example."
 		},

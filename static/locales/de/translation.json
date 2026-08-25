@@ -93,7 +93,6 @@
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
-			"mobilehost": "Mobiler Host",
 			"vad_enabled": "VAD einschalten",
 			"hardware_acceleration": "Hardwarebeschleunigung",
 			"hardware_acceleration_warning": "Dies deaktiviert die Hardwarebeschleunigung (was die CPU-Nutzung erhöhen kann)",
@@ -107,8 +106,6 @@
 		"streaming": {
 			"title": "Streamingeinstellungen",
 			"hidecode": "Lobby-Code anzeigen",
-			"obs_overlay": "OBS-Browser-Overlay",
-			"obs_url": "OBS-Browser-Overlay",
 			"voice_server_comp": "VS Kompatibilitätsmodus",
 			"voice_server_comp_warning": "Es wird empfohlen, den Sprachserver auf einen AnotherCrewLink Voiceserver (z.B. https://bettercrewl.ink) zu ändern."
 		},

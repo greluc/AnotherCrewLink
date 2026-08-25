@@ -27,10 +27,36 @@ use crate::codec::{self, CodecError, Decoder, FRAME_SAMPLES};
 
 /// How many packets to hold before playing, as a starting depth.
 ///
-/// Three is 60 ms at the 20 ms frame this client sends: enough to reorder around ordinary
-/// network jitter and to have packet *N+1* in hand when *N* does not arrive, and short
-/// enough that a conversation does not feel like a radio link.
-pub const DEFAULT_DEPTH: usize = 3;
+/// Two is 40 ms at the 20 ms frame this client sends. It is the shallowest depth that can
+/// work at all: the recovery needs packet *N+1* in hand while *N* is missing, so anything
+/// less makes the redundancy Opus carries unreachable.
+///
+/// It is a starting point rather than the depth. See [`MAX_DEPTH`].
+pub const DEFAULT_DEPTH: usize = 2;
+
+/// The shallowest the buffer may go, for the reason above.
+pub const MIN_DEPTH: usize = 2;
+
+/// The deepest it will go, at 20 ms a packet: 200 ms.
+///
+/// Measured against Chromium rather than chosen. Gate G2's third criterion allows 30 ms
+/// more latency than Chromium's receive path, and a *fixed* depth cannot meet it: 40 ms is
+/// within the budget on a clean network and falls apart under 50 ms of jitter -- 17% of
+/// frames invented, against Chromium's none -- while 60 ms survives the jitter and is
+/// 50 ms adrift on a clean one. Chromium passes both because its buffer grows when it
+/// needs to and shrinks when it does not, and the only honest answer was to do the same.
+///
+/// Ten frames is where growth stops. Past that a conversation is a radio link, and a
+/// network that needs more than 200 ms of buffer has a problem no buffer fixes.
+pub const MAX_DEPTH: usize = 10;
+
+/// How many clean frames in a row before the buffer gives a packet of depth back.
+///
+/// Asymmetric on purpose: it deepens on a single gap and shallows only after fifty frames
+/// -- a second -- without one. Jitter arrives in bursts, and a buffer that shrank as
+/// eagerly as it grew would spend the burst oscillating and inventing audio at every step
+/// down.
+const CALM_FRAMES_BEFORE_SHALLOWING: u32 = 50;
 
 /// How many frames of silence count as the stream having stopped rather than stumbled.
 ///
@@ -62,6 +88,14 @@ pub enum FrameSource {
     Concealed,
     /// Nothing was available at all, and silence went out.
     Silence,
+    /// Inserted on purpose, to fall a frame further behind the network and regain depth.
+    ///
+    /// Not a gap. The packet it delays is played on the next pop rather than lost, so a
+    /// listener hears the same audio slightly later instead of hearing less of it. It is a
+    /// separate variant because a harness that counted it as concealment would report a
+    /// buffer working correctly as one that is failing -- and one that compared output
+    /// frames positionally would see every frame after it as wrong.
+    Stretched,
 }
 
 /// One frame handed to the output device.
@@ -90,6 +124,12 @@ pub struct JitterStats {
     pub silent: u64,
     /// Times the buffer gave up on its sequence and started again from what arrived.
     pub resyncs: u64,
+    /// Times the buffer grew because a frame it wanted was not there.
+    pub deepened: u64,
+    /// Times it gave a packet of depth back after a settled second.
+    pub shallowed: u64,
+    /// Frames inserted to fall further behind the network and regain depth.
+    pub stretched: u64,
 }
 
 /// A fixed-depth reordering buffer over a sequence-numbered packet stream.
@@ -101,6 +141,10 @@ pub struct JitterBuffer {
     depth: usize,
     /// Consecutive frames produced with nothing in the buffer.
     starved: u32,
+    /// Consecutive frames that came from a real packet, for shallowing.
+    calm: u32,
+    /// Whether the last frame was a stall, so two never run together.
+    stalled_last: bool,
     stats: JitterStats,
 }
 
@@ -115,10 +159,13 @@ impl JitterBuffer {
             decoder: Decoder::new()?,
             packets: BTreeMap::new(),
             next: None,
-            // A depth of zero can never recover anything: the recovery needs the packet
-            // after the gap to already be in hand.
-            depth: depth.max(1),
+            // Clamped rather than trusted. Below `MIN_DEPTH` the recovery is unreachable
+            // -- it needs the packet after the gap already in hand -- and above `MAX_DEPTH`
+            // a conversation stops being one.
+            depth: depth.clamp(MIN_DEPTH, MAX_DEPTH),
             starved: 0,
+            calm: 0,
+            stalled_last: false,
             stats: JitterStats::default(),
         })
     }
@@ -154,11 +201,37 @@ impl JitterBuffer {
             // non-event rather than a stall lasting a whole cycle.
             if behind > 0 && behind < RESYNC_DISTANCE {
                 self.stats.too_late += 1;
+                // This is the only signal that says the buffer is too shallow: a packet
+                // that did arrive, after its slot had already played. A packet that never
+                // arrives is loss, and no depth recovers it -- an earlier version deepened
+                // on every gap and grew to 185 ms under 10% loss, buying nothing and
+                // spending the whole latency budget to do it.
+                self.deepen();
                 return;
             }
         }
         self.packets.insert(sequence, payload.to_vec());
         self.stats.accepted += 1;
+    }
+
+    /// Grows the buffer by one packet, up to [`MAX_DEPTH`].
+    ///
+    /// Called only when a packet arrives after its slot has played, which is the one
+    /// observation that means "too shallow". The calm counter is reset with it: a burst of
+    /// jitter should not be half-forgiven by the packets that arrived on time between its
+    /// late ones.
+    fn deepen(&mut self) {
+        self.calm = 0;
+        if self.depth < MAX_DEPTH {
+            self.depth += 1;
+            self.stats.deepened += 1;
+        }
+    }
+
+    /// How many packets the buffer is currently holding before it plays.
+    #[must_use]
+    pub const fn depth(&self) -> usize {
+        self.depth
     }
 
     /// Produces the next frame, or `None` while the buffer is still filling.
@@ -179,12 +252,47 @@ impl JitterBuffer {
         };
 
         let mut samples = vec![0.0f32; FRAME_SAMPLES];
+
+        // Growing `depth` mid-stream does nothing on its own: it gates the first fill and
+        // nothing after it, so a buffer that decided it was too shallow would carry on
+        // playing one frame per pop and stay exactly as shallow as before.
+        //
+        // Regaining depth means playing something that is not the next packet, once, so
+        // the stream falls one frame further behind the network. Opus's concealment is
+        // what fills it -- the same extrapolation it uses for a real gap, which is designed
+        // not to be noticed.
+        //
+        // Only when the packet is actually there. Stalling in front of a hole would add
+        // latency without adding safety, and the hole is still a hole afterwards.
+        if self.packets.len() < self.depth
+            && self.packets.contains_key(&sequence)
+            && !self.stalled_last
+        {
+            // Never twice running. One stall buys one frame of depth; repeating without
+            // playing anything in between would let the buffer fall arbitrarily far behind
+            // a network that is simply slow, which is a different fault with the same
+            // symptom.
+            self.stalled_last = true;
+            self.decoder.conceal(&mut samples)?;
+            self.stats.stretched += 1;
+            return Ok(Some(Frame {
+                samples,
+                source: FrameSource::Stretched,
+            }));
+        }
+        self.stalled_last = false;
         let source = if let Some(payload) = self.packets.remove(&sequence) {
             self.decoder.decode(&payload, &mut samples)?;
             self.starved = 0;
+            self.calm = self.calm.saturating_add(1);
+            if self.calm >= CALM_FRAMES_BEFORE_SHALLOWING && self.depth > MIN_DEPTH {
+                self.depth -= 1;
+                self.calm = 0;
+                self.stats.shallowed += 1;
+            }
             self.stats.played += 1;
             FrameSource::Packet
-        } else if let Some(next) = self.packets.get(&sequence.wrapping_add(1)) {
+        } else if let Some(next) = self.packets.get(&sequence.wrapping_add(1)).cloned() {
             // The packet after the gap is here. Holding it long enough to look inside is
             // the whole reason the buffer holds more than one packet -- but whether it
             // carries a copy of this frame has to be asked, not assumed.
@@ -195,8 +303,8 @@ impl JitterBuffer {
             // identical recovery for a sender that had been told and one that never had --
             // 46 frames either way, measured -- which made the number meaningless in
             // exactly the direction that hides the fault §3e is about.
-            if codec::has_redundancy(next) {
-                self.decoder.decode_lost(next, &mut samples)?;
+            if codec::has_redundancy(&next) {
+                self.decoder.decode_lost(&next, &mut samples)?;
                 self.stats.recovered += 1;
                 FrameSource::Recovered
             } else {
@@ -274,8 +382,11 @@ mod tests {
     #[test]
     fn packets_that_arrive_out_of_order_are_played_in_order() {
         let mut buffer = JitterBuffer::new(3).unwrap();
-        let packets = stream(6, 0);
-        for sequence in [2u16, 0, 1] {
+        let packets = stream(8, 0);
+        // Pushed shuffled, and one ahead of what is being played so the buffer never runs
+        // thin enough to stall for depth -- which is a different behaviour with the same
+        // shape, and this test is about ordering.
+        for sequence in [2u16, 0, 1, 3, 4, 5] {
             buffer.push(sequence, &packets[sequence as usize]);
         }
         for _ in 0..3 {
@@ -336,7 +447,14 @@ mod tests {
         }
         buffer.push(0, &packets[0]);
         assert_eq!(buffer.stats().too_late, 1);
-        assert_eq!(buffer.held(), 1, "only packet 3 is still waiting");
+        // What is left in the buffer now depends on whether it stalled on the way, which
+        // is a different behaviour. What this test is about is that the late packet was
+        // refused: four were accepted, and the fifth push was the same packet again.
+        assert_eq!(
+            buffer.stats().accepted,
+            4,
+            "the late packet was taken into the buffer"
+        );
     }
 
     #[test]
@@ -365,22 +483,88 @@ mod tests {
     fn an_empty_buffer_produces_silence_rather_than_stopping() {
         // A peer that has gone quiet under DTX, or one that has left. The output device
         // still asks for a frame every twenty milliseconds either way.
-        let mut buffer = JitterBuffer::new(1).unwrap();
-        let packets = stream(2, 0);
-        buffer.push(0, &packets[0]);
-        buffer.pop().unwrap().unwrap();
-        let frame = buffer.pop().unwrap().unwrap();
+        let mut buffer = JitterBuffer::new(MIN_DEPTH).unwrap();
+        let packets = stream(3, 0);
+        for (sequence, packet) in packets.iter().enumerate().take(MIN_DEPTH) {
+            buffer.push(u16::try_from(sequence).unwrap(), packet);
+        }
+        // Popped until the buffer is empty. It may insert one stall on the way -- running
+        // thin is exactly when it does -- and what this test is about is what happens after
+        // there is nothing left at all.
+        let mut frame = buffer.pop().unwrap().unwrap();
+        for _ in 0..6 {
+            frame = buffer.pop().unwrap().unwrap();
+            if frame.source == FrameSource::Silence {
+                break;
+            }
+        }
         assert_eq!(frame.source, FrameSource::Silence);
         assert!(frame.samples.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
-    fn a_depth_of_zero_is_treated_as_one() {
-        // A caller asking for no buffering at all gets the minimum that can still work,
-        // rather than a buffer that returns nothing for ever.
-        let mut buffer = JitterBuffer::new(0).unwrap();
-        let packets = stream(2, 0);
-        buffer.push(0, &packets[0]);
-        assert!(buffer.pop().unwrap().is_some());
+    fn a_depth_below_the_minimum_is_raised_to_it() {
+        // A caller asking for no buffering at all gets the shallowest depth that can still
+        // work. One packet cannot: the recovery needs the packet *after* the gap already
+        // in hand, so a depth of one makes the redundancy Opus carries unreachable and
+        // turns every single loss into concealment.
+        for asked in [0, 1] {
+            let buffer = JitterBuffer::new(asked).unwrap();
+            assert_eq!(buffer.depth(), MIN_DEPTH, "asked for {asked}");
+        }
+    }
+
+    #[test]
+    fn a_depth_above_the_maximum_is_lowered_to_it() {
+        let buffer = JitterBuffer::new(MAX_DEPTH + 50).unwrap();
+        assert_eq!(buffer.depth(), MAX_DEPTH);
+    }
+
+    #[test]
+    fn the_buffer_deepens_when_a_frame_is_not_there_and_shallows_when_it_settles() {
+        // The property gate G2's third criterion forced. A fixed depth cannot satisfy it:
+        // 40 ms is within the 30 ms budget on a clean network and invents 17% of frames
+        // under 50 ms of jitter, and 60 ms survives the jitter and is 50 ms adrift on a
+        // clean one. Chromium passes both because its buffer moves.
+        let mut buffer = JitterBuffer::new(MIN_DEPTH).unwrap();
+        let packets = stream(400, 5);
+
+        // Deepening is driven by a packet arriving *after* its slot has played, which is
+        // the only observation that means "too shallow". A packet that never arrives is
+        // loss, and no depth recovers it -- an earlier version deepened on every gap and
+        // grew to 185 ms under 10% loss, spending the whole latency budget for nothing.
+        for sequence in 0..4u16 {
+            buffer.push(sequence, &packets[sequence as usize]);
+        }
+        for _ in 0..3 {
+            buffer.pop().unwrap();
+        }
+        let started = buffer.depth();
+        buffer.push(0, &packets[0]); // long since played
+        assert!(
+            buffer.depth() > started,
+            "it did not deepen for a missing frame: {} then {}",
+            started,
+            buffer.depth()
+        );
+
+        // Then a settled run gives the depth back.
+        let deepened = buffer.depth();
+        // From 4, in order: the recovery reads the packet after the gap without consuming
+        // it, so 3 is still held and starting at 5 would leave a second hole at 4 -- which
+        // deepens the buffer again and the run never settles.
+        let mut sequence = 4u16;
+        for _ in 0..(CALM_FRAMES_BEFORE_SHALLOWING + 5) {
+            buffer.push(sequence, &packets[sequence as usize]);
+            buffer.pop().unwrap();
+            sequence = sequence.wrapping_add(1);
+        }
+        assert!(
+            buffer.depth() < deepened,
+            "it never gave the depth back: still {}",
+            buffer.depth()
+        );
+        assert!(buffer.depth() >= MIN_DEPTH);
+        assert!(buffer.stats().deepened > 0 && buffer.stats().shallowed > 0);
     }
 }

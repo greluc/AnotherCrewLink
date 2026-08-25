@@ -1,0 +1,24 @@
+{
+	"source": "Chromium loopback; our Opus substituted into the sender, loss injected on the receiver",
+	"chromium": "150.0.7871.224",
+	"lossPercent": 5,
+	"seconds": 10,
+	"withRedundancy": {
+		"substituted": 500,
+		"droppedCount": 22,
+		"receiverTransformInstalled": true,
+		"totalSamplesReceived": 479520,
+		"concealedSamples": 6848,
+		"concealedShare": 1.4280947614280948,
+		"packetsReceived": 503
+	},
+	"withoutRedundancy": {
+		"substituted": 501,
+		"droppedCount": 22,
+		"receiverTransformInstalled": true,
+		"totalSamplesReceived": 480000,
+		"concealedSamples": 21225,
+		"concealedShare": 4.421875,
+		"packetsReceived": 503
+	}
+}

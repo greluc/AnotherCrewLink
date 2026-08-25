@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { OffsetsRejected, isAddressInModule, validateLookup, validateOffsets } from './offsetsValidator';
+import { OffsetsRejected, validateLookup, validateOffsets } from './offsetsValidator';
 
 // Gate G0 has two halves and they pull against each other: the validator must reject a
 // corpus of bad bundles, and it must accept every real file unchanged. A validator that
@@ -69,16 +69,6 @@ describe('the malicious bundle corpus', () => {
 		expect(rejection([]).code).toBe('not-an-object');
 	});
 
-	it('rejects an RVA outside the module', () => {
-		const error = rejection(mutate((o) => Object.assign(o, { fixedUpdateFunc: 0x7fffffff })));
-		expect(error.code).toBe('rva-out-of-module');
-		expect(error.path).toBe('offsets.fixedUpdateFunc');
-	});
-
-	it('rejects a negative RVA', () => {
-		expect(rejection(mutate((o) => Object.assign(o, { modLateUpdateFunc: -4096 }))).code).toBe('rva-out-of-module');
-	});
-
 	it('rejects an absurd bufferLength', () => {
 		const error = rejection(mutate((o) => Object.assign(o.player as object, { bufferLength: 0x40000000 })));
 		expect(error.code).toBe('buffer-length-absurd');
@@ -106,18 +96,15 @@ describe('the malicious bundle corpus', () => {
 		expect(rejection(mutate((o) => Object.assign(o, { playerAddrPtr: 1.5 }))).code).toBe('wrong-type');
 	});
 
-	it('rejects disableWriting flipped to a non-boolean', () => {
-		// Flipping the flag to `false` is legitimate data and cannot be distinguished
-		// here; what is caught is a value that is not a boolean at all. The real defence
-		// for the write path is the prologue check in GameReader.
-		expect(rejection(mutate((o) => Object.assign(o, { disableWriting: 'no' }))).code).toBe('wrong-type');
+	it('rejects oldMeetingHud flipped to a non-boolean', () => {
+		// Flipping the flag itself is legitimate data and cannot be distinguished here;
+		// what is caught is a value that is not a boolean at all.
+		expect(rejection(mutate((o) => Object.assign(o, { oldMeetingHud: 'no' }))).code).toBe('wrong-type');
 	});
 
 	it('rejects a signature that is not a byte pattern', () => {
 		const error = rejection(
-			mutate((o) =>
-				Object.assign((o.signatures as Record<string, unknown>).fixedUpdateFunc as object, { sig: 'ZZ 90' })
-			)
+			mutate((o) => Object.assign((o.signatures as Record<string, unknown>).playerControl as object, { sig: 'ZZ 90' }))
 		);
 		expect(error.code).toBe('bad-signature');
 	});
@@ -165,9 +152,9 @@ describe('the malicious bundle corpus', () => {
 	});
 
 	it('names the rule it broke in the message', () => {
-		const error = rejection(mutate((o) => Object.assign(o, { fixedUpdateFunc: 0x7fffffff })));
-		expect(error.message).toContain('rva-out-of-module');
-		expect(error.message).toContain('offsets.fixedUpdateFunc');
+		const error = rejection(mutate((o) => Object.assign(o, { playerAddrPtr: 0x7fffffff })));
+		expect(error.message).toContain('chain-out-of-range');
+		expect(error.message).toContain('offsets.playerAddrPtr');
 	});
 });
 
@@ -255,37 +242,5 @@ describe('the lookup', () => {
 				(l.versions as Record<string, { offsetsVersion: number }>).default.offsetsVersion = -1;
 			}).code
 		).toBe('wrong-type');
-	});
-});
-
-describe('the resolved-address check', () => {
-	const base = 0x10000000;
-	const size = 0x06000000;
-
-	it('accepts an address inside the module', () => {
-		expect(isAddressInModule(base + 0x1000, base, size)).toBe(true);
-	});
-
-	it('refuses an address below the module', () => {
-		expect(isAddressInModule(base - 1, base, size)).toBe(false);
-	});
-
-	it('refuses the module base itself, which is a header rather than code', () => {
-		expect(isAddressInModule(base, base, size)).toBe(false);
-	});
-
-	it('refuses an address past the end of the module', () => {
-		expect(isAddressInModule(base + size, base, size)).toBe(false);
-	});
-
-	it('refuses a scan that found nothing', () => {
-		// findPattern returns 0 when a signature matches nothing, and 0 must never be
-		// treated as an address to write to.
-		expect(isAddressInModule(0, base, size)).toBe(false);
-	});
-
-	it('falls back to a bounded window when the module size is unknown', () => {
-		expect(isAddressInModule(base + 0x1000, base, 0)).toBe(true);
-		expect(isAddressInModule(base + 0x40000000, base, 0)).toBe(false);
 	});
 });

@@ -19,12 +19,15 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use acl_audio::apm::{Apm, Sonora};
 use acl_audio::biquad::{Biquad, FilterKind};
 use acl_audio::codec::{Encoder, FRAME_SAMPLES};
 use acl_audio::gain::Gain;
 use acl_audio::jitter::JitterBuffer;
+use acl_audio::mixer::Mixer;
 use acl_audio::panner::{Panner, Position};
 use acl_audio::resample::{Resampler, TARGET_RATE};
+use acl_audio::ring::Ring;
 
 /// Counts allocations made by the measuring thread while it is armed.
 struct Counting;
@@ -243,6 +246,114 @@ fn the_jitter_buffer_allocates_per_frame_and_this_says_how_much() {
         "if this reaches zero the comment above is stale and should go"
     );
     eprintln!("jitter buffer: {allocations} allocations over 30 frames");
+}
+
+#[test]
+fn the_ring_between_the_callback_and_the_worker_allocates_nothing() {
+    // The one piece that genuinely runs inside the operating system's callback on the
+    // capture side, now that the echo canceller has been moved off it. If this allocated
+    // there would be nowhere left to put the microphone's samples that is safe.
+    let mut ring = Ring::new(1920).unwrap();
+    let block = vec![0.02f32; 480];
+    let mut frame = vec![0.0f32; 960];
+
+    ring.write(&block);
+    ring.write(&block);
+    ring.read_frame(&mut frame);
+
+    let allocations = count(|| {
+        for _ in 0..1000 {
+            ring.write(&block);
+            let _ = ring.read_frame(&mut frame);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "the ring allocated {allocations} times over 1000 blocks"
+    );
+}
+
+#[test]
+fn mixing_a_full_lobby_allocates_nothing() {
+    // The last stage of the render callback, and the one whose cost grows with the lobby:
+    // thirteen additions per block rather than one. Everything it writes into is allocated
+    // in `new`, including the mono downmix the echo canceller is handed.
+    const FRAMES: usize = 480;
+    let mut mixer = Mixer::new(FRAMES);
+    let peer = vec![0.05f32; FRAMES * 2];
+
+    mixer.begin();
+    mixer.add(&peer);
+    mixer.finish();
+
+    let allocations = count(|| {
+        for _ in 0..100 {
+            mixer.begin();
+            for _ in 0..13 {
+                mixer.add(&peer);
+            }
+            let _ = mixer.finish();
+            let _ = mixer.reference();
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "the mixer allocated {allocations} times over 100 blocks"
+    );
+}
+
+#[test]
+fn the_echo_cancellers_two_paths_are_not_alike_and_this_says_how() {
+    // Criterion 4 is about the render callback, and the render half of the echo canceller
+    // is what runs there: it is handed the buffer on its way to the speakers so the
+    // canceller knows what to subtract later. That half must be, and is, allocation-free.
+    //
+    // The capture half is not, and no amount of care in this crate makes it so -- the
+    // allocations are inside `sonora`'s adaptive filters, not in the wrapper, whose
+    // scratch buffer is allocated once in `new`. The number is recorded rather than
+    // asserted away, because it decides where the capture path is allowed to run: §3.2's
+    // diagram puts the APM on the cpal capture callback, and rule 1 of the same section
+    // says that callback never allocates. Both cannot be true. See §3.2, which now says
+    // which one gives way.
+    let mut apm = Sonora::new();
+    let reference: Vec<f32> = frame(0);
+    let mut captured = frame(1);
+
+    // Warm it. The first pass through an adaptive filter is allowed to allocate.
+    for _ in 0..10 {
+        apm.render(&reference).unwrap();
+        apm.capture(&mut captured).unwrap();
+    }
+
+    let render_only = count(|| {
+        for _ in 0..100 {
+            apm.render(&reference).unwrap();
+        }
+    });
+    let capture_only = count(|| {
+        for _ in 0..100 {
+            apm.capture(&mut captured).unwrap();
+        }
+    });
+    eprintln!("sonora: render {render_only}, capture {capture_only}, over 100 frames each");
+
+    // The half that runs on the render callback. This one is the gate criterion.
+    assert_eq!(
+        render_only, 0,
+        "the far-end reference path allocated {render_only} times over 100 frames"
+    );
+
+    // And the half that cannot run there. Bounded rather than exact: the count depends on
+    // what the adaptive filters are doing, and pinning it would fail on a `sonora` patch
+    // release for no reason anybody could act on.
+    assert!(
+        capture_only > 0,
+        "if this reaches zero the comment above is stale and the APM can move back onto the callback"
+    );
+    assert!(
+        capture_only < 100 * 200,
+        "capture allocated {capture_only} times over 100 frames, far more than the ~75 a frame measured"
+    );
 }
 
 #[test]
