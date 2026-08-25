@@ -10,6 +10,9 @@
 
 pub mod client;
 pub mod engineio;
+pub mod ice;
+pub mod peer_config;
 pub mod reconnect;
+pub mod signal_route;
 pub mod socketio;
 pub mod transport;
