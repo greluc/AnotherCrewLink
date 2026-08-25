@@ -104,6 +104,9 @@ tracing = "0.1"
 # be heard before it was noticed. The maintainer also states that a minor bump may carry
 # breaking changes, which is unusual enough to pin against on its own.
 webrtc = "=0.20.3"
+# The WHATWG URL algorithm, for the one setting that decides where every signal goes.
+# Already in the tree beneath `webrtc`, so this is a direct edge rather than a crate.
+url = "2.5"
 
 [profile.release]
 # A panic in the elevated helper must not unwind through the FFI boundary into the game's

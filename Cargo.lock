@@ -93,6 +93,9 @@ dependencies = [
 [[package]]
 name = "acl-ui"
 version = "0.0.0"
+dependencies = [
+ "url",
+]
 
 [[package]]
 name = "adler2"

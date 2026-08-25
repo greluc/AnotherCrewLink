@@ -12,4 +12,5 @@
 
 pub mod lobby_list;
 pub mod renderer;
+pub mod server_url;
 pub mod settings;
