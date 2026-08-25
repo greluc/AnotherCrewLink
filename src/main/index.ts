@@ -380,17 +380,6 @@ ${logDirectory()}`
 		app.quit();
 	});
 
-	// There was an `app.on('activate')` handler here until 2026-08-25. Electron's own
-	// typings mark that event `@platform darwin`, so on the only platform this ships for
-	// it never fired -- and it held the window re-creation branch and, inside it, the
-	// session's permission request handler. **That allow-list has therefore never been
-	// installed for any user of this application.** It is not reinstated here as it
-	// stood: it allowed the single permission `audioCapture`, which is a Chrome
-	// *extension* manifest permission and not one Electron ever passes to this callback
-	// -- `getUserMedia` asks for `media` -- so wiring it up unchanged would deny the
-	// microphone and take voice out entirely. Restoring it needs the right permission
-	// name and a test with a real microphone, which is a change of its own.
-
 	// create main BrowserWindow when electron is ready
 	app.whenReady().then(() => {
 		const staticRoot = joinPath(app.getPath('userData'), 'static');
@@ -428,6 +417,24 @@ ${logDirectory()}`
 				console.warn('generate: handler failed', error);
 				callback({ error: -6 });
 			}
+		});
+
+		// Deny every permission this session can be asked for except the microphone. With no
+		// handler installed Electron grants them all, so this is a tightening rather than a
+		// formality. The version that shipped until 2026-08-25 was wrong three ways over and
+		// never ran: it sat in `app.on('activate')`, which Electron marks `@platform darwin`;
+		// it allowed `audioCapture`, a Chrome *extension* manifest permission that is never
+		// passed here, where `getUserMedia` asks for `media`; and it installed on
+		// `session.fromPartition('default')`, which is a different session from the
+		// `defaultSession` the windows actually run on. Choosing an output device needs nothing
+		// added: `setSinkId` on a non-default device never reaches this handler. Chromium checks
+		// some permissions before it requests them, and that path keeps its default here.
+		session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+			const granted = permission === 'media';
+			if (!granted) {
+				console.warn(`Denied a permission request for '${permission}', which is not on the allow-list.`);
+			}
+			callback(granted);
 		});
 
 		// No CSP was ever set, which Electron warns about at runtime. Scripts and styles
