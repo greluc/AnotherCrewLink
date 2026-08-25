@@ -6,6 +6,7 @@
 //! rather than against an opinion.
 
 pub mod analyser;
+pub mod apm;
 pub mod biquad;
 pub mod codec;
 pub mod convolver;

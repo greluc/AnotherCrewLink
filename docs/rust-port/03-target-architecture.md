@@ -155,7 +155,11 @@ the elevated process.
 │              │ far-end reference                              │
 │  ┌───────────▼───────────────────────────────────────────┐    │
 │  │  audio capture thread (cpal callback, real-time)      │    │
-│  │  input → APM (AEC/NS/AGC) → VAD → gain → encode → RTP │    │
+│  │  input ──► ring buffer ──┐                            │    │
+│  └──────────────────────────┼────────────────────────────┘    │
+│  ┌──────────────────────────▼────────────────────────────┐    │
+│  │  capture worker thread (not a callback)               │    │
+│  │  APM (AEC/NS/AGC) → VAD → gain → encode → RTP         │    │
 │  └───────────────────────────────────────────────────────┘    │
 │                                                               │
 │  ┌─ UI thread (winit event loop, repaint on demand) ─────┐    │
@@ -173,6 +177,25 @@ Five rules keep this honest:
    reach it through a lock-free ring buffer written by the app threads.
    Violations are caught in CI by a debug allocator that panics if the render
    thread allocates.
+
+   **The APM is why the capture side has a worker thread at all.** An earlier
+   version of the diagram above ran it inside the cpal capture callback, which
+   this rule forbids and which `sonora` cannot honour: measured, its capture path
+   allocates about 75 times per 20 ms frame, inside its own adaptive filters and
+   not in anything this crate wrote. The render path — being handed the buffer on
+   its way to the speakers — allocates nothing, which is what lets it stay on the
+   render callback where the far-end reference has to be taken.
+
+   So the capture callback does one thing: copy the microphone's samples into a
+   ring buffer. Everything after that runs on a thread that is allowed to
+   allocate. The cost is one buffer of added latency on the send path, which is
+   the cheapest thing in the budget; the alternative is an echo canceller that
+   takes a lock inside the operating system's audio callback.
+
+   `crates/acl-audio/tests/allocations.rs` records both numbers, and the test
+   fails if the capture figure ever reaches zero — if a future `sonora` becomes
+   allocation-free, this paragraph is wrong and should be deleted rather than
+   quietly left standing.
 2. **`AmongUsState` is produced in exactly one place** — the helper's game thread
    — and rebroadcast inside `acl-core` with `tokio::sync::watch`. Consumers get
    the latest, never a queue.
@@ -320,9 +343,18 @@ of service.
 
 **The APM.** `sonora` 0.2.0 is the default: pure Rust, BSD-3-Clause, ported from
 WebRTC M145, validated against the C++ reference test suite, and it removes the
-meson/ninja/clang build entirely. That choice is conditional on a green
-`cargo build --target i686-pc-windows-msvc`, which is **unproven** — its own
-validation is Ubuntu x86_64 — and is a precondition at G2, not a follow-up.
+meson/ninja/clang build entirely.
+
+> **Settled 2026-08-24.** The `i686` precondition this paragraph used to carry went
+> with the target itself, which reopened the choice on wider grounds. `libwebrtc`'s
+> AEC3 was measured against `sonora` on the same echo path: 11.3 dB against
+> 11.6 dB, which is no difference. The decision fell to AEC3 arriving as a
+> prebuilt 86 MB library nobody here compiled, in a project that spent the same
+> week removing prebuilt binaries from `native/`. `sonora` stays, and it is wired
+> in `acl-audio::apm` behind the trait this section always specified — with a
+> test that measures the cancellation with and without the far-end reference,
+> 12.3 dB against 0.1 dB, because a canceller with the reference wired wrongly
+> reports success and removes nothing.
 `webrtc-audio-processing` `=2.1.0` stays only as a Linux-only baseline to A/B
 echo-return-loss-enhancement against: it does not build on either Windows target
 (PR #102 "Support MSVC targets" open and unmerged since 2026-08-08, issue #34

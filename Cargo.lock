@@ -24,6 +24,7 @@ dependencies = [
  "rubato",
  "serde",
  "serde_json",
+ "sonora",
 ]
 
 [[package]]
