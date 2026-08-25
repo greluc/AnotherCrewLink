@@ -27,6 +27,7 @@ use acl_audio::jitter::JitterBuffer;
 use acl_audio::mixer::Mixer;
 use acl_audio::panner::{Panner, Position};
 use acl_audio::resample::{Resampler, TARGET_RATE};
+use acl_audio::ring::Ring;
 
 /// Counts allocations made by the measuring thread while it is armed.
 struct Counting;
@@ -245,6 +246,31 @@ fn the_jitter_buffer_allocates_per_frame_and_this_says_how_much() {
         "if this reaches zero the comment above is stale and should go"
     );
     eprintln!("jitter buffer: {allocations} allocations over 30 frames");
+}
+
+#[test]
+fn the_ring_between_the_callback_and_the_worker_allocates_nothing() {
+    // The one piece that genuinely runs inside the operating system's callback on the
+    // capture side, now that the echo canceller has been moved off it. If this allocated
+    // there would be nowhere left to put the microphone's samples that is safe.
+    let mut ring = Ring::new(1920).unwrap();
+    let block = vec![0.02f32; 480];
+    let mut frame = vec![0.0f32; 960];
+
+    ring.write(&block);
+    ring.write(&block);
+    ring.read_frame(&mut frame);
+
+    let allocations = count(|| {
+        for _ in 0..1000 {
+            ring.write(&block);
+            let _ = ring.read_frame(&mut frame);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "the ring allocated {allocations} times over 1000 blocks"
+    );
 }
 
 #[test]

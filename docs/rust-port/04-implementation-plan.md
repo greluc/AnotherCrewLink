@@ -780,6 +780,26 @@ name `cubeb` 0.38.0 as the documented fallback with a written trigger condition 
 cpal 0.18 is a ten-week-old rework whose WASAPI device-change path, the one this
 app already has a bug class around, has four open issues on it.
 
+> **Where 3c stands, 2026-08-24.** Resampling, the codec, the VAD, the APM and
+> device enumeration are built and tested. `acl-audio::ring` is the buffer between
+> the capture callback and the worker that §3.2 now requires, with the wrap, the
+> overwrite-oldest and the all-or-nothing frame read under test and measured at
+> zero allocations.
+>
+> **Opening the cpal streams themselves is not written, and that is a decision.**
+> §5.2 already names device behaviour as a *manual* test — unplug a microphone,
+> switch the Windows default, connect a Bluetooth headset — "with a call live",
+> before G2 signs off. A live call is P4. So stream code written now would be code
+> that cannot be exercised by anything until the transport exists: not by CI, which
+> has no sound card, and not by the manual pass, which has no call to make.
+>
+> The two pieces that would have been guesswork are settled instead. The ring is
+> written and tested. And the ring deliberately does **not** split across threads:
+> making it a real single-producer single-consumer queue is either a hand-written
+> `unsafe` implementation in the middle of the audio path's trusted computing base
+> or a dependency, and that is a choice to make with the stream code in front of
+> you rather than a fortnight before it.
+
 ### 3d. Jitter buffer and playback (2 wk)
 
 `neteq` integration with `default-features = false` — mandatory, or the audio
@@ -790,6 +810,22 @@ codec in the binary. Then Opus decode, PLC, the mixer, and output device
 selection (replacing `setSinkId`). NetEQ is pull-based: accelerate, preemptive
 expand and expand all drive decode on demand, so the `AudioDecoder`
 implementation is what makes the pipeline work at all, not an optimisation.
+
+> **The mixer is `acl-audio::mixer`, and it produces two buffers rather than one.**
+> The output the device is handed, and the mono downmix the echo canceller needs as
+> its far-end reference. §3.3 spends a paragraph on why that reference must be this
+> buffer and no other, and putting the downmix anywhere else leaves a caller free to
+> assemble the wrong one — which does not fail, it silently stops cancelling.
+>
+> It clamps, because Chromium's destination node clamps and every other number in
+> this crate is matched against Chromium; differing at the last addition after
+> matching five DSP nodes to −80 dBFS would be strange. Thirteen peers, zero
+> allocations, and the clamping is reported rather than hidden.
+>
+> Output device *selection* is `acl-audio::device`: enumeration, defaults, and
+> `reacquire`, which finds a device again by id and falls back to its name — the
+> failure the Electron client has a bug class around, where a driver update changes
+> the id and `setSinkId` silently sends one player's voice nowhere.
 
 Measure it against a well-tuned fixed jitter buffer with Opus in-band FEC and PLC
 under the same emulation. That is what most peer-to-peer voice apps ship, and
