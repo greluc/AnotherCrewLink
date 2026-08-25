@@ -2,6 +2,7 @@ import { app, type BrowserWindow, screen } from 'electron';
 import Store from 'electron-store';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isVisibleOnSomeDisplay as isVisibleOnAnyOf } from './windowOverlap';
 
 // Replaces electron-window-state, which was last published in 2022 and pulled in
 // jsonfile and mkdirp 0.5. The store this app already uses does the persistence.
@@ -41,14 +42,10 @@ function readLegacyState(): WindowState | undefined {
 /** True if the saved rectangle still overlaps a connected display. */
 function isVisibleOnSomeDisplay(state: WindowState): boolean {
 	if (state.x === undefined || state.y === undefined) return false;
-	return screen.getAllDisplays().some(({ bounds }) => {
-		return (
-			state.x! < bounds.x + bounds.width &&
-			state.x! + state.width > bounds.x &&
-			state.y! < bounds.y + bounds.height &&
-			state.y! + state.height > bounds.y
-		);
-	});
+	return isVisibleOnAnyOf(
+		{ x: state.x, y: state.y, width: state.width, height: state.height },
+		screen.getAllDisplays().map(({ bounds }) => bounds)
+	);
 }
 
 export function windowStateKeeper(options: Options) {
