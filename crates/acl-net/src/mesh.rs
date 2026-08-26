@@ -14,7 +14,15 @@ use std::collections::BTreeSet;
 /// What the caller should do about one peer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Open a connection to this peer, offering first.
+    /// This peer belongs in the mesh and does not have a connection.
+    ///
+    /// It said "offering first" until 2026-08-26, and that is not this type's to say. Who
+    /// offers depends on *which event* the peer appeared in, which membership cannot see:
+    /// somebody announced by `join` arrived after this client and is offered to, somebody
+    /// listed in `setClients` was already here and offers instead. Both produce this
+    /// action, and a caller that read the old sentence would offer to everyone in the
+    /// lobby while everyone in the lobby offered back. `acl-core::session::Arrival` is
+    /// where the distinction is carried.
     Connect(String),
     /// Tear down whatever exists for this peer.
     Disconnect(String),

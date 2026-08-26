@@ -63,6 +63,31 @@ impl Client {
     }
 }
 
+/// Which of the two ends offers, when a peer appears.
+///
+/// The asymmetry is what keeps the mesh free of glare, and it is not derivable from the
+/// membership — only from *which event* the peer appeared in. `Voice.tsx` gets it from
+/// having two separate handlers: `socket.on('join', ...)` calls
+/// `createPeerConnection(peer, true, ...)`, and `socket.on('setClients', ...)` records the
+/// clients and creates nothing at all.
+///
+/// This driver reported both as one event until 2026-08-26, which was wrong in a way that
+/// only shows up with three people in a lobby: a caller that offered on every arrival
+/// would offer to everybody already there, and every one of them would be offering back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrival {
+    /// They arrived after this client did. **This end offers.**
+    ///
+    /// From `join`, which the server sends to everybody already in the lobby.
+    Newcomer,
+    /// They were already here when this client arrived. **They offer.**
+    ///
+    /// From `setClients`, which the server sends to the arriving client alone. Recorded so
+    /// that a signal from them is accepted when it comes, and so the UI can show them
+    /// before a connection exists — but nothing is offered to them.
+    Incumbent,
+}
+
 /// Something that happened in the lobby.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -71,14 +96,13 @@ pub enum Event {
     /// How to reach the relay, as the server issued it for this session.
     PeerConfig(Box<PeerConfig>),
     /// Somebody is in the lobby who was not.
-    ///
-    /// Produced from [`mesh::Action::Connect`], so the caller is told to open a connection
-    /// by the same rule whether the peer arrived one at a time or in a `setClients` batch.
     PeerJoined {
         /// Their socket id.
         socket_id: String,
         /// What the server said about them, when it said anything.
         client: Option<Client>,
+        /// Which side offers.
+        arrival: Arrival,
     },
     /// Somebody is gone.
     PeerLeft {
@@ -240,6 +264,7 @@ impl Lobby {
             events.push(Event::PeerJoined {
                 socket_id: peer,
                 client,
+                arrival: Arrival::Newcomer,
             });
         }
     }
@@ -271,6 +296,7 @@ impl Lobby {
                     Event::PeerJoined {
                         socket_id: peer,
                         client,
+                        arrival: Arrival::Incumbent,
                     }
                 }
                 mesh::Action::Disconnect(peer) => Event::PeerLeft { socket_id: peer },
@@ -295,9 +321,13 @@ impl Lobby {
                 client,
             });
         } else if let Some(mesh::Action::Connect(peer)) = self.membership.join(socket_id) {
+            // `setClient` for somebody unknown is the server catching this client up on a
+            // peer it had not heard of, not an announcement that they have just arrived.
+            // Offering to them would race the offer they are already making.
             events.push(Event::PeerJoined {
                 socket_id: peer,
                 client: Some(client),
+                arrival: Arrival::Incumbent,
             });
         }
     }
@@ -468,7 +498,7 @@ impl Session {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Client, Event, Lobby};
+    use super::{Arrival, Client, Event, Lobby};
     use acl_net::client::Action;
     use serde_json::{Value, json};
 
@@ -552,6 +582,43 @@ mod tests {
             }
             other => panic!("expected one signal, got {other:?}"),
         }
+    }
+
+    /// Which side offers is the whole reason a three-person lobby works.
+    ///
+    /// A peer announced by `join` arrived after this client, so this end offers. A peer
+    /// listed in `setClients` was already here, so they offer. Reported as one event, a
+    /// caller would offer to everybody already in the lobby while every one of them
+    /// offered back — which is glare with as many peers as there are people.
+    #[test]
+    fn who_offers_depends_on_which_event_the_peer_arrived_in() {
+        let mut lobby = Lobby::new();
+        let listed = lobby.interpret(event(
+            "setClients",
+            vec![json!({"already-here": {"playerId": 1}})],
+        ));
+        assert!(
+            matches!(
+                &listed[..],
+                [Event::PeerJoined {
+                    arrival: Arrival::Incumbent,
+                    ..
+                }]
+            ),
+            "somebody already in the lobby must not be offered to: {listed:?}"
+        );
+
+        let announced = lobby.interpret(event("join", vec![json!("newcomer"), json!({})]));
+        assert!(
+            matches!(
+                &announced[..],
+                [Event::PeerJoined {
+                    arrival: Arrival::Newcomer,
+                    ..
+                }]
+            ),
+            "somebody who has just arrived must be offered to: {announced:?}"
+        );
     }
 
     /// `setClients` is the whole lobby, so somebody it omits has gone. Treating it as a
