@@ -1211,7 +1211,7 @@ Run the same impairments through the Electron client for reference numbers.
 > | --- | --- |
 > | 1 The crate spike | three of four questions answered by `experiments/webrtc-probe` — it connects, `ring` 0.17.14 is shared with the existing tree, 141 new crates and all four supply-chain gates pass. The Chromium arm is unanswered and, with G3 struck, unanswerable |
 > | 2 `Peer` | done — candidate queue, generation counter for the un-detachable handler, connect timeout, and `rtc::to_configuration` over the crate. `tests/loopback.rs` drives two real connections through all of it |
-> | 3 The mesh | relay rules one to four, `RepairPolicy` (restart before rebuild, initiator only, once per connection), and `mesh::Membership` — join, leave, orphan reconciliation and the four rebuild guards. The driver arrived on 2026-08-26 as `acl-core::session`, where this row said it belonged: it owns the socket and the membership and turns Socket.IO events into statements about a lobby. The set of connections is what is left, and it sits on top of that rather than inside it — every event it would act on already comes out of `Session::next` |
+> | 3 The mesh | **done, 2026-08-26.** The relay rules, `RepairPolicy` and `mesh::Membership` were already here; the driver this row asked for arrived as `acl-core::session` for the socket and the membership, and `acl-core::peers` for the connections. Two `PeerSet`s negotiate through the client's own signal format and reach `Connected` in `tests/peers_loopback.rs`, and two `Session`s meet in a lobby on a real server binary in CI |
 > | 4 `validateClientPeerConfig` | done, with its tests |
 > | The four named regression tests | all four exist and pass |
 >
@@ -1237,6 +1237,28 @@ Run the same impairments through the Electron client for reference numbers.
 > `join` for the one already there, `setClients` for the one arriving — and a signal
 > crosses between them. That both paths produce the same `PeerJoined` is the whole reason
 > the driver exists.
+
+> **The connections, 2026-08-26.** `acl-core::peers` holds one per member. Three things
+> the building of it contradicted, each found by running it rather than by reading:
+>
+> * **The generation has to be shared.** `acl-net`'s loopback test carries it by copy,
+>   which is right there because it never replaces a connection. A copy makes every handler
+>   compare its own generation against itself and conclude it is current, so a replaced
+>   connection goes on feeding candidates into the live one. It is an `AtomicU64` the set
+>   raises before the old connection is dropped.
+> * **A renegotiation must not rebuild.** `offer` to a peer that already has a connection
+>   makes a fresh offer on it. Item 2's `signalRoute` guards the receiving side against
+>   exactly this — the shipped client treated every offer as a new connection, so the
+>   repair for a stalled link killed it — and nothing guarded the sending side until now.
+> * **Audio is not a boundary this layer can defer.** The first version opened a connection
+>   with no media and reported its state, leaving the track to `acl-audio`. It cannot
+>   connect: an offer with no `m=` line carries no ICE credentials, and the far end answers
+>   `set_remote_description called with no ice-ufrag`. Every connection now carries an Opus
+>   track from the moment it is built, and the default codecs are registered with the media
+>   engine — without which the same mistake surfaces several steps later as
+>   `ErrRTPTransceiverCodecUnsupported`. Nothing is written into the track here; what this
+>   settles is the shape of the negotiation, which is this layer's own.
+
 
 
 **Why 10.5 and not 5:** since 0.20.0 the `webrtc` crate is a runtime-agnostic

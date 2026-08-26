@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use acl_core::session::{Event, Session};
+use acl_core::session::{Arrival, Event, Session};
 use serde_json::json;
 
 /// A port unlikely to collide with a server somebody is running for real, and its own —
@@ -205,13 +205,14 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
         .expect("the second joins");
 
     // The first is told about the second by `join`; the second learns about the first from
-    // the `setClients` it gets on arrival. Two different events, one conclusion, which is
-    // the whole reason the driver produces `PeerJoined` for both.
+    // the `setClients` it gets on arrival. Two different events, one conclusion -- and
+    // opposite sides of the offer, which is the part no unit test can show is right,
+    // because it depends on which event a real server actually sends to whom.
     let seen_by_first = pair
-        .until(
-            0,
-            |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
-        )
+        .until(0, |event| {
+            matches!(event, Event::PeerJoined { socket_id, arrival, .. }
+                if *socket_id == second_id && *arrival == Arrival::Newcomer)
+        })
         .await;
     assert!(
         seen_by_first.is_ok(),
@@ -220,14 +221,14 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
     );
 
     let seen_by_second = pair
-        .until(
-            1,
-            |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == first_id),
-        )
+        .until(1, |event| {
+            matches!(event, Event::PeerJoined { socket_id, arrival, .. }
+                if *socket_id == first_id && *arrival == Arrival::Incumbent)
+        })
         .await;
     assert!(
         seen_by_second.is_ok(),
-        "the second was never told about the first; saw {:?}",
+        "the second was never told about the first, or was told to offer to them; saw {:?}",
         seen_by_second.unwrap_err()
     );
 
