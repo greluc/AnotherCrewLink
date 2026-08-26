@@ -1829,6 +1829,20 @@ us.
    > the 2.x self-update and P8's bridge, instead of two of which one is exercised once a
    > year.
    >
+   > **The ceremony is a command, 2026-08-26.** `acl-release keys | write | sign`, behind
+   > a non-default feature and a `required-features` binary so a plain `cargo build`
+   > produces no signing tool at all -- the client verifies, and a client that could sign
+   > is one where a key file in the wrong directory becomes a release nobody made.
+   > `installer/RELEASE.md` is the runbook and `tests/ceremony.rs` runs the real binary and
+   > reads what it produced with the client's own verifier.
+   >
+   > Three things it does that a runbook would have left to the reader: the digest and size
+   > are read off the artefact rather than typed; `sign` verifies its own output against the
+   > public key *given* rather than derived, because deriving it checks the signature against
+   > the key that made it and therefore checks nothing; and `keys` refuses to overwrite,
+   > because silently replacing one retires every client that trusts the old one with no
+   > step in between where anybody could notice.
+   >
    > **It fails closed, and it is closed.** `PUBLIC_KEYS` is empty: no release key
    > exists, generating one is a ceremony the maintainer performs offline, and a
    > placeholder here would be a key whose private half is in a scratch directory.

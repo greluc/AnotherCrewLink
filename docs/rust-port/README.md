@@ -160,10 +160,11 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > and file), lobby browser end to end, overlay view with its seven positions and the
 > meeting table, and the GPU fallback chain — which lost a rung to measurement.
 >
-> `P7+` is built bar its ceremonies: the settings migration, the signed update path, the
-> hand-built NSIS installer, the release workflow. It cannot *complete* without a release
-> key, which is a ceremony performed offline, and without shipping an ordinary 1.0.x
-> release through the new installer — §4.9's own instruction.
+> `P7+` is built, and its ceremony is a command: `acl-release keys | write | sign`, with a
+> runbook beside it. What it cannot do is *be performed* — the maintainer generates and
+> keeps the keys, and ships an ordinary 1.0.x release through the new installer first,
+> which is §4.9's own instruction and the only thing that tests the CLI contract against
+> real 1.x updaters.
 >
 > `P8`'s mechanism is built: `latest.yml`, the bridge installer that renames rather than
 > deletes, the switch-off message. What is left of it is not code — three staged releases,
