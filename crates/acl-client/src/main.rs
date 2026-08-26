@@ -19,6 +19,7 @@
 //! performance number already on record is the one this runs on.
 
 mod reader;
+mod settings_page;
 
 use std::path::PathBuf;
 
@@ -40,14 +41,15 @@ const MIN_HEIGHT: i32 = 350;
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = 32.0;
 
-/// How large one crewmate is in the overlay, and how far apart they sit.
+/// How large one crewmate is in the overlay.
+///
+/// How far apart they sit is `acl_ui::overlay_layout::GAP`, which is also what the strip
+/// is sized from -- one number, in the module that does the arithmetic.
 ///
 /// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
 /// physical size, and scaling by the window would make the overlay twice as large on the
 /// larger monitor for no reason anybody asked for.
 const OVERLAY_SPRITE: i32 = 56;
-/// See [`OVERLAY_SPRITE`].
-const OVERLAY_GAP: i32 = 8;
 
 fn main() -> eframe::Result<()> {
     let paths = match Paths::resolve(Environment {
@@ -111,13 +113,23 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    // §4.8 item 6. The setting is 1.x's own `hardware_acceleration`, read straight out of
+    // the file it already writes rather than from a key invented here: a renamed key reads
+    // as absent, and an absent key gives acceleration back to every player who turned it
+    // off -- on the machines least able to run it.
+    let accelerated = std::fs::read_to_string(paths.config_file()).map_or(true, |text| {
+        acl_ui::config::Config::read(&text).bool_at(acl_ui::renderer::HARDWARE_ACCELERATION_KEY)
+    });
+
     eframe::run_native(
         "anothercrewlink",
         eframe::NativeOptions {
             viewport,
+            renderer: eframe::Renderer::Wgpu,
+            wgpu_options: renderer_options(acl_ui::renderer::chain(accelerated)),
             ..Default::default()
         },
-        Box::new(move |_| Ok(Box::new(Client::new(file)))),
+        Box::new(move |_| Ok(Box::new(Client::new(file, &paths)))),
     )
 }
 
@@ -125,6 +137,112 @@ fn main() -> eframe::Result<()> {
 ///
 /// Both, because §4.10 has the 2.0 build read what 1.x wrote — and somebody upgrading from
 /// further back than that has only `window-state.json`.
+/// Loads the strings for whichever language the settings name.
+///
+/// The stored default is `unkown` — the shipped spelling, and a sentinel meaning "ask the
+/// operating system" rather than a language tag. It is left alone rather than corrected,
+/// because correcting it would make every existing installation look like a fresh one; a
+/// value that is not a locale this build ships falls back to English, which is what the
+/// catalogue is anyway.
+fn load_catalogue(settings: &settings_page::Page) -> Option<acl_i18n::Catalogue> {
+    let wanted = settings.config().text_at("language");
+    let locale = if acl_i18n::name_of(&wanted).is_some() {
+        wanted
+    } else {
+        "en".to_owned()
+    };
+    let root = locale_root()?;
+    acl_i18n::Catalogue::load(&root, &locale)
+        .or_else(|_| acl_i18n::Catalogue::load(&root, "en"))
+        .ok()
+}
+
+/// Where the locale tree is.
+///
+/// Beside the executable in an installed build, and up two directories from `target/debug`
+/// in a development one. Both are tried rather than one being configured: a client that
+/// cannot find its strings shows keys, and finding out which layout it is in costs two
+/// `exists` calls.
+fn locale_root() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let beside = executable.parent()?.join("static").join("locales");
+    if beside.is_dir() {
+        return Some(beside);
+    }
+    let repository = executable
+        .parent()?
+        .parent()?
+        .parent()?
+        .join("static")
+        .join("locales");
+    repository.is_dir().then_some(repository)
+}
+
+/// The wgpu setup, with the fallback chain as its adapter selector.
+///
+/// eframe asks for one adapter and the chain names two, so the walk happens inside the
+/// selector rather than around `run_native`: by the time enumeration has happened the
+/// answer is a list, and picking from a list is not a reason to tear a window down and
+/// build another.
+///
+/// **DX12 only.** It is the backend §4.8 names, it is what WARP is reached through, and it
+/// is the one Windows guarantees. Leaving Vulkan enabled would let wgpu pick a vendor
+/// Vulkan driver on some machines and DX12 on others, which turns one renderer into two
+/// and makes a bug report about "the software renderer" ambiguous.
+fn renderer_options(
+    rungs: Vec<acl_ui::renderer::Renderer>,
+) -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, wgpu};
+
+    let mut setup = match WgpuConfiguration::default().wgpu_setup {
+        WgpuSetup::CreateNew(setup) => setup,
+        // eframe's default is `CreateNew`. An `Existing` here would mean a device was
+        // handed to us, and there is nothing to select between.
+        existing @ WgpuSetup::Existing(_) => {
+            return WgpuConfiguration {
+                wgpu_setup: existing,
+                ..WgpuConfiguration::default()
+            };
+        }
+    };
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, _surface| {
+        let kinds: Vec<acl_ui::renderer::Adapter> = adapters
+            .iter()
+            .map(|adapter| match adapter.get_info().device_type {
+                wgpu::DeviceType::Cpu => acl_ui::renderer::Adapter::Cpu,
+                // `VirtualGpu` is a passed-through device in a virtual machine and `Other`
+                // is a driver that did not say. Neither is WARP, so both are hardware as
+                // far as the choice goes.
+                _ => acl_ui::renderer::Adapter::Gpu,
+            })
+            .collect();
+        rungs
+            .iter()
+            .find_map(|rung| acl_ui::renderer::choose(*rung, &kinds))
+            .and_then(|at| adapters.get(at).cloned())
+            .inspect(|adapter| {
+                // Once, at start-up. Which rung the client ended up on is the first thing
+                // worth knowing about a report of a slow window, and it is not otherwise
+                // visible from inside the running client.
+                let info = adapter.get_info();
+                eprintln!(
+                    "AnotherCrewLink: rendering on {:?} \"{}\" ({:?})",
+                    info.device_type, info.name, info.backend
+                );
+            })
+            .ok_or_else(|| {
+                // Reached only if DX12 enumerated nothing at all, WARP included -- which
+                // means the graphics stack itself is missing rather than the card.
+                format!("no Direct3D 12 adapter among {}", adapters.len())
+            })
+    }));
+    WgpuConfiguration {
+        wgpu_setup: WgpuSetup::CreateNew(setup),
+        ..WgpuConfiguration::default()
+    }
+}
+
 fn read_state(file: &PathBuf) -> Option<WindowState> {
     if let Ok(text) = std::fs::read_to_string(file)
         && let Ok(stored) = serde_json::from_str::<Stored>(&text)
@@ -175,6 +293,15 @@ fn displays() -> Vec<Rect> {
     Vec::new()
 }
 
+/// Which page the window is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Screen {
+    /// Who is in the lobby.
+    Main,
+    /// The settings.
+    Settings,
+}
+
 /// One player of the reader's state, as the roster wants to see them.
 ///
 /// A wrapper rather than an implementation on `acl_game::Player`, because the trait belongs
@@ -214,6 +341,16 @@ struct Client {
     reader: Option<reader::Reader>,
     /// What the window was last seen at, for saving on the way out.
     last_seen: Option<WindowState>,
+    /// The settings, and everything that happens to them.
+    settings: settings_page::Page,
+    /// Which page is showing.
+    page: Screen,
+    /// The strings, in whichever language the settings name.
+    ///
+    /// `None` when the locale tree cannot be found — an unusual installation, or a
+    /// development run from somewhere unexpected. Every lookup then answers with the key,
+    /// which is `t`'s documented behaviour and is legible enough to work from.
+    catalogue: Option<acl_i18n::Catalogue>,
     /// Whether the overlay is currently meant to be on screen.
     ///
     /// Kept so that show and hide are sent on the edges rather than every frame: the
@@ -223,9 +360,14 @@ struct Client {
 }
 
 impl Client {
-    fn new(state_file: PathBuf) -> Self {
+    fn new(state_file: PathBuf, paths: &Paths) -> Self {
+        let settings = settings_page::Page::open(paths.config_file());
+        let catalogue = load_catalogue(&settings);
         Self {
             state_file,
+            settings,
+            page: Screen::Main,
+            catalogue,
             // A reader that will not start is not a reason to refuse to open: the window is
             // where somebody would find out about it, so it opens and says so.
             reader: reader::Reader::start().ok(),
@@ -247,11 +389,26 @@ impl Client {
         let Some(reader) = self.reader.as_ref() else {
             return;
         };
+        // The three settings that decide whether there is an overlay at all, read every
+        // frame rather than cached: they are changed on the settings page, which is this
+        // same process, and a cached copy is one more thing to invalidate.
+        let settings = self.settings.config();
+        let enabled = settings.bool_at("enableOverlay");
+        // `meetingOverlay` is read by nothing yet. It switches on a second overlay that
+        // draws the players over the meeting table, which needs the meeting hud's
+        // on-screen geometry out of the game -- a reader question rather than a drawing
+        // one, and not one this has an answer to. The setting is kept and honoured as soon
+        // as there is something for it to switch on.
+        let position =
+            acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
+        let compact = settings.bool_at("compactOverlay") || position.forces_compact();
+
         let game = acl_game::windows::find_process("Among Us.exe");
         let bounds = game.and_then(game_window::content_bounds);
-        let Some(bounds) = bounds.filter(|bounds| bounds.is_drawable()) else {
-            // No game, or nothing to draw over. Hidden rather than left showing the last
-            // frame over whatever the player switched to.
+        let bounds = bounds.filter(|bounds| bounds.is_drawable());
+        let Some(bounds) = bounds.filter(|_| enabled) else {
+            // No game, nothing to draw over, or the overlay is switched off. Hidden rather
+            // than left showing the last frame over whatever the player switched to.
             if self.overlay_shown {
                 self.overlay_shown = false;
                 reader.show_overlay(false);
@@ -270,12 +427,47 @@ impl Client {
             local_is_impostor: false,
         };
         let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
-        let shown = overlay(&seats, &voice, false);
+        let shown = overlay(&seats, &voice, compact);
+
+        // `Menu` is not "the menu layout" -- it is no overlay at all. `Overlay.tsx`
+        // returns null on it before it reaches the layout, so the `gamestate_menu` styling
+        // it carries is reachable only from `Unknown`, which is the reader attached and
+        // the state not yet readable. Following the class name rather than the early
+        // return would put a strip over the main menu that the shipped client never shows.
+        if state.game_state == acl_game::GameState::Menu {
+            if self.overlay_shown {
+                self.overlay_shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        }
+        let in_menu = state.game_state == acl_game::GameState::Unknown;
+        let laid = acl_ui::overlay_layout::lay_out(
+            position,
+            in_menu,
+            acl_ui::overlay_layout::Rect {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            shown.len(),
+            OVERLAY_SPRITE,
+        );
+        let Some(laid) = laid else {
+            // Hidden, or nobody to draw. An empty strip is still a rectangle of nothing
+            // sitting over the game.
+            if self.overlay_shown {
+                self.overlay_shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        };
 
         let sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
             .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| {
+            .zip(laid.sprites.iter())
+            .filter_map(|(entry, (x, y))| {
                 let player = state.players.get(entry.at)?;
                 let (body, shadow) =
                     acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
@@ -288,16 +480,19 @@ impl Client {
                         alive: entry.alive,
                     },
                 );
-                let at = i32::try_from(slot).unwrap_or(0);
-                Some((
-                    OVERLAY_GAP + at * (OVERLAY_SPRITE + OVERLAY_GAP),
-                    OVERLAY_GAP,
-                    bitmap,
-                ))
+                Some((*x, *y, bitmap))
             })
             .collect();
 
-        reader.draw_overlay((bounds.x, bounds.y, bounds.width, bounds.height), sprites);
+        reader.draw_overlay(
+            (
+                laid.placement.x,
+                laid.placement.y,
+                laid.placement.width,
+                laid.placement.height,
+            ),
+            sprites,
+        );
         if !self.overlay_shown {
             self.overlay_shown = true;
             reader.show_overlay(true);
@@ -322,13 +517,62 @@ impl Client {
         }
     }
 
+    /// Draws the settings, and does whatever they asked for.
+    ///
+    /// The device lists are empty until the audio pipeline lands in this process: a
+    /// picker with nothing in it still shows what is stored, which is the truth about a
+    /// client that is not yet listening to anything. Wiring it to `acl_audio::device`
+    /// belongs with the pipeline that will use the answer.
+    fn show_settings(&mut self, ui: &mut egui::Ui) {
+        let catalogue = self.catalogue.as_ref();
+        let translate = move |key: &str| {
+            catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let locales = settings_page::locales();
+        let context = acl_ui::views::settings::Context {
+            t: &translate,
+            microphones: &[],
+            speakers: &[],
+            locales: &locales,
+            // Both false until this process has a session: nobody is host of a lobby it
+            // has not joined. Saying so is what puts the "not in a lobby" explanation on
+            // the rules rather than leaving them silently dead.
+            host_may_change: false,
+            in_menu_or_lobby: false,
+            capturing: self.settings.capturing(),
+        };
+        let effects = egui::ScrollArea::vertical()
+            .show(ui, |ui| self.settings.show(ui, &context))
+            .inner;
+
+        for effect in effects {
+            match effect {
+                settings_page::Effect::RestoreDefaults => {
+                    self.settings.restore_defaults();
+                    self.catalogue = load_catalogue(&self.settings);
+                }
+                settings_page::Effect::LanguageChanged => {
+                    self.catalogue = load_catalogue(&self.settings);
+                }
+                settings_page::Effect::ResetOffsets => {
+                    // The offsets belong to the helper, which owns the file and the
+                    // fetch. Nothing here can throw them away, and pretending otherwise
+                    // would leave the client showing a reset that did not happen.
+                    if let Some(reader) = self.reader.as_ref() {
+                        reader.ask_to_stop();
+                    }
+                }
+            }
+        }
+    }
+
     /// The title bar: a drag handle and the two buttons the shipped window has.
     ///
     /// There is no maximise button, matching `maximizable: false`. Dragging is
     /// `StartDrag`, which hands the move to the window manager rather than repositioning
     /// the window per frame — the difference is visible as smoothness and as whether snap
     /// layouts work at all.
-    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) {
         let bar = egui::Rect::from_min_size(
             ui.max_rect().min,
             egui::vec2(ui.max_rect().width(), TITLE_BAR),
@@ -352,6 +596,19 @@ impl Client {
                     }
                     if ui.button("—").on_hover_text("Minimise").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    // One button rather than two, and it says where it goes rather than
+                    // where you are: a gear on the settings page reads as "settings are
+                    // here", which is where you already were.
+                    let (glyph, hint) = match page {
+                        Screen::Main => ("⚙", "Settings"),
+                        Screen::Settings => ("⏴", "Back"),
+                    };
+                    if ui.button(glyph).on_hover_text(hint).clicked() {
+                        *page = match page {
+                            Screen::Main => Screen::Settings,
+                            Screen::Settings => Screen::Main,
+                        };
                     }
                 });
             });
@@ -399,6 +656,21 @@ impl eframe::App for Client {
             self.compose_overlay(&state);
         }
 
+        // Every frame while a capture is running, because it reads the key state rather
+        // than waiting for an event. Escape abandons it: the settings screen is the one
+        // place where a key press means "this key" rather than "do the thing this key
+        // does", so leaving needs a way out that is not a binding.
+        if self.settings.capturing().is_some() {
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.settings.cancel_capture();
+            } else {
+                self.settings.poll_capture();
+            }
+            // A capture is the one thing here that is waiting on something faster than the
+            // game's five frames a second.
+            ctx.request_repaint();
+        }
+
         if ctx.input(|input| input.viewport().close_requested()) {
             self.write_window_state();
         }
@@ -411,9 +683,16 @@ impl eframe::App for Client {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui::CentralPanel::default().show(ui, |ui| {
-            Self::title_bar(ui, &ctx);
+            let mut page = self.page;
+            Self::title_bar(ui, &ctx, &mut page);
+            self.page = page;
             ui.add_space(TITLE_BAR);
             ui.separator();
+
+            if self.page == Screen::Settings {
+                self.show_settings(ui);
+                return;
+            }
 
             let Some(reader) = self.reader.as_ref() else {
                 ui.label("The game reader could not be started.");

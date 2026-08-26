@@ -253,7 +253,8 @@ evidence is first-party: the Electron client already disables hardware
 acceleration on demand through a setting it shipped because the field made it
 necessary. (It also disabled it unconditionally on Linux; that arm and the Linux rung
 it justified both went on 2026-08-25.) Windows tries wgpu on DX12, then
-wgpu with `force_fallback_adapter` (WARP), then a CPU rasteriser. There is no
+wgpu on WARP; the CPU rung below it went on 2026-08-26, because WARP is that
+rung. There is no
 glow rung: glow needs GL 3.3 or ES 3.0, and a Windows machine without a vendor
 driver offers software GL 1.1, so the rung does not save the RDP and bare-VM
 cases it would exist for. Migrate the existing `hardware_acceleration` value

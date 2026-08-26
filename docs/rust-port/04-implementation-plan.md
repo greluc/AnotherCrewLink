@@ -1629,7 +1629,8 @@ In this order, so that the app is usable as early as possible:
 3. Settings (3 wk) — the largest single screen
 4. Lobby browser (1 wk)
 5. Overlay view (1 wk)
-6. GPU fallback chain and the performance baseline (1 wk)
+6. GPU fallback chain and the performance baseline (1 wk) — **built 2026-08-26**;
+   see the measurement below, which removed the third rung
 
 The spike must produce more than three text controls — a lobby-browser table with
 sortable columns and one composited animating avatar — and its decision point is
@@ -1640,8 +1641,41 @@ answered in P1+, before this phase was planned around it.
 **No GPU is not a failure to launch.** Chromium currently gives every user
 SwiftShader for free, and this project has already found the problem in the
 field: hardware acceleration is disabled on demand through a shipped setting.
-Windows goes wgpu/DX12, then WARP through `force_fallback_adapter`, then a CPU
-rasteriser.
+Windows goes wgpu/DX12, then WARP.
+
+> **Item 6 is built and measured, 2026-08-26**, and it removed a rung. This said
+> "wgpu/DX12, then WARP through `force_fallback_adapter`, then a CPU rasteriser",
+> which reads as three things and is two. `experiments/gpu-probe` enumerates the
+> DX12 adapters on a real machine:
+>
+> ```text
+> RESULT adapters=3
+>   DiscreteGpu name="NVIDIA GeForce RTX 5090" driver="32.0.16.1656" backend=Dx12
+>   IntegratedGpu name="AMD Radeon(TM) Graphics" driver="32.0.21045.5002" backend=Dx12
+>   Cpu name="Microsoft Basic Render Driver" driver="10.0.26100.8972" backend=Dx12
+> ```
+>
+> **WARP *is* the CPU rasteriser.** The third adapter is Windows's own Direct3D 12
+> implementation running on the processor, and its driver version is the operating
+> system's build number rather than a vendor's — which is what says it ships with
+> Windows rather than with a card. Nothing was lost by dropping the separate rung:
+> there is no CPU rasteriser for egui outside a wgpu adapter, so the third rung named
+> something that could not have been built. What it guaranteed still holds and holds
+> better — the last rung is part of the operating system rather than of a driver.
+>
+> Both rungs were then run: the client starts on the discrete card with the setting
+> on, and on "Microsoft Basic Render Driver" with it off, and stays up on either. It
+> prints which one it took at start-up, because that is the first thing worth knowing
+> about a report of a slow window and is not otherwise visible from inside.
+>
+> **The dependency review, which is the other half of item 6.** Against the `glow`
+> the shell had been using: wgpu costs **37 more crates** (309 to 346) and **4.8 MB of
+> binary** (5.7 MB to 10.5 MB). It also builds the spike's frame slightly *cheaper* —
+> 0.22 ms median against glow's 0.25, 0.32 ms worst against 0.52, same scene and
+> machine as item 1's measurement — so the cost is size, not speed. Against an Electron
+> client that ships a browser, 10.5 MB for a renderer that can reach WARP is not a
+> close call. And the chain is what the choice actually turns on: adapter selection is
+> wgpu's, and glow has no equivalent — under it there is nothing to demote *to*.
 
 > **Corrected 2026-08-25.** This said acceleration was "disabled unconditionally on
 > Linux today", and that Linux therefore defaults to software. Both halves went with
