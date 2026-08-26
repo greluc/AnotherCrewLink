@@ -33,6 +33,7 @@ version = "0.0.0"
 dependencies = [
  "acl-game",
  "acl-ipc",
+ "postcard",
  "serde_json",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",

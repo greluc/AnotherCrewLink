@@ -1344,6 +1344,7 @@ will otherwise reintroduce them:
 > | Starting it, elevated or not | `acl-core::launch` — unelevated first, UAC second, and a declined prompt is an ordinary state |
 > | The UIPI access check | `acl-core::game_window` — ported from `windows.c`, quirk included: a hung window refuses the probe with the same error an integrity mismatch gives |
 > | Following the game's window | `acl-core::game_window::Follow` — polled, not hooked, for the reason below |
+> | The driver that owns all of it | `acl-core::link` — §4.6 says this belongs here, and it is what keeps `HelperState` true |
 >
 > **Not built.** The overlay window itself — the layered, click-through, always-on-top
 > window, and the pre-rasterised sprites it receives instead of decoding images.

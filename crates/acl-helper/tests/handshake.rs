@@ -142,6 +142,115 @@ fn it_refuses_to_start_without_being_told_who_started_it() {
     );
 }
 
+/// The whole link, driven by the code the client will actually use.
+///
+/// The other tests here speak the protocol by hand, which is what makes them useful when
+/// the protocol is what broke. This one goes through `acl_core::link::Link` instead, so
+/// that the four pieces are exercised the way the client joins them: launch, connect,
+/// check who answered, agree a protocol, send offsets, start reading.
+///
+/// No game is running, so no frame arrives. That is the point of the assertion being about
+/// the state: a helper that cannot find the game is a helper that is working correctly, and
+/// a link that dropped to `Lost` over it would take proximity down every time somebody
+/// alt-tabbed out of a game that had not started yet.
+#[test]
+fn the_link_starts_the_helper_and_keeps_it() {
+    let _serially = serially();
+
+    let mut link = acl_core::link::Link::new();
+    link.start(
+        std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+        acl_core::launch::Elevation::AsIs,
+        OFFSETS.as_bytes(),
+    )
+    .expect("the helper starts and answers");
+    assert_eq!(link.state(), acl_core::helper::HelperState::Running);
+
+    // Polled over a stretch that spans several of the helper's own sample intervals, so
+    // that a helper which fell over on the first attempt to attach to a game that is not
+    // there would be caught rather than missed.
+    for _ in 0..10 {
+        for event in link.poll() {
+            assert!(
+                !matches!(event, acl_core::link::Event::Stopped(_)),
+                "the helper stopped while nothing was wrong: {event:?}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        link.state(),
+        acl_core::helper::HelperState::Running,
+        "the link lost a helper that is alive and simply has no game to read"
+    );
+
+    link.stop();
+}
+
+/// The whole chain, with a game at the end of it.
+///
+/// Ignored, because it needs Among Us running. It is the only test in this repository that
+/// crosses every part at once: the helper attaches to the game, the reader produces an
+/// `AmongUsState`, postcard encodes it, the pipe carries it, and `Link` decodes it back
+/// into the same type. Each of those is tested on its own; none of the unit tests would
+/// notice if two of them disagreed about a format.
+///
+/// Start Among Us -- the menu is enough -- then:
+///
+/// ```text
+/// cargo test -p acl-helper -- --ignored the_link_reads
+/// ```
+#[test]
+#[ignore = "needs Among Us to be running"]
+fn the_link_reads_a_real_game() {
+    let _serially = serially();
+
+    let mut link = acl_core::link::Link::new();
+    link.start(
+        std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+        acl_core::launch::Elevation::AsIs,
+        OFFSETS.as_bytes(),
+    )
+    .expect("the helper starts and answers");
+
+    // The helper samples five times a second, and attaching to the game happens on the
+    // first tick after the offsets arrive. Three seconds is a dozen frames' worth of room.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut frames = 0usize;
+    let mut last = None;
+    while std::time::Instant::now() < deadline {
+        for event in link.poll() {
+            match event {
+                acl_core::link::Event::GameState(state) => {
+                    frames += 1;
+                    last = Some(state);
+                }
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let state = last.unwrap_or_else(|| {
+        panic!("no frame arrived in three seconds; is the game running and readable?")
+    });
+    eprintln!(
+        "{frames} frames; last: state={:?} map={} players={}",
+        state.game_state,
+        state.map,
+        state.players.len()
+    );
+    assert!(frames > 5, "only {frames} frames in three seconds");
+    link.stop();
+}
+
+/// A bundle that parses, which is all this needs: the helper rejects one that does not and
+/// stops, and a test that fed it rubbish would be testing that path instead.
+///
+/// The embedded floor, so the test carries no fixture of its own and cannot drift from the
+/// shape the reader expects.
+const OFFSETS: &str = include_str!("../../acl-game/assets/offsets-x86.json");
+
 /// Runs the exchange on a worker thread and gives up on it.
 ///
 /// A test that hangs reports nothing, and the first version of this file hung: the helper

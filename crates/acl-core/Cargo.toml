@@ -9,7 +9,16 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# For `AmongUsState`, which `link` decodes out of the helper's frames.
+#
+# It brings the reader itself into the unelevated binary, where it is never called. That
+# is dead code rather than a privilege -- reading an elevated game still needs a handle
+# this process cannot get -- and the tidier answer, moving the state type into
+# `acl-types` where both halves could reach it, is a wide refactor across a green G1
+# gate. Worth doing if the reader ever becomes unwanted here; not worth doing for tidiness.
+acl-game = { path = "../acl-game", version = "0.0.0", default-features = false }
 acl-ipc.workspace = true
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
@@ -38,10 +47,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-# For `the_game_has_a_window_this_process_may_follow`, which is ignored by default: it
-# needs the game running, and finding its process id is `acl-game`'s job rather than a
-# second process enumeration here.
-acl-game = { path = "../acl-game", version = "0.0.0", default-features = false }
+
 # `product_name_still_matches_package_json` reads the Electron manifest, because the
 # directory 1.x writes into is `productName` and a rename there is silent here.
 serde_json.workspace = true
