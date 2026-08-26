@@ -446,6 +446,13 @@ impl Session {
     ///
     /// `None` once the session is over, which is the same honest report the reconnect
     /// policy is built on.
+    ///
+    /// **A session nobody awaits is a session that dies.** The Engine.IO heartbeat is
+    /// answered from inside this call, so a caller that stops polling stops replying, and
+    /// the server drops the socket when the deadline passes. Anything holding two of these
+    /// has to drive both — `tests/session_conformance.rs` learned that the expensive way,
+    /// by waiting on one while the server disconnected the other and then reporting the
+    /// abandoned client's signal as coming from a stranger.
     pub async fn next(&mut self) -> Option<Vec<Event>> {
         let actions = self.connection.next().await?;
         Some(
