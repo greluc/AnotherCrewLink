@@ -9,6 +9,16 @@
 //! Nothing here is a second opinion about the protocol. It is a first opinion about the
 //! translation, which is all `acl_core::session` is.
 //!
+//! # Both sessions are driven together, and that is not tidiness
+//!
+//! A `Session` answers the server's heartbeat from inside `Session::next`, so a session
+//! nobody is awaiting is a session that stops answering. The first version of this file
+//! waited on one at a time and was disconnected for it on a CI runner: the first session
+//! was dropped for a missed heartbeat while the test waited on the second, and the signal
+//! it then sent arrived from a socket the server had already removed from the lobby —
+//! refused, correctly, as coming from a stranger. Locally it passed every time, because
+//! locally nothing waits long enough.
+//!
 //! # Running it
 //!
 //! ```text
@@ -91,27 +101,67 @@ async fn wait_for_health(port: u16) -> bool {
     false
 }
 
-/// Collects events until one matches, reporting what arrived instead if none does.
-async fn until<F>(session: &mut Session, mut wanted: F) -> Result<Event, Vec<String>>
-where
-    F: FnMut(&Event) -> bool,
-{
-    let mut seen = Vec::new();
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    while tokio::time::Instant::now() < deadline {
-        let Some(events) = session.next().await else {
-            seen.push("<session ended>".to_owned());
-            return Err(seen);
-        };
-        for event in events {
-            if wanted(&event) {
-                return Ok(event);
-            }
-            seen.push(format!("{event:?}"));
+/// Two sessions, driven together, with what each has said kept until somebody asks.
+///
+/// See the module documentation for why both rather than one at a time.
+struct Pair {
+    first: Session,
+    second: Session,
+    seen: [Vec<Event>; 2],
+}
+
+impl Pair {
+    fn new(first: Session, second: Session) -> Self {
+        Self {
+            first,
+            second,
+            seen: [Vec::new(), Vec::new()],
         }
     }
-    seen.push("<timed out>".to_owned());
-    Err(seen)
+
+    /// Waits for an event on one of them while driving both.
+    ///
+    /// `which` is 0 for the first and 1 for the second. On a timeout it reports what did
+    /// arrive, because "the server should have answered" is a much weaker report than "it
+    /// answered with these three things and not that one".
+    async fn until<F>(&mut self, which: usize, mut wanted: F) -> Result<Event, Vec<String>>
+    where
+        F: FnMut(&Event) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        loop {
+            if let Some(at) = self.seen[which].iter().position(&mut wanted) {
+                return Ok(self.seen[which].remove(at));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let mut seen: Vec<String> = self.seen[which]
+                    .iter()
+                    .map(|event| format!("{event:?}"))
+                    .collect();
+                seen.push("<timed out>".to_owned());
+                return Err(seen);
+            }
+            self.pump().await;
+        }
+    }
+
+    /// Drives whichever session speaks first, and keeps what it said.
+    async fn pump(&mut self) {
+        tokio::select! {
+            events = self.first.next() => self.seen[0].extend(events.unwrap_or_default()),
+            events = self.second.next() => self.seen[1].extend(events.unwrap_or_default()),
+        }
+    }
+
+    /// Runs both for a moment, so that anything in flight lands.
+    async fn settle(&mut self, how_long: Duration) {
+        let _ = tokio::time::timeout(how_long, async {
+            loop {
+                self.pump().await;
+            }
+        })
+        .await;
+    }
 }
 
 #[tokio::test]
@@ -126,31 +176,30 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
     assert!(wait_for_health(PORT).await, "the server never listened");
 
     let url = format!("http://127.0.0.1:{PORT}");
-    let mut first = Session::connect(&url).await.expect("the first connects");
-    let mut second = Session::connect(&url).await.expect("the second connects");
+    let mut pair = Pair::new(
+        Session::connect(&url).await.expect("the first connects"),
+        Session::connect(&url).await.expect("the second connects"),
+    );
 
     // The socket id arrives with the Socket.IO CONNECT, before anything is joined. It is
-    // also what the other end will address a signal to, so both are needed before either
-    // can be used.
-    until(&mut first, |event| matches!(event, Event::Connected(_)))
+    // also what the other end addresses a signal to, so both are needed before either can
+    // be used.
+    pair.until(0, |event| matches!(event, Event::Connected(_)))
         .await
         .expect("the first session is told its id");
-    until(&mut second, |event| matches!(event, Event::Connected(_)))
+    pair.until(1, |event| matches!(event, Event::Connected(_)))
         .await
         .expect("the second session is told its id");
-    let first_id = first.socket_id().expect("an id").to_owned();
-    let second_id = second.socket_id().expect("an id").to_owned();
+    let first_id = pair.first.socket_id().expect("an id").to_owned();
+    let second_id = pair.second.socket_id().expect("an id").to_owned();
     assert_ne!(first_id, second_id);
 
-    first
+    pair.first
         .join(LOBBY, 1, 901, true)
         .await
         .expect("the first joins");
-    // Drained before the second joins, so the `setClients` for an empty lobby does not sit
-    // in the way of the `join` that follows it.
-    let _ = tokio::time::timeout(Duration::from_millis(500), first.next()).await;
-
-    second
+    pair.settle(Duration::from_millis(500)).await;
+    pair.second
         .join(LOBBY, 2, 902, false)
         .await
         .expect("the second joins");
@@ -158,40 +207,44 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
     // The first is told about the second by `join`; the second learns about the first from
     // the `setClients` it gets on arrival. Two different events, one conclusion, which is
     // the whole reason the driver produces `PeerJoined` for both.
-    let seen_by_first = until(
-        &mut first,
-        |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
-    )
-    .await;
+    let seen_by_first = pair
+        .until(
+            0,
+            |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
+        )
+        .await;
     assert!(
         seen_by_first.is_ok(),
         "the first was never told about the second; saw {:?}",
         seen_by_first.unwrap_err()
     );
 
-    let seen_by_second = until(
-        &mut second,
-        |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == first_id),
-    )
-    .await;
+    let seen_by_second = pair
+        .until(
+            1,
+            |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == first_id),
+        )
+        .await;
     assert!(
         seen_by_second.is_ok(),
         "the second was never told about the first; saw {:?}",
         seen_by_second.unwrap_err()
     );
 
-    assert!(first.membership().knows(&second_id));
-    assert!(second.membership().knows(&first_id));
+    assert!(pair.first.membership().knows(&second_id));
+    assert!(pair.second.membership().knows(&first_id));
 
     // And a signal across, which is the only thing the lobby exists to carry.
-    first
+    pair.first
         .signal(
             &second_id,
             json!({"type": "offer", "sdp": "v=0 conformance"}),
         )
         .await
         .expect("the signal goes out");
-    let arrived = until(&mut second, |event| matches!(event, Event::Signal { .. })).await;
+    let arrived = pair
+        .until(1, |event| matches!(event, Event::Signal { .. }))
+        .await;
     match arrived {
         Ok(Event::Signal { from, data }) => {
             assert_eq!(from, first_id);
@@ -204,14 +257,15 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
     // Leaving is this end's decision and the server confirms nothing, so the membership is
     // this end's to clear. A driver that waited for a `left` about itself would hold
     // connections to a lobby it is no longer in.
-    second.leave().await.expect("the second leaves");
-    assert!(second.membership().is_empty());
+    pair.second.leave().await.expect("the second leaves");
+    assert!(pair.second.membership().is_empty());
 
-    let noticed = until(
-        &mut first,
-        |event| matches!(event, Event::PeerLeft { socket_id } if *socket_id == second_id),
-    )
-    .await;
+    let noticed = pair
+        .until(
+            0,
+            |event| matches!(event, Event::PeerLeft { socket_id } if *socket_id == second_id),
+        )
+        .await;
     assert!(
         noticed.is_ok(),
         "the first was never told the second left; saw {:?}",
@@ -243,46 +297,51 @@ async fn against_a_deployed_server() {
         panic!("set ACL_LIVE_URL to the server to check");
     };
 
-    let mut first = Session::connect(&url).await.expect("the first connects");
-    let mut second = Session::connect(&url).await.expect("the second connects");
-    until(&mut first, |event| matches!(event, Event::Connected(_)))
+    let mut pair = Pair::new(
+        Session::connect(&url).await.expect("the first connects"),
+        Session::connect(&url).await.expect("the second connects"),
+    );
+    pair.until(0, |event| matches!(event, Event::Connected(_)))
         .await
         .expect("an id for the first");
-    until(&mut second, |event| matches!(event, Event::Connected(_)))
+    pair.until(1, |event| matches!(event, Event::Connected(_)))
         .await
         .expect("an id for the second");
-    let second_id = second.socket_id().expect("an id").to_owned();
+    let second_id = pair.second.socket_id().expect("an id").to_owned();
 
     // The relay offer, which is the one thing a deployed server has and a freshly started
     // one does not: a TURN credential minted for this session.
-    let config = until(&mut first, |event| matches!(event, Event::PeerConfig(_))).await;
+    let config = pair
+        .until(0, |event| matches!(event, Event::PeerConfig(_)))
+        .await;
     match config {
         Ok(Event::PeerConfig(config)) => eprintln!("peer config: {config:?}"),
         Ok(other) => panic!("expected a peer config, got {other:?}"),
         Err(seen) => panic!("no peer config arrived; saw {seen:?}"),
     }
 
-    first
+    pair.first
         .join(PROBE, 1, 901, true)
         .await
         .expect("the first joins");
-    let _ = tokio::time::timeout(Duration::from_millis(500), first.next()).await;
-    second
+    pair.settle(Duration::from_millis(500)).await;
+    pair.second
         .join(PROBE, 2, 902, false)
         .await
         .expect("the second joins");
 
-    let seen = until(
-        &mut first,
-        |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
-    )
-    .await;
+    let seen = pair
+        .until(
+            0,
+            |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
+        )
+        .await;
     assert!(
         seen.is_ok(),
         "the deployed server never reported the second client; saw {:?}",
         seen.unwrap_err()
     );
 
-    first.leave().await.expect("the first leaves");
-    second.leave().await.expect("the second leaves");
+    pair.first.leave().await.expect("the first leaves");
+    pair.second.leave().await.expect("the second leaves");
 }
