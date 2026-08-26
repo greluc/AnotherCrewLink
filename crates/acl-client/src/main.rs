@@ -18,6 +18,7 @@
 //! does not need to start either. `experiments/gui-spike` measured this rung, so the
 //! performance number already on record is the one this runs on.
 
+mod hat_store;
 mod reader;
 mod settings_page;
 
@@ -341,6 +342,8 @@ struct Client {
     reader: Option<reader::Reader>,
     /// What the window was last seen at, for saving on the way out.
     last_seen: Option<WindowState>,
+    /// The hat artwork, fetched and decoded on a thread of its own.
+    hats: hat_store::Loader,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// Which page is showing.
@@ -365,6 +368,7 @@ impl Client {
         let catalogue = load_catalogue(&settings);
         Self {
             state_file,
+            hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
             page: Screen::Main,
             catalogue,
@@ -464,7 +468,11 @@ impl Client {
             return;
         };
 
-        let sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
+        // Which crewmate wears what, collected while the sprites are built and applied
+        // afterwards: the artwork lives behind `&mut self` and the closure below is
+        // already borrowing the reader's state.
+        let mut wearing: Vec<(usize, String, String)> = Vec::new();
+        let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
             .iter()
             .zip(laid.sprites.iter())
             .filter_map(|(entry, (x, y))| {
@@ -483,6 +491,15 @@ impl Client {
                 Some((*x, *y, bitmap))
             })
             .collect();
+        for (at, (entry, _)) in shown.iter().zip(laid.sprites.iter()).enumerate() {
+            let Some(player) = state.players.get(entry.at) else {
+                continue;
+            };
+            if at < sprites.len() {
+                wearing.push((at, player.hat_id.clone(), player.visor_id.clone()));
+            }
+        }
+        Self::dress(&mut self.hats, &mut sprites, &wearing);
 
         reader.draw_overlay(
             (
@@ -514,6 +531,65 @@ impl Client {
         stored.set(acl_ui::window_state::MAIN_WINDOW, state);
         if let Ok(text) = serde_json::to_string(&stored) {
             let _ = std::fs::write(&self.state_file, text);
+        }
+    }
+
+    /// Puts each crewmate's cosmetics on their sprite.
+    ///
+    /// A hat that has not been fetched yet is simply not drawn: `Loader::image` asks for it
+    /// and answers `None`, and a later frame has it. A cosmetic arriving a frame late is not
+    /// worth a stalled window.
+    ///
+    /// The order is [`acl_ui::cosmetics::PAINT_ORDER`]'s, minus the layers this does not
+    /// have yet -- the back of a hat goes behind the player, which needs the base sprite
+    /// split into two passes, and the skin sits between them.
+    ///
+    /// Takes the loader rather than `&self` so that the reader's borrow and the artwork's
+    /// can coexist: they are disjoint fields, and the borrow checker only knows that when
+    /// they are named separately.
+    #[cfg(windows)]
+    fn dress(
+        hats: &mut hat_store::Loader,
+        sprites: &mut [(i32, i32, acl_ui::sprite::Bitmap)],
+        wearing: &[(usize, String, String)],
+    ) {
+        for (at, hat, visor) in wearing {
+            let Some((_, _, canvas)) = sprites.get_mut(*at) else {
+                continue;
+            };
+            for id in [visor, hat] {
+                let Some(found) = hats.collection().find(id, acl_ui::hats::BASE) else {
+                    continue;
+                };
+                let geometry = found.geometry;
+                let Some(url) = found.image_url(acl_types::cosmetics::HAT_COLLECTION_URL, false)
+                else {
+                    continue;
+                };
+                let Some(artwork) = hats.image(&url) else {
+                    continue;
+                };
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_precision_loss,
+                    reason = "sprite and artwork dimensions in pixels, both far below f32's                               exact integer range"
+                )]
+                let rect = {
+                    let size = OVERLAY_SPRITE as f32;
+                    let width = geometry.width * size;
+                    (
+                        (geometry.left * size) as i32,
+                        (geometry.top * size) as i32,
+                        width as i32,
+                        // The artwork is square-ish and the geometry gives only a width, so
+                        // the height follows the file's own proportions -- which is what
+                        // `width` alone means in the stylesheet this is ported from.
+                        (width * artwork.height as f32 / artwork.width.max(1) as f32) as i32,
+                    )
+                };
+                let artwork = artwork.clone();
+                canvas.composite(&artwork, (rect.0, rect.1), (rect.2, rect.3));
+            }
         }
     }
 
@@ -621,6 +697,7 @@ impl eframe::App for Client {
         if let Some(reader) = self.reader.as_mut() {
             reader.pump();
         }
+        self.hats.pump();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
         // debounces instead, because it is reacting to move and resize events; this is
@@ -705,6 +782,15 @@ impl eframe::App for Client {
             });
             if let Some(trouble) = reader.trouble() {
                 ui.colored_label(egui::Color32::from_rgb(230, 140, 90), trouble);
+            }
+            // The artwork is not why anybody opened this window, so it says so in the same
+            // place and the same colour rather than in one of its own: a hat that did not
+            // arrive is worth knowing about and is not worth a second panel.
+            if let Some(trouble) = self.hats.trouble() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 140, 90),
+                    format!("Hats: {trouble}"),
+                );
             }
 
             ui.horizontal(|ui| {

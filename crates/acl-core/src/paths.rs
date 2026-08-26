@@ -134,6 +134,16 @@ impl Paths {
     pub fn generated_static(&self) -> PathBuf {
         self.user_data.join("static").join("generated")
     }
+
+    /// The downloaded hat artwork, and the index that names it.
+    ///
+    /// Beside `generated`, under the same `static` directory, because both are pictures the
+    /// client puts there rather than pictures it ships. The difference is only where they
+    /// come from: one is drawn here, the other is fetched from the pinned collection.
+    #[must_use]
+    pub fn hat_cache(&self) -> PathBuf {
+        self.user_data.join("static").join("hats")
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +201,12 @@ mod tests {
         assert_eq!(paths.log_directory(), Path::new("/u/logs"));
         assert_eq!(paths.log_file(), Path::new("/u/logs/anothercrewlink.log"));
         assert_eq!(paths.generated_static(), Path::new("/u/static/generated"));
+        assert_eq!(paths.hat_cache(), Path::new("/u/static/hats"));
+        assert_ne!(
+            paths.hat_cache(),
+            paths.generated_static(),
+            "downloaded artwork and generated artwork must not share a directory"
+        );
     }
 
     #[test]
