@@ -40,6 +40,10 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// not in the alphabet the game draws from.
 const LOBBY: &str = "SESS01";
 
+/// The same, for the deployed-server check. A different code so that two runs against one
+/// server cannot land in each other's lobby.
+const PROBE: &str = "PROBE1";
+
 /// Kills the server however the test ends, including on a panic.
 struct Server(Child);
 
@@ -215,4 +219,70 @@ async fn two_sessions_see_each_other_and_a_signal_crosses() {
     );
 
     drop(server);
+}
+
+/// The same handshake against a deployed server, over TLS.
+///
+/// Ignored, and pointed at a URL rather than hard-coded: it talks to somebody's production.
+/// It is here because the local case cannot show one thing that matters —
+/// `crates/acl-net/src/transport.rs` says in as many words that certificate verification
+/// uses webpki's bundled roots rather than the operating system's store, and a plain
+/// `http://127.0.0.1` never touches that code.
+///
+/// Deliberately gentle, the same way the server repository's own live probe is: two
+/// sockets, a lobby code no Among Us game can produce, nothing published to anybody's
+/// lobby browser, and gone in a couple of seconds.
+///
+/// ```text
+/// ACL_LIVE_URL=https://aucl.greluc.me cargo test -p acl-core -- --ignored against_a_deployed
+/// ```
+#[tokio::test]
+#[ignore = "talks to a deployed server; set ACL_LIVE_URL"]
+async fn against_a_deployed_server() {
+    let Ok(url) = std::env::var("ACL_LIVE_URL") else {
+        panic!("set ACL_LIVE_URL to the server to check");
+    };
+
+    let mut first = Session::connect(&url).await.expect("the first connects");
+    let mut second = Session::connect(&url).await.expect("the second connects");
+    until(&mut first, |event| matches!(event, Event::Connected(_)))
+        .await
+        .expect("an id for the first");
+    until(&mut second, |event| matches!(event, Event::Connected(_)))
+        .await
+        .expect("an id for the second");
+    let second_id = second.socket_id().expect("an id").to_owned();
+
+    // The relay offer, which is the one thing a deployed server has and a freshly started
+    // one does not: a TURN credential minted for this session.
+    let config = until(&mut first, |event| matches!(event, Event::PeerConfig(_))).await;
+    match config {
+        Ok(Event::PeerConfig(config)) => eprintln!("peer config: {config:?}"),
+        Ok(other) => panic!("expected a peer config, got {other:?}"),
+        Err(seen) => panic!("no peer config arrived; saw {seen:?}"),
+    }
+
+    first
+        .join(PROBE, 1, 901, true)
+        .await
+        .expect("the first joins");
+    let _ = tokio::time::timeout(Duration::from_millis(500), first.next()).await;
+    second
+        .join(PROBE, 2, 902, false)
+        .await
+        .expect("the second joins");
+
+    let seen = until(
+        &mut first,
+        |event| matches!(event, Event::PeerJoined { socket_id, .. } if *socket_id == second_id),
+    )
+    .await;
+    assert!(
+        seen.is_ok(),
+        "the deployed server never reported the second client; saw {:?}",
+        seen.unwrap_err()
+    );
+
+    first.leave().await.expect("the first leaves");
+    second.leave().await.expect("the second leaves");
 }
