@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use acl_core::paths::{Environment, Paths};
 use acl_core::single_instance;
-use acl_ui::roster::{Roster, Voice, main_view};
+use acl_ui::roster::{Roster, Voice, main_view, overlay};
 use acl_ui::views::main::Portrait;
 use acl_ui::window_state::{Rect, Stored, WindowState, restore, worth_saving};
 use eframe::egui;
@@ -39,6 +39,15 @@ const MIN_HEIGHT: i32 = 350;
 
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = 32.0;
+
+/// How large one crewmate is in the overlay, and how far apart they sit.
+///
+/// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
+/// physical size, and scaling by the window would make the overlay twice as large on the
+/// larger monitor for no reason anybody asked for.
+const OVERLAY_SPRITE: i32 = 56;
+/// See [`OVERLAY_SPRITE`].
+const OVERLAY_GAP: i32 = 8;
 
 fn main() -> eframe::Result<()> {
     let paths = match Paths::resolve(Environment {
@@ -205,6 +214,12 @@ struct Client {
     reader: Option<reader::Reader>,
     /// What the window was last seen at, for saving on the way out.
     last_seen: Option<WindowState>,
+    /// Whether the overlay is currently meant to be on screen.
+    ///
+    /// Kept so that show and hide are sent on the edges rather than every frame: the
+    /// helper would act on either correctly, and a command five times a second for a state
+    /// that has not changed is a pipe carrying nothing.
+    overlay_shown: bool,
 }
 
 impl Client {
@@ -215,6 +230,77 @@ impl Client {
             // where somebody would find out about it, so it opens and says so.
             reader: reader::Reader::start().ok(),
             last_seen: None,
+            overlay_shown: false,
+        }
+    }
+
+    /// Composes one overlay frame and sends it across.
+    ///
+    /// Every part of this is decided elsewhere: `game_window` says where the game is and
+    /// whether it can be followed, `roster::overlay` says who is audible, and `sprite` turns
+    /// each of them into bytes. What is here is the arrangement -- a row along the top of
+    /// the game, which is where `Overlay.tsx` puts it by default.
+    #[cfg(windows)]
+    fn compose_overlay(&mut self, state: &acl_game::AmongUsState) {
+        use acl_core::game_window;
+
+        let Some(reader) = self.reader.as_ref() else {
+            return;
+        };
+        let game = acl_game::windows::find_process("Among Us.exe");
+        let bounds = game.and_then(game_window::content_bounds);
+        let Some(bounds) = bounds.filter(|bounds| bounds.is_drawable()) else {
+            // No game, or nothing to draw over. Hidden rather than left showing the last
+            // frame over whatever the player switched to.
+            if self.overlay_shown {
+                self.overlay_shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        };
+
+        let voice = Voice {
+            talking: &|_| false,
+            dead: &|_| false,
+            connected: &|_| true,
+            audible: &|_| false,
+            local_talking: false,
+            local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+            impostor_radio: None,
+            local_is_impostor: false,
+        };
+        let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
+        let shown = overlay(&seats, &voice, false);
+
+        let sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| {
+                let player = state.players.get(entry.at)?;
+                let (body, shadow) =
+                    acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
+                let bitmap = acl_ui::sprite::crewmate(
+                    OVERLAY_SPRITE,
+                    acl_ui::sprite::Crewmate {
+                        body: (body.r(), body.g(), body.b()),
+                        shadow: (shadow.r(), shadow.g(), shadow.b()),
+                        talking: entry.talking,
+                        alive: entry.alive,
+                    },
+                );
+                let at = i32::try_from(slot).unwrap_or(0);
+                Some((
+                    OVERLAY_GAP + at * (OVERLAY_SPRITE + OVERLAY_GAP),
+                    OVERLAY_GAP,
+                    bitmap,
+                ))
+            })
+            .collect();
+
+        reader.draw_overlay((bounds.x, bounds.y, bounds.width, bounds.height), sprites);
+        if !self.overlay_shown {
+            self.overlay_shown = true;
+            reader.show_overlay(true);
         }
     }
 
@@ -300,6 +386,17 @@ impl eframe::App for Client {
                     y: Some(outer.min.y as i32),
                 });
             }
+        }
+
+        // Composed on the same cadence the frames arrive at, which is the helper's five a
+        // second: there is nothing new to draw between them.
+        #[cfg(windows)]
+        if let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest().cloned())
+        {
+            self.compose_overlay(&state);
         }
 
         if ctx.input(|input| input.viewport().close_requested()) {
