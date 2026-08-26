@@ -43,6 +43,12 @@ pub(crate) enum Command {
     WatchLobbies(bool),
     /// Ask for one lobby's code.
     JoinLobby(u64),
+    /// Send one Opus packet to everybody in the lobby.
+    ///
+    /// To everybody, because who can hear it is the *receiver's* decision: gain and
+    /// distance are applied where the audio is played, which is what makes a lobby's rules
+    /// the same for everybody rather than whatever each sender believed.
+    SendAudio(Vec<u8>),
     /// Join a lobby, which is what starts the mesh.
     Join {
         /// The lobby code.
@@ -68,10 +74,12 @@ pub(crate) enum Report {
     /// Boxed because [`Event`] is large and this is a channel of them; an unboxed variant
     /// makes every message the size of the largest one.
     Event(Box<Event>),
-    /// Audio arrived from a peer since the last drain.
+    /// Audio arrived from a peer.
     Audio {
         /// Whose.
         socket_id: String,
+        /// The packet, on its way to a decoder.
+        packet: acl_core::peers::Incoming,
     },
     /// A peer connection changed state.
     Peer {
@@ -118,6 +126,11 @@ pub(crate) struct Link {
     /// the server is the only thing that sees both. Kept here because it is the only place
     /// both halves pass through.
     sockets: std::collections::BTreeMap<i64, String>,
+    /// Packets that have arrived and not yet been handed to a decoder.
+    ///
+    /// Held for one frame at most: `take_arrived` empties it, and the caller hands them
+    /// straight on. A queue nobody drains is the failure this is shaped to make obvious.
+    arrived: Vec<acl_core::peers::Incoming>,
     /// Which peers have sent audio since the window last looked.
     ///
     /// Cleared by [`Link::take_speaking`], which is what makes it mean "recently" rather
@@ -153,6 +166,7 @@ impl Link {
             connected: std::collections::BTreeSet::new(),
             sockets: std::collections::BTreeMap::new(),
             speaking: std::collections::BTreeSet::new(),
+            arrived: Vec::new(),
         }
     }
 
@@ -166,6 +180,7 @@ impl Link {
                         self.connected.clear();
                         self.sockets.clear();
                         self.speaking.clear();
+                        self.arrived.clear();
                         // A connection that has gone takes its lobbies with it. Leaving
                         // them on screen would offer a player a join that cannot be sent.
                         self.lobbies.clear();
@@ -173,11 +188,12 @@ impl Link {
                     self.state = state;
                 }
                 Report::Event(event) => self.absorb(*event),
-                Report::Audio { socket_id } => {
+                Report::Audio { socket_id, packet } => {
                     // A moment rather than a level. The window redraws five times a second
                     // and audio arrives fifty times a second, so what it needs is "recently"
                     // -- and `pump` running is what makes this decay.
                     self.speaking.insert(socket_id);
+                    self.arrived.push(packet);
                 }
                 Report::Peer {
                     socket_id,
@@ -249,6 +265,23 @@ impl Link {
     /// The last answer to a join, if there has been one.
     pub(crate) fn answer(&self) -> Option<&str> {
         self.answer.as_deref()
+    }
+
+    /// The packets that have arrived, and forgets them.
+    #[must_use]
+    pub(crate) fn take_arrived(&mut self) -> Vec<acl_core::peers::Incoming> {
+        std::mem::take(&mut self.arrived)
+    }
+
+    /// Sends one Opus packet to everybody in the lobby.
+    pub(crate) fn send_audio(&self, packet: Vec<u8>) {
+        self.send(Command::SendAudio(packet));
+    }
+
+    /// The socket a player is on, if the server has said.
+    #[must_use]
+    pub(crate) fn socket_of(&self, client_id: i64) -> Option<&str> {
+        self.sockets.get(&client_id).map(String::as_str)
     }
 
     /// Whether a player has been heard since this was last asked, and forgets it.
@@ -383,6 +416,10 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
                         return;
                     }
                 }
+                // Audio is never deferred. A packet held until the handshake finishes is
+                // a packet describing a moment that has passed, and twenty milliseconds of
+                // stale speech is worse than the gap it fills.
+                Command::SendAudio(packet) => broadcast(&runtime, mesh.as_mut(), &packet),
                 other if !live => deferred.push(other),
                 other => {
                     if !obey(&runtime, &mut session, other, answers) {
@@ -451,6 +488,25 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
                 runtime.block_on(drain(&mut mesh, current, answers));
             }
         }
+    }
+}
+
+/// Sends one packet to everybody in the mesh.
+///
+/// To everybody, because who can hear it is the *receiver's* decision: gain and distance
+/// are applied where the audio is played, which is what makes a lobby's rules the same for
+/// everybody rather than whatever each sender believed about them.
+fn broadcast(
+    runtime: &tokio::runtime::Runtime,
+    mesh: Option<&mut acl_core::peers::PeerSet>,
+    packet: &[u8],
+) {
+    let Some(mesh) = mesh else {
+        return;
+    };
+    for peer in mesh.peers() {
+        let _ =
+            runtime.block_on(mesh.send_audio(&peer, packet, std::time::Duration::from_millis(20)));
     }
 }
 
@@ -563,12 +619,11 @@ async fn drain(
     //
     // Decoding, jitter buffering and mixing are `acl-audio`'s and are not wired yet. This
     // is deliberately the smallest true thing: audio is arriving from this peer.
-    let mut heard: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for packet in audio {
-        heard.insert(packet.peer);
-    }
-    for peer in heard {
-        let _ = answers.send(Report::Audio { socket_id: peer });
+        let _ = answers.send(Report::Audio {
+            socket_id: packet.peer.clone(),
+            packet,
+        });
     }
 }
 
@@ -619,6 +674,11 @@ fn obey(
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.leave());
             }
+        }
+        Command::SendAudio(_) => {
+            // Handled in the loop, where the mesh is. Here only so the match is total --
+            // routing it through `obey` would need the mesh threaded into a function whose
+            // job is the session.
         }
     }
     true

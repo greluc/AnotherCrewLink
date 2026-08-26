@@ -31,12 +31,14 @@ dependencies = [
 name = "acl-client"
 version = "0.0.0"
 dependencies = [
+ "acl-audio",
  "acl-core",
  "acl-game",
  "acl-i18n",
  "acl-net",
  "acl-types",
  "acl-ui",
+ "cpal",
  "eframe",
  "egui",
  "serde_json",

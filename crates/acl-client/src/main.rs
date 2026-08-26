@@ -18,6 +18,7 @@
 //! does not need to start either. `experiments/gui-spike` measured this rung, so the
 //! performance number already on record is the one this runs on.
 
+mod audio;
 mod hat_store;
 mod net;
 mod reader;
@@ -337,6 +338,56 @@ enum Screen {
     Lobbies,
 }
 
+/// The reader's state, as the voice rules want it.
+///
+/// Two crates that describe the same game and do not know about each other: `acl-game`
+/// reads it out of memory and `acl-audio` decides what it sounds like. This is the seam,
+/// and it is a translation rather than a conversion -- `voice_params` reads six fields and
+/// this hands over six fields.
+#[cfg(windows)]
+fn as_voice_state(state: &acl_game::AmongUsState) -> acl_audio::voice::State {
+    acl_audio::voice::State {
+        game_state: match state.game_state {
+            acl_game::GameState::Lobby => acl_audio::voice::GameState::Lobby,
+            acl_game::GameState::Tasks => acl_audio::voice::GameState::Tasks,
+            acl_game::GameState::Discussion => acl_audio::voice::GameState::Discussion,
+            // `Unknown` is treated as the menu: it is what the reader reports before it has
+            // read anything, and silence is the right answer to "I do not know yet".
+            acl_game::GameState::Menu | acl_game::GameState::Unknown => {
+                acl_audio::voice::GameState::Menu
+            }
+        },
+        // The reader reports the game's own number; `from_game` is what turns it into a
+        // map, and `Unknown` for anything it does not know -- which the collider lookup
+        // then treats as "no walls" rather than panicking, deliberately.
+        map: acl_types::map::MapType::from_game(state.map),
+        closed_doors: state.closed_doors.clone(),
+        coms_sabotaged: state.coms_sabotaged,
+        current_camera: acl_types::map::CameraLocation::from_state(state.current_camera),
+        // The reader tracks this, so nothing here has to remember the previous frame.
+        light_radius_changed: state.light_radius_changed,
+    }
+}
+
+/// One player, as the voice rules want them.
+#[cfg(windows)]
+fn as_voice_player(player: &acl_game::Player) -> acl_audio::voice::Player {
+    acl_audio::voice::Player {
+        client_id: player.client_id.unwrap_or_default(),
+        position: acl_types::map::Vector2 {
+            x: player.x,
+            y: player.y,
+        },
+        is_dead: player.is_dead,
+        is_impostor: player.is_impostor,
+        in_vent: player.in_vent,
+        disconnected: player.disconnected,
+        // Absent means "the reader could not tell", and a dummy that is treated as a person
+        // is a person nobody can hear -- the safer way round for a freeplay lobby.
+        is_dummy: player.is_dummy.unwrap_or(false),
+    }
+}
+
 /// One player of the reader's state, as the roster wants to see them.
 ///
 /// A wrapper rather than an implementation on `acl_game::Player`, because the trait belongs
@@ -382,6 +433,8 @@ struct Client {
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
     link: net::Link,
+    /// The microphone, the speaker, and everything between them.
+    audio: audio::Audio,
     /// Who has been heard since the last frame.
     ///
     /// Taken from the link once a frame and held for the drawing, because the roster asks
@@ -424,6 +477,7 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
             link: net::Link::start(),
+            audio: audio::Audio::start(),
             speaking: std::collections::BTreeSet::new(),
             joined: None,
             mods: None,
@@ -734,6 +788,138 @@ impl Client {
         acl_game::mods::Mod::None
     }
 
+    /// Moves audio in both directions, and works out what each peer should sound like.
+    ///
+    /// The placement is the whole of what this decides, and it decides none of it:
+    /// `acl_audio::voice::voice_params` applies every rule — distance, walls, vision, the
+    /// dead, the vents, the impostor radio — and this turns its answer into the two numbers
+    /// the mixer needs.
+    ///
+    /// Once a frame, which is five times a second. That is far slower than the audio, and
+    /// deliberately: a player moves at the game's pace, and recomputing a gain fifty times a
+    /// second would be forty-five recomputations of the same answer.
+    fn carry_audio(&mut self) {
+        for packet in self.link.take_arrived() {
+            self.audio.receive(packet);
+        }
+        for packet in self.audio.take_encoded() {
+            self.link.send_audio(packet);
+        }
+
+        let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest().cloned())
+        else {
+            // No game, no positions, nothing to place. The mixer plays what it has at the
+            // gain it last had, which is right for the fraction of a second between two
+            // frames and wrong for anything longer -- so it is emptied instead.
+            self.audio.place(std::collections::BTreeMap::new());
+            return;
+        };
+
+        let settings = self.settings.config();
+        let lobby = acl_audio::voice::LobbySettings {
+            max_distance: settings.number_at("localLobbySettings.maxDistance"),
+            haunting: settings.bool_at("localLobbySettings.haunting"),
+            coms_sabotage: settings.bool_at("localLobbySettings.commsSabotage"),
+            hear_impostors_in_vents: settings.bool_at("localLobbySettings.hearImpostorsInVents"),
+            impostors_hear_impostors_in_vent: settings
+                .bool_at("localLobbySettings.impostersHearImpostersInvent"),
+            impostor_radio_enabled: settings.bool_at("localLobbySettings.impostorRadioEnabled"),
+            dead_only: settings.bool_at("localLobbySettings.deadOnly"),
+            meeting_ghost_only: settings.bool_at("localLobbySettings.meetingGhostOnly"),
+            vision_hearing: settings.bool_at("localLobbySettings.visionHearing"),
+            hear_through_cameras: settings.bool_at("localLobbySettings.hearThroughCameras"),
+            walls_block_audio: settings.bool_at("localLobbySettings.wallsBlockAudio"),
+        };
+        // Two fields, not five. `masterVolume` and `crewVolumeAsGhost` are applied
+        // elsewhere in the Electron graph -- one on the output node and one inside the
+        // ghost rule -- and `voice_params` takes only what its own rules read. Passing them
+        // here would be applying them twice.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a percentage from the settings file, which the schema bounds at 100"
+        )]
+        let client = acl_audio::voice::ClientSettings {
+            ghost_volume_as_impostor: settings.number_at("ghostVolumeAsImpostor") as f32,
+            enable_spatial_audio: settings.bool_at("enableSpatialAudio"),
+        };
+
+        let placements = self.placements(&state, &lobby, client);
+        self.audio.place(placements);
+    }
+
+    /// What every peer in the lobby should sound like.
+    ///
+    /// Separate from `carry_audio` because that one moves bytes and this one applies rules,
+    /// and the rules are the part worth reading on their own.
+    fn placements(
+        &self,
+        state: &acl_game::AmongUsState,
+        lobby: &acl_audio::voice::LobbySettings,
+        client: acl_audio::voice::ClientSettings,
+    ) -> std::collections::BTreeMap<String, audio::Placement> {
+        let mut placements = std::collections::BTreeMap::new();
+        let Some(me) = state.players.iter().find(|player| player.is_local) else {
+            return placements;
+        };
+        let voice_state = as_voice_state(state);
+        let listener = as_voice_player(me);
+        // The panner's `maxDistance`, rewritten each frame from the hearing range --
+        // `Voice.tsx` does exactly this, and it is why `vision_hearing` can change how far
+        // you hear without changing any gain directly.
+        let hearing =
+            acl_audio::voice::hearing_range(lobby, &listener, f64::from(state.light_radius));
+
+        for player in &state.players {
+            if player.is_local {
+                continue;
+            }
+            let Some(client_id) = player.client_id.map(i64::from) else {
+                continue;
+            };
+            let Some(socket) = self.link.socket_of(client_id) else {
+                continue;
+            };
+            let params = acl_audio::voice::voice_params(
+                &voice_state,
+                &client,
+                lobby,
+                &listener,
+                &as_voice_player(player),
+                lobby.max_distance,
+                None,
+            );
+            if params.gain <= 0.0 {
+                // Silent, and `placed` false means the panner was not given a position
+                // either -- the Electron original leaves the graph alone in that case, and
+                // a peer left out of the map is a peer the mixer does not mix.
+                continue;
+            }
+            placements.insert(
+                socket.to_owned(),
+                audio::Placement {
+                    gain: params.gain,
+                    source: acl_audio::panner::Position {
+                        x: params.pan.x,
+                        y: 0.0,
+                        // The game is flat and the listener faces along `z`, so the game's
+                        // `y` is the panner's depth. Negative in front, which is the Web
+                        // Audio convention the Electron client already works in.
+                        z: -params.pan.y,
+                    },
+                    panner: acl_audio::panner::Panner {
+                        max_distance: hearing,
+                        ..acl_audio::panner::Panner::default()
+                    },
+                    spatial: client.enable_spatial_audio,
+                },
+            );
+        }
+        placements
+    }
+
     /// Joins and leaves the lobby the game is in.
     ///
     /// On the edges rather than every frame: a join sent five times a second is a join the
@@ -1028,6 +1214,7 @@ impl eframe::App for Client {
         // next one, with nothing having to notice they went quiet.
         self.speaking = self.link.take_speaking();
         self.follow_the_lobby();
+        self.carry_audio();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
         // debounces instead, because it is reacting to move and resize events; this is
@@ -1134,6 +1321,14 @@ impl eframe::App for Client {
                 ui.colored_label(
                     egui::Color32::from_rgb(230, 140, 90),
                     format!("Hats: {trouble}"),
+                );
+            }
+            // No microphone or no speaker is a working client with half its voice, and it
+            // is the first thing somebody will ask about when nobody can hear them.
+            if let Some(trouble) = self.audio.trouble() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 140, 90),
+                    format!("Audio: {trouble}"),
                 );
             }
 

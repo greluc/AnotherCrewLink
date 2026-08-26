@@ -620,6 +620,15 @@ impl PeerSet {
         (outbound, events, audio)
     }
 
+    /// Everybody this set holds a connection to.
+    ///
+    /// For the sender, which has one packet and needs to give it to each of them: who can
+    /// actually *hear* it is the receiver's decision, applied where the audio is played.
+    #[must_use]
+    pub fn peers(&self) -> Vec<String> {
+        self.peers.keys().cloned().collect()
+    }
+
     /// Sends one Opus packet to a peer.
     ///
     /// The packet is `acl_audio::codec::Encoder`'s output, whole. This adds the RTP around

@@ -11,7 +11,7 @@
 //! nothing for a mono source but would for anything else.
 
 /// A point in the game's space, as the panner sees it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Position {
     /// Right of the listener.
     pub x: f64,
@@ -19,6 +19,18 @@ pub struct Position {
     pub y: f64,
     /// In front is negative, which is the specification's convention and the client's.
     pub z: f64,
+}
+
+impl Position {
+    /// How far away it is.
+    ///
+    /// The same distance the model uses, exposed because a caller that wants the distance
+    /// without the direction -- panning switched off, say -- should not be recomputing it
+    /// with a different rounding.
+    #[must_use]
+    pub fn length(self) -> f64 {
+        self.x.hypot(self.y).hypot(self.z)
+    }
 }
 
 /// The distance model settings the client uses.
