@@ -15,3 +15,4 @@ pub mod renderer;
 pub mod roster;
 pub mod server_url;
 pub mod settings;
+pub mod window_state;
