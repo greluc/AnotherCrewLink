@@ -2221,7 +2221,36 @@ after that release there is no 1.x client in any lobby of ours, so the threshold
 this phase used to wait on is the same number P8 item 5 already had to meet.
 
 Move lobby settings and the impostor radio claim to the socket, drop the data
-channel and disable SCTP, and delete the SCTP fuzz targets. A second wire
+channel and disable SCTP, and delete the SCTP fuzz targets.
+
+> **Taken apart 2026-08-26, and three of the four are already answered.** The phase reads
+> as one blocked lump; it is not.
+>
+> **The data channel was never built.** `acl_core::peers` adds an audio track and nothing
+> else — there is no `create_data_channel` anywhere in the shipped crates, only in
+> `acl-net`'s loopback test. There is nothing to drop.
+>
+> **SCTP cannot be turned off, and is never negotiated.** `rtc-sctp` is a hard dependency
+> of `rtc` with no feature gating it, so the code is linked in whatever this client does.
+> What is true instead is that the wire never carries it: an SDP with no `m=application`
+> section negotiates no association, so the linked code is unreachable by anything a peer
+> sends. `the_offer_carries_audio_and_no_data_channel` asserts exactly that, because "we do
+> not use it" is an intention and "the offer does not contain it" is a fact — and it stops
+> being one the moment somebody adds a data channel for something convenient.
+>
+> **There are no SCTP fuzz targets.** This repository has no `fuzz` directory. Nothing to
+> delete.
+>
+> **What is genuinely blocked is the first clause, and now for a stated reason rather than
+> an asserted one.** 1.x sends the lobby settings and the impostor radio claim *over the
+> data channel* — `Voice.tsx` lines 732, 918 and 1197 — so a 2.x client that sent them over
+> the socket would be understood by no 1.x peer, and §4.12's staged rollout deliberately
+> puts both generations in one lobby for weeks. The switch-off is what removes the peer
+> that cannot hear it. Until then this is not a cleanup being deferred; it is a change that
+> would break people who are still in the lobby.
+>
+> Which leaves P9 with one item, gated on other people's machines, and its blockedness is
+> now a mechanism anybody can check rather than a claim to be taken on trust. A second wire
 protocol is not one of the things the switch-off unlocks, and it is worth being
 explicit about why, because half its stated precondition is now met and that
 invites the wrong conclusion: the OBS page has been migrated since H3, but the

@@ -169,9 +169,14 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > deletes, the switch-off message. What is left of it is not code — three staged releases,
 > a fleet that has to move, and G4 rehearsed on real 1.0.2 installs.
 >
-> `P9` is **blocked rather than unbuilt**, and deliberately: everything in it is gated on
-> the 1.x switch-off, and doing it early would break the 1.x clients still in lobbies. It
-> is the one phase whose precondition is other people's machines.
+> `P9` is three-quarters **already true** and one-quarter blocked, which is not how it
+> reads. The data channel was never built, so there is none to drop; SCTP cannot be
+> feature-disabled — it is a hard dependency of `rtc` — but is never negotiated, and a test
+> asserts the offer contains no `m=application`; and there are no SCTP fuzz targets to
+> delete. What is left is moving the lobby settings and the impostor radio claim to the
+> socket, and that is blocked for a mechanical reason: 1.x reads both off the *data
+> channel*, and the rollout puts both generations in one lobby for weeks. It is not a
+> cleanup being deferred; it is a change that would break people still in the lobby.
 >
 > The weeks are unchanged and are not a record of what anything cost.
 > [04-implementation-plan.md](04-implementation-plan.md) §4.11 carries the same statement

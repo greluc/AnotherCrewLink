@@ -272,3 +272,46 @@ async fn sending_to_a_peer_that_is_not_there_says_so_quietly() {
         .expect("not an error");
     assert!(!accepted);
 }
+
+/// No data channel is ever offered, so SCTP is never negotiated.
+///
+/// §4.13 (P9) asks to "drop the data channel and disable SCTP". This client never had one:
+/// `PeerSet` adds an audio track and nothing else, and 1.x's three data-channel messages --
+/// the lobby settings twice and the impostor radio claim -- have no counterpart here yet.
+///
+/// **`rtc-sctp` cannot be turned off by a feature.** It is a hard dependency of `rtc`, so
+/// the code is linked in whatever this client does. What can be true, and is, is that the
+/// wire never carries it: an SDP with no `m=application` section negotiates no SCTP
+/// association, so the linked code is never reached by anything a peer sends.
+///
+/// That distinction is the reason this is a test rather than a sentence in the plan. "We do
+/// not use it" is an intention; "the offer does not contain it" is a fact, and it stops
+/// being one the moment somebody adds a data channel for something convenient.
+#[tokio::test]
+async fn the_offer_carries_audio_and_no_data_channel() {
+    let mut set = PeerSet::new(configuration());
+    let offer = set.offer("somebody").await.expect("an offer");
+
+    let acl_core::signalling::Payload::Offer { sdp, .. } = offer.payload else {
+        panic!("an offer that is not an offer");
+    };
+
+    assert!(
+        sdp.contains("m=audio"),
+        "the offer has no audio, which is the one thing it must have"
+    );
+    assert!(
+        !sdp.contains("m=application"),
+        "the offer negotiates a data channel, so SCTP is on the wire:
+{sdp}"
+    );
+    assert!(
+        !sdp.to_lowercase().contains("sctp"),
+        "the offer mentions SCTP:
+{sdp}"
+    );
+    assert!(
+        !sdp.contains("m=video"),
+        "the offer negotiates video, which this client has no use for"
+    );
+}
