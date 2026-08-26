@@ -52,6 +52,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "acl-helper"
+version = "0.0.0"
+dependencies = [
+ "acl-core",
+ "acl-game",
+ "acl-ipc",
+ "postcard",
+ "serde_json",
+ "thiserror 2.0.20",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "acl-i18n"
 version = "0.0.0"
 dependencies = [

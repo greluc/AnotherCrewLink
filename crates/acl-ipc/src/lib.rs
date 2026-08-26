@@ -69,6 +69,14 @@ pub enum HelperMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum CoreMessage {
+    /// The offsets bundle to read the game with.
+    ///
+    /// Sent before [`CoreMessage::StartReading`], and sent by the core because the core is
+    /// where fetching it belongs: §6 of `docs/rust-port/06-security.md` requires the
+    /// elevated process to have no HTTP client, and the offsets store is one. Opaque here
+    /// for the same reason [`HelperMessage::GameState`] is -- this crate separates the two
+    /// sides and must not depend on either.
+    SetOffsets(Vec<u8>),
     /// Begin sampling the game.
     StartReading,
     /// Stop sampling, without exiting.

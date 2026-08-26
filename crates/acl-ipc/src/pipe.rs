@@ -57,7 +57,8 @@ mod platform {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::ptr;
     use windows_sys::Win32::Foundation::{
-        ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
+        HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -71,7 +72,8 @@ mod platform {
     };
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
-        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT, WaitNamedPipeW,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT, PeekNamedPipe,
+        WaitNamedPipeW,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, OpenProcessToken,
@@ -92,7 +94,14 @@ mod platform {
     /// network timeout. Long enough to survive a cold start behind a UAC prompt the user
     /// takes a moment over; short enough that a helper which died on launch is reported
     /// rather than waited on.
-    const CONNECT_TIMEOUT_MS: u32 = 30_000;
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// How long to wait between attempts while the name does not exist.
+    ///
+    /// Short, because the usual wait is the few milliseconds between `spawn` returning and
+    /// the helper reaching `CreateNamedPipeW`, and a long first sleep would pay for a UAC
+    /// prompt that is usually not there.
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 
     /// A null-terminated UTF-16 copy.
     fn wide(value: &OsStr) -> Vec<u16> {
@@ -303,6 +312,48 @@ mod platform {
         }
     }
 
+    impl PipeConnection {
+        /// How many bytes are waiting, without taking any of them.
+        ///
+        /// This exists so that one thread can do both directions, and that is not a
+        /// preference — it is the only shape that works here.
+        ///
+        /// The obvious alternative was a second handle from `DuplicateHandle`, one thread
+        /// reading and one writing. It deadlocks. A duplicated handle refers to the *same
+        /// file object*, and a file object opened without `FILE_FLAG_OVERLAPPED` is
+        /// synchronous: the I/O manager serialises every operation on it. The reader
+        /// blocks in `ReadFile` holding that lock, the writer's `WriteFile` queues behind
+        /// it, and neither ever finishes. It was written that way, it passed the
+        /// first message in each direction, and it hung on the second.
+        ///
+        /// Overlapped I/O is the other way out and is a great deal more machinery for a
+        /// process that already wakes up five times a second. Peek, then read what is
+        /// there.
+        ///
+        /// # Errors
+        ///
+        /// Whatever `PeekNamedPipe` says. A closed pipe reports one.
+        pub fn available(&self) -> io::Result<usize> {
+            let mut waiting = 0u32;
+            // SAFETY: a valid pipe handle; every buffer argument is null, which is the
+            // documented way to ask only for the byte count.
+            let ok = unsafe {
+                PeekNamedPipe(
+                    self.handle.as_raw_handle().cast(),
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    &raw mut waiting,
+                    ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(waiting as usize)
+        }
+    }
+
     impl io::Read for PipeConnection {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             let mut read = 0u32;
@@ -427,8 +478,15 @@ mod platform {
 
     /// Connects to a pipe the other end created. This is the unelevated end.
     ///
-    /// Waits for the name to appear, because the helper is a process that was started a
+    /// Retries until the deadline, because the helper is a process that was started a
     /// moment ago and may still be behind a UAC prompt.
+    ///
+    /// The retry is a loop and not `WaitNamedPipeW`, which is the obvious call and the
+    /// wrong one. It waits for an *instance* of an existing pipe to become free; if the
+    /// name does not exist at all it fails immediately with `ERROR_FILE_NOT_FOUND`. The
+    /// case this function exists for is precisely the one where the name does not exist
+    /// yet, and the first version of it therefore failed instantly every time. `WaitNamedPipe`
+    /// is still used, for the one thing it does do: waiting out a busy instance.
     ///
     /// # Errors
     ///
@@ -436,33 +494,55 @@ mod platform {
     /// otherwise.
     pub fn connect(name: &str) -> io::Result<PipeConnection> {
         let wide_name = wide(OsStr::new(name));
-        // SAFETY: the name is null-terminated and outlives the call.
-        if unsafe { WaitNamedPipeW(wide_name.as_ptr(), CONNECT_TIMEOUT_MS) } == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("no pipe named {name} appeared within {CONNECT_TIMEOUT_MS} ms"),
-            ));
+        let deadline = std::time::Instant::now() + CONNECT_TIMEOUT;
+        loop {
+            // SAFETY: the name is null-terminated; every other argument is a documented
+            // constant or null.
+            let handle = unsafe {
+                CreateFileW(
+                    wide_name.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    0,
+                    ptr::null_mut(),
+                )
+            };
+            if handle != INVALID_HANDLE_VALUE {
+                return Ok(PipeConnection {
+                    // SAFETY: a valid handle from CreateFileW, owned from here.
+                    handle: unsafe { OwnedHandle::from_raw_handle(handle.cast()) },
+                });
+            }
+
+            let error = io::Error::last_os_error();
+            let code = error.raw_os_error().unwrap_or_default();
+            if code == ERROR_PIPE_BUSY.cast_signed() {
+                // The name exists and every instance is taken. This is what
+                // `WaitNamedPipeW` is for, and the only thing it is for here.
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let milliseconds = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
+                // SAFETY: the name is null-terminated and outlives the call.
+                unsafe { WaitNamedPipeW(wide_name.as_ptr(), milliseconds) };
+            } else if code == ERROR_FILE_NOT_FOUND.cast_signed() {
+                // Not there yet. The helper has been started and has not reached
+                // `CreateNamedPipeW`, or the user is still looking at a UAC dialog.
+                std::thread::sleep(RETRY_DELAY);
+            } else {
+                return Err(error);
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "no pipe named {name} accepted a connection within {} ms",
+                        CONNECT_TIMEOUT.as_millis()
+                    ),
+                ));
+            }
         }
-        // SAFETY: the name is null-terminated; every other argument is a documented
-        // constant or null.
-        let handle = unsafe {
-            CreateFileW(
-                wide_name.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE,
-                0,
-                ptr::null(),
-                OPEN_EXISTING,
-                0,
-                ptr::null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(PipeConnection {
-            // SAFETY: a valid handle from CreateFileW, owned from here.
-            handle: unsafe { OwnedHandle::from_raw_handle(handle.cast()) },
-        })
     }
 
     /// This process's id, for the pipe name and for the checks at both ends.

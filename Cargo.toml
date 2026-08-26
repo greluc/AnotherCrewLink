@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/acl-types", "crates/acl-audio", "crates/acl-core", "crates/acl-game", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "crates/acl-ui", "experiments/overlay-probe", "experiments/apm-probe", "experiments/webrtc-probe"]
+members = ["crates/acl-types", "crates/acl-audio", "crates/acl-core", "crates/acl-game", "crates/acl-helper", "crates/acl-net", "crates/acl-i18n", "crates/acl-ipc", "crates/acl-ui", "experiments/overlay-probe", "experiments/apm-probe", "experiments/webrtc-probe"]
 
 # CI checks the server repository out into `server/` to run the conformance test against
 # it. Without this, cargo folds that crate into this workspace and refuses to build it —

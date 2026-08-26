@@ -24,7 +24,13 @@ windows-sys = { version = "0.61", features = [
 	# GetAsyncKeyState, for the push-to-talk poll.
 	"Win32_UI_Input_KeyboardAndMouse",
 	# SHQueryUserNotificationState, for exclusive-fullscreen detection.
+	# SHELLEXECUTEINFOW carries an HKEY, so its declaration is behind the registry
+	# feature even though the field is always null here.
+	"Win32_System_Registry",
 	"Win32_UI_Shell",
+	# ShellExecuteExW, which is the only way to ask for elevation: CreateProcess cannot,
+	# because elevation goes through the AppInfo service.
+	"Win32_UI_WindowsAndMessaging",
 	"Win32_UI_WindowsAndMessaging",
 ] }
 

@@ -49,6 +49,16 @@ impl<S> StreamTransport<S> {
         self.buffer.len()
     }
 
+    /// The stream itself, for a caller that has to ask it something the transport cannot.
+    ///
+    /// One caller: the helper peeks at the pipe to see whether the core has said anything,
+    /// because it cannot afford to block on a read. Borrowed rather than exposed as a
+    /// field, so the buffer stays this type's business.
+    #[must_use]
+    pub const fn stream(&self) -> &S {
+        &self.stream
+    }
+
     /// Gives the stream back.
     pub fn into_inner(self) -> S {
         self.stream
