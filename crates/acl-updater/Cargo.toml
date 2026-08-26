@@ -1,0 +1,34 @@
+[package]
+name = "acl-updater"
+description = "§4.9 item 3: the update manifest, its signature, and what may be done with it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "acl_updater"
+path = "src/lib.rs"
+
+[dependencies]
+# The verification, in a purpose-built crate rather than here. §4.9: "that is not writing
+# crypto". Zero dependencies of its own, which is most of why it is the one.
+minisign-verify = "0.2.5"
+# The digest the manifest names, and the one `latest.yml` already carries for the 1.x
+# fleet -- so both update paths mean the same thing by "the same file".
+sha2 = "0.10"
+# Version ordering, including the pre-release rule a rollback check depends on: `2.0.0-rc.1`
+# is older than `2.0.0`, and hand-rolled dotted-number comparison gets that wrong.
+semver = "1.0"
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Signing, so the tests verify a real signature made a moment ago rather than a recorded
+# one -- and so no private key is committed anywhere.
+minisign = "0.9.1"
+
+[lints]
+workspace = true

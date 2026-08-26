@@ -1778,6 +1778,38 @@ us.
    this project would have owned permanently. It went on 2026-08-25 with Linux, and
    one update path is the improvement.)
 
+   > **Half built 2026-08-26, and the fork is closed.** `self_update` is at
+   > `1.0.0-rc.6` — measured, not assumed — so "track its 1.0 line and pin exactly once
+   > stable" is not something that can be done today. The choice was settled by
+   > availability rather than preference: `minisign-verify` 0.2.5 (MIT, zero
+   > dependencies) and `self-replace` 1.5.0.
+   >
+   > `crates/acl-updater` holds the half that is all decision and no side effect: the
+   > manifest and its signature, and the policy that says whether to install what it
+   > offers. Neither downloads anything, runs anything, or touches a file, which is why
+   > both are tested rather than argued about. The downloading and the installing are the
+   > other half and are not written.
+   >
+   > **It fails closed, and it is closed.** `PUBLIC_KEYS` is empty: no release key
+   > exists, generating one is a ceremony the maintainer performs offline, and a
+   > placeholder here would be a key whose private half is in a scratch directory.
+   > Every manifest is refused until it is filled in, and `no_keys_means_no_updates` is
+   > the test that says so. An updater that accepted unsigned manifests while the keys
+   > were "not done yet" is the exact accident this design exists to prevent.
+   >
+   > **The manifest carries four fields** — version, URL, SHA-512, size — and nothing
+   > else, because a field nothing checks is a field somebody will believe. The digest is
+   > SHA-512 so that this path and `latest.yml` mean the same thing by "the same file".
+   > There is no unverified read: the only way to obtain a `Manifest` is to hand over a
+   > signature that a trusted key made over those exact bytes.
+   >
+   > The rollback rule, the bypass and the elevation refusal are `policy::decide`, and the
+   > order is not alphabetical: elevation is answered first, because telling a user their
+   > update is a downgrade when the real problem is that they started the client as
+   > administrator sends them to fix the wrong thing. `nothing_here_depends_on_the_clock`
+   > is a test with no clock in it — a date reaching that function would have to change
+   > its signature, which is a visible change rather than a line inside a body.
+
    **This is signed where the offsets bundle is not, and the difference is
    availability, not importance.** A release is a planned event: it happens when
    the maintainer decides it happens, and a key that has to be fetched from
@@ -1792,6 +1824,26 @@ us.
    run and write it forward. Test with real files from 1.x installs. The importer
    reads once and **never writes back** — during the beta a user runs both
    clients, and neither may silently rewrite the other's settings.
+
+   > **Built 2026-08-26.** 2.x's directory is `%APPDATA%\ACL`; 1.x keeps
+   > `%APPDATA%\AnotherCrewLink`. A sibling rather than a child, because 1.x's
+   > uninstaller removes its own tree and a nested 2.x would lose every setting to a
+   > tidy-up. No space in the name, because it is about to appear in an NSIS script.
+   >
+   > **Until this was built the two clients shared one file**, and this one was writing
+   > to it: `serde_json::Map` is a `BTreeMap`, so its first save alphabetised a document
+   > 1.x owns, and 1.x would have rewritten it back on its next save. Item 4 is what
+   > caught it.
+   >
+   > The import copies the *text*, byte for byte, rather than a parsed document — a key
+   > this build has never heard of survives, and the key order is 1.x's. It is refused
+   > only if the file is not a JSON object at all, because a copied half-written file
+   > would leave this client with a `config.json` it treats as "already here" forever.
+   >
+   > One consequence had to be followed: the running-1.x check probes for a Chromium
+   > message window whose title *is* the profile path, so it now asks about 1.x's
+   > directory. Probing with 2.x's would have found nothing however many 1.x clients were
+   > running — two readers on one game, silently.
 5. CI: the four existing workflows ported, actions still pinned to commit SHAs,
    `cargo-audit`/`cargo-deny` replacing `npm audit`, `cargo-about` producing the
    attribution file GPL distribution wants, CodeQL still covering the repository.

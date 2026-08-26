@@ -1,8 +1,13 @@
 //! Reading and writing the settings file 1.x already owns.
 //!
 //! [`crate::settings`] holds the schema and the defaults, cross-checked against
-//! `SettingsStore.tsx`. This is the file they live in: `%APPDATA%\AnotherCrewLink\config.json`,
-//! written by `electron-store`.
+//! `SettingsStore.tsx`. This is the file they live in: `config.json`, in the shape
+//! `electron-store` writes.
+//!
+//! 1.x's copy is at `%APPDATA%\AnotherCrewLink\config.json` and 2.x's at
+//! `%APPDATA%\ACL\config.json`. They are separate on purpose — see
+//! `acl_core::paths::import`, which brings the first forward into the second once and never
+//! writes back. This module is given a path; it does not choose one.
 //!
 //! §4.8 is explicit about what may change and what may not: "the settings schema is ported
 //! unchanged, including defaults, so that an existing `config.json` keeps working". §4.10
