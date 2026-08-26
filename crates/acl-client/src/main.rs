@@ -382,6 +382,11 @@ struct Client {
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
     link: net::Link,
+    /// The lobby the session has been asked to join, so the ask happens on the edges.
+    ///
+    /// A join sent every frame is a join the server rate-limits, and `within_limit` in the
+    /// server's `on_join` is not a suggestion.
+    joined: Option<String>,
     /// Which mod is installed beside the game, and the process it was found for.
     ///
     /// Remembered per process id, because detecting walks a directory: doing that on every
@@ -413,6 +418,7 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
             link: net::Link::start(),
+            joined: None,
             mods: None,
             page: Screen::Main,
             catalogue,
@@ -721,6 +727,44 @@ impl Client {
         acl_game::mods::Mod::None
     }
 
+    /// Joins and leaves the lobby the game is in.
+    ///
+    /// On the edges rather than every frame: a join sent five times a second is a join the
+    /// server rate-limits, and `on_join`'s `within_limit` is not a suggestion.
+    ///
+    /// The code is what the reader read out of the game, so this follows the game rather
+    /// than the other way round — which is why there is no "join" button anywhere. A player
+    /// who is in a lobby is in it.
+    fn follow_the_lobby(&mut self) {
+        let state = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest().cloned());
+        let wanted = state.as_ref().and_then(|state| {
+            // An empty code is the menu, and `MENU` is what the reader reports when it has
+            // one and the game is not in a lobby.
+            let code = state.lobby_code.trim();
+            (!code.is_empty() && code != "MENU").then(|| code.to_owned())
+        });
+
+        if wanted == self.joined {
+            return;
+        }
+        match &wanted {
+            Some(code) => {
+                let me = state
+                    .as_ref()
+                    .and_then(|state| state.players.iter().find(|player| player.is_local));
+                let player_id = me.map_or(-1, |player| i64::from(player.id));
+                let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
+                let is_host = state.as_ref().is_some_and(|state| state.is_host);
+                self.link.join(code, player_id, client_id, is_host);
+            }
+            None => self.link.leave(),
+        }
+        self.joined = wanted;
+    }
+
     /// Draws the public lobby browser.
     ///
     /// Opening the page is what connects. A session held open for a window nobody is
@@ -973,6 +1017,7 @@ impl eframe::App for Client {
         }
         self.hats.pump();
         self.link.pump();
+        self.follow_the_lobby();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
         // debounces instead, because it is reacting to move and resize events; this is
@@ -1061,6 +1106,13 @@ impl eframe::App for Client {
             ui.horizontal(|ui| {
                 ui.label("Game reader:");
                 ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
+                // How many peers are actually reachable, which is a different question from
+                // how many players the game reports. A lobby of six with one connection is
+                // the shape of a problem, and it is invisible without a number.
+                ui.label(format!(
+                    "· {} peer(s) connected",
+                    self.link.connected_peers()
+                ));
             });
             if let Some(trouble) = reader.trouble() {
                 ui.colored_label(egui::Color32::from_rgb(230, 140, 90), trouble);
@@ -1097,10 +1149,15 @@ impl eframe::App for Client {
             // anything about audio yet, so the voice layer is answered with the truth as
             // it stands: nobody is talking, nobody has been heard to die, and every player
             // the game reports is treated as reachable but silent.
+            // `connected` is the one this can answer now: the mesh reports which peers
+            // have a connection that is up, which is the difference `views::main` draws
+            // between a player who has arrived and one who can be heard. The rest still
+            // waits on audio moving.
+            let link = &self.link;
             let voice = Voice {
                 talking: &|_| false,
                 dead: &|_| false,
-                connected: &|_| true,
+                connected: &|client_id| link.hears(client_id),
                 audible: &|_| false,
                 local_talking: false,
                 local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),

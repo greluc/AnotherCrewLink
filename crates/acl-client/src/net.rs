@@ -18,8 +18,15 @@
 //! for one: `the_link_sees_a_real_lobby` found this by never seeing a lobby, and the same
 //! mistake had already cost the conformance test a join.
 //!
+//! **The peer mesh lives on this thread too**, and it has to. `acl_core::peers::PeerSet`
+//! is async, its connections must be driven by a runtime, and every signal it produces has
+//! to go back out through the same socket the session owns. Putting it anywhere else would
+//! mean two runtimes and a channel between them for messages that are already here.
+//!
 //! Nothing here decides anything. It moves messages between a runtime and a window, and
-//! every question about what they mean is answered in `acl-core`.
+//! every question about what they mean is answered in `acl-core`: who offers to whom is
+//! `session::Arrival`, what to do with an arriving signal is `acl_net::signal_route`, and
+//! this obeys both.
 
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
@@ -36,6 +43,19 @@ pub(crate) enum Command {
     WatchLobbies(bool),
     /// Ask for one lobby's code.
     JoinLobby(u64),
+    /// Join a lobby, which is what starts the mesh.
+    Join {
+        /// The lobby code.
+        code: String,
+        /// This player's in-game id.
+        player_id: i64,
+        /// This player's client id.
+        client_id: i64,
+        /// Whether this player is the game's host.
+        is_host: bool,
+    },
+    /// Leave it, closing every connection.
+    Leave,
 }
 
 /// What the session tells the window.
@@ -48,6 +68,13 @@ pub(crate) enum Report {
     /// Boxed because [`Event`] is large and this is a channel of them; an unboxed variant
     /// makes every message the size of the largest one.
     Event(Box<Event>),
+    /// A peer connection changed state.
+    Peer {
+        /// Whose.
+        socket_id: String,
+        /// Whether it is connected right now.
+        connected: bool,
+    },
 }
 
 /// Where the connection is.
@@ -80,6 +107,18 @@ pub(crate) struct Link {
     lobbies: std::collections::BTreeMap<u64, PublicLobby>,
     /// The last answer to a join: a code, or why not.
     answer: Option<String>,
+    /// Which socket belongs to which in-game client id.
+    ///
+    /// The window knows players by their client id and the mesh knows them by socket, and
+    /// the server is the only thing that sees both. Kept here because it is the only place
+    /// both halves pass through.
+    sockets: std::collections::BTreeMap<i64, String>,
+    /// Which peers have a connection that is up.
+    ///
+    /// The window shows this as the difference between a player who has arrived and one who
+    /// can be heard — `roster::Link::Silent` against `Connected`, which is a distinction
+    /// `views::main` already draws and had nothing to fill in.
+    connected: std::collections::BTreeSet<String>,
 }
 
 impl Link {
@@ -100,6 +139,8 @@ impl Link {
             state: State::Idle,
             lobbies: std::collections::BTreeMap::new(),
             answer: None,
+            connected: std::collections::BTreeSet::new(),
+            sockets: std::collections::BTreeMap::new(),
         }
     }
 
@@ -109,6 +150,9 @@ impl Link {
             match report {
                 Report::State(state) => {
                     if !matches!(state, State::Connected(_)) {
+                        // Every peer went with the socket they were signalled over.
+                        self.connected.clear();
+                        self.sockets.clear();
                         // A connection that has gone takes its lobbies with it. Leaving
                         // them on screen would offer a player a join that cannot be sent.
                         self.lobbies.clear();
@@ -116,6 +160,16 @@ impl Link {
                     self.state = state;
                 }
                 Report::Event(event) => self.absorb(*event),
+                Report::Peer {
+                    socket_id,
+                    connected,
+                } => {
+                    if connected {
+                        self.connected.insert(socket_id);
+                    } else {
+                        self.connected.remove(&socket_id);
+                    }
+                }
             }
         }
     }
@@ -133,6 +187,24 @@ impl Link {
             }
             Event::LobbyRemoved(id) => {
                 self.lobbies.remove(&id);
+            }
+            Event::PeerJoined {
+                socket_id,
+                client: Some(client),
+                ..
+            } => {
+                self.sockets.insert(client.client_id, socket_id);
+            }
+            // Not a join: the Electron client treats `setClient` for a known peer as an
+            // update, and so does `acl-core`. What changes is which player is on that
+            // socket, which is exactly what this map holds.
+            Event::PeerChanged { socket_id, client } => {
+                self.sockets.retain(|_, socket| *socket != socket_id);
+                self.sockets.insert(client.client_id, socket_id);
+            }
+            Event::PeerLeft { socket_id } => {
+                self.sockets.retain(|_, socket| *socket != socket_id);
+                self.connected.remove(&socket_id);
             }
             Event::LobbyCode { code, server } => {
                 self.answer = Some(format!("{code} — {server}"));
@@ -158,6 +230,40 @@ impl Link {
     /// The last answer to a join, if there has been one.
     pub(crate) fn answer(&self) -> Option<&str> {
         self.answer.as_deref()
+    }
+
+    /// Whether a player's connection is up.
+    ///
+    /// By client id, because that is what the window has: `roster::Voice::connected` is
+    /// asked about a player, and the socket a player is on is something only the server
+    /// ever said.
+    #[must_use]
+    pub(crate) fn hears(&self, client_id: i64) -> bool {
+        self.sockets
+            .get(&client_id)
+            .is_some_and(|socket| self.connected.contains(socket))
+    }
+
+    /// How many connections are up.
+    #[must_use]
+    pub(crate) fn connected_peers(&self) -> usize {
+        self.connected.len()
+    }
+
+    /// Joins a lobby, which is what starts the mesh.
+    pub(crate) fn join(&mut self, code: &str, player_id: i64, client_id: i64, is_host: bool) {
+        self.send(Command::Join {
+            code: code.to_owned(),
+            player_id,
+            client_id,
+            is_host,
+        });
+    }
+
+    /// Leaves it.
+    pub(crate) fn leave(&mut self) {
+        self.connected.clear();
+        self.send(Command::Leave);
     }
 
     /// Connects, or reconnects to a different server.
@@ -206,6 +312,10 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
     };
 
     let mut session: Option<Session> = None;
+    // The mesh. Built when the server issues a peer configuration, because that is what
+    // says which relays to use -- a mesh built before it would be one built against
+    // defaults the server was about to replace.
+    let mut mesh: Option<acl_core::peers::PeerSet> = None;
     // Whether the handshake has completed. See the module documentation: a session that is
     // connected but not live drops everything emitted to it.
     let mut live = false;
@@ -272,6 +382,9 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
                 }
                 Ok(Some(events)) => {
                     for event in events {
+                        if let Some(live) = session.as_mut() {
+                            runtime.block_on(follow(&event, &mut mesh, live, answers));
+                        }
                         if let Event::Connected(id) = &event {
                             live = true;
                             if answers
@@ -297,7 +410,117 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
                 // Nothing happened in fifty milliseconds, which is the ordinary case.
                 Err(_) => {}
             }
+            // Whatever the connections produced in the meantime. Every iteration, because
+            // candidates are gathered after the offer and there may be no event left to
+            // hang the sending off.
+            if let Some(current) = session.as_mut() {
+                runtime.block_on(drain(&mut mesh, current, answers));
+            }
         }
+    }
+}
+
+/// Turns one session event into whatever the mesh should do about it.
+///
+/// Every decision here belongs to `acl-core` and none of it is made here. Who offers to
+/// whom is [`acl_core::session::Arrival`] -- offering to somebody who was already in the
+/// lobby races the offer they are making, which is the glare the arrival distinction exists
+/// to prevent. What to do with an arriving signal is `acl_net::signal_route`, which
+/// `PeerSet::on_signal` consults.
+async fn follow(
+    event: &Event,
+    mesh: &mut Option<acl_core::peers::PeerSet>,
+    session: &mut Session,
+    answers: &Sender<Report>,
+) {
+    use acl_core::session::Arrival;
+
+    match event {
+        // The relays, as the server issued them for this session. The mesh is built here
+        // rather than at connect, because a mesh built before this is one built against
+        // defaults the server was about to replace.
+        Event::PeerConfig(config) => {
+            // `force_relay_only` is the server's request rather than an instruction, and
+            // `RtcConfig::new` is where that distinction is applied -- a configuration that
+            // forces relay mode with no relay in it has already been refused by
+            // `peer_config`, because gathering nothing fails harder than the direct attempt
+            // it replaced.
+            let rtc = acl_net::ice::RtcConfig::new(&config.ice_servers, config.force_relay_only);
+            match mesh.as_mut() {
+                Some(mesh) => mesh.reconfigure(rtc),
+                None => *mesh = Some(acl_core::peers::PeerSet::new(rtc)),
+            }
+        }
+        Event::PeerJoined {
+            socket_id, arrival, ..
+        } => {
+            let Some(mesh) = mesh.as_mut() else {
+                return;
+            };
+            // Only to a newcomer. The other side offers when we are the newcomer, and both
+            // offering is the glare.
+            if *arrival == Arrival::Newcomer
+                && let Ok(outbound) = mesh.offer(socket_id).await
+            {
+                let _ = session
+                    .signal(&outbound.to, outbound.payload.to_value())
+                    .await;
+            }
+        }
+        Event::PeerLeft { socket_id } => {
+            if let Some(mesh) = mesh.as_mut() {
+                mesh.close(socket_id).await;
+            }
+            let _ = answers.send(Report::Peer {
+                socket_id: socket_id.clone(),
+                connected: false,
+            });
+        }
+        Event::Signal { from, data } => {
+            let Some(mesh) = mesh.as_mut() else {
+                return;
+            };
+            if let Ok(outbound) = mesh.on_signal(from, data).await {
+                for out in outbound {
+                    let _ = session.signal(&out.to, out.payload.to_value()).await;
+                }
+            }
+        }
+        Event::Closed(_) | Event::Refused(_) => {
+            if let Some(mesh) = mesh.as_mut() {
+                mesh.close_all().await;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sends on whatever the connections have produced, and reports what has changed.
+///
+/// **Called every time round the loop, not only when a session event arrives**, and the
+/// difference is the whole connection. ICE candidates are gathered asynchronously *after*
+/// the offer and answer are exchanged, so by the time they exist there may be nothing left
+/// to react to -- draining only on events means the candidates sit in the queue, neither
+/// side ever learns how to reach the other, and both connections stay `Connecting` for
+/// ever. `two_links_reach_each_other` found exactly that.
+async fn drain(
+    mesh: &mut Option<acl_core::peers::PeerSet>,
+    session: &mut Session,
+    answers: &Sender<Report>,
+) {
+    let Some(mesh) = mesh.as_mut() else {
+        return;
+    };
+    let (outbound, peer_events) = mesh.drain();
+    for out in outbound {
+        let _ = session.signal(&out.to, out.payload.to_value()).await;
+    }
+    for peer_event in peer_events {
+        let acl_core::peers::PeerEvent::StateChanged { peer, state } = peer_event;
+        let _ = answers.send(Report::Peer {
+            socket_id: peer,
+            connected: state == webrtc::peer_connection::RTCPeerConnectionState::Connected,
+        });
     }
 }
 
@@ -332,6 +555,21 @@ fn obey(
         Command::JoinLobby(id) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.join_lobby(id));
+            }
+        }
+        Command::Join {
+            code,
+            player_id,
+            client_id,
+            is_host,
+        } => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.join(&code, player_id, client_id, is_host));
+            }
+        }
+        Command::Leave => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.leave());
             }
         }
     }
@@ -681,5 +919,78 @@ mod tests {
             connected,
             "connect never succeeded on a current-thread runtime"
         );
+    }
+
+    /// Two links, one lobby, a real server -- and a peer connection between them.
+    ///
+    /// This is the test that says the mesh is wired rather than merely present. Everything
+    /// it exercises is a seam: the session's `Arrival` deciding who offers, `signal_route`
+    /// deciding what to do with what arrives, the candidates draining back out through the
+    /// socket the session owns, and the state change arriving at the window as a `Peer`
+    /// report.
+    ///
+    /// ```text
+    /// ACL_SERVER_BIN=../ACL-Server/target/debug/acl-server \\
+    ///   cargo test -p acl-client -- --ignored two_links_reach_each_other
+    /// ```
+    ///
+    /// Loopback, so it proves signalling and connection establishment and says nothing
+    /// about NAT or relays. `acl-core`'s own `peers_loopback` covers the connection in
+    /// isolation; this covers it being driven by the session.
+    #[test]
+    #[ignore = "needs a server: set ACL_SERVER_BIN"]
+    fn two_links_reach_each_other() {
+        const PORT: u16 = 19_762;
+        let Some(_server) = serving(PORT) else {
+            eprintln!("skipping: set ACL_SERVER_BIN to the server binary");
+            return;
+        };
+        let base = format!("http://127.0.0.1:{PORT}");
+
+        let mut first = Link::start();
+        let mut second = Link::start();
+        first.connect(&base);
+        second.connect(&base);
+
+        // Both connected before either joins. A join emitted into a session that has not
+        // finished its handshake is dropped -- the bug `the_link_sees_a_real_lobby` found.
+        let both_up = wait(&mut [&mut first, &mut second], |links| {
+            links
+                .iter()
+                .all(|link| matches!(link.state(), State::Connected(_)))
+        });
+        assert!(both_up, "one of the sessions never connected");
+
+        first.join("MESHED", 1, 11, true);
+        second.join("MESHED", 2, 22, false);
+
+        // The second is the newcomer, so the first offers to it. Either side reporting the
+        // other as connected is the connection.
+        let met = wait(&mut [&mut first, &mut second], |links| {
+            links[0].hears(22) || links[1].hears(11)
+        });
+        assert!(
+            met,
+            "no peer connection: first sees {} peer(s), second sees {}",
+            first.connected_peers(),
+            second.connected_peers()
+        );
+    }
+
+    /// Drives some links until something is true of them, or long enough to say it is not.
+    ///
+    /// Both have to be pumped throughout: each holds a session whose heartbeat is answered
+    /// from inside `next`, and a session left alone is a session the server drops.
+    fn wait(links: &mut [&mut Link], mut wanted: impl FnMut(&[&mut Link]) -> bool) -> bool {
+        for _ in 0..600 {
+            for link in links.iter_mut() {
+                link.pump();
+            }
+            if wanted(links) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        false
     }
 }
