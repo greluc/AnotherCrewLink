@@ -1513,6 +1513,37 @@ against the same game.
 
 ## 4.8 Phase 6 — GUI (11.5 weeks)
 
+> **Item 1's spike is built and measured, 2026-08-26.** `experiments/gui-spike`, held to
+> the bar this section sets rather than to three text controls: a lobby-browser table of
+> sixty-four rows with sortable columns, and twelve avatars composited from four layers
+> each, animating, every frame. The table's default order goes through
+> `acl_ui::lobby_list::sort` — the shipped rule, on the shipped type — so the spike
+> exercises the model rather than a copy of it.
+>
+> ```text
+> RESULT frames=590 rows=64 avatars=12
+>        work_median_ms=0.25 work_p95_ms=0.28 work_worst_ms=0.52
+>        interval_median_ms=16.67 interval_p95_ms=17.87 interval_worst_ms=44.42
+> ```
+>
+> **A quarter of a millisecond to build a frame**, against a 16.7 ms budget: about 1.5% of
+> it, with the table and the avatars both at more than the sizes the real screens need.
+> On this evidence the framework question is not close, and the decision point this
+> section puts at the end of the main-view milestone has nothing to overturn it with
+> unless something later is far more expensive than these two.
+>
+> **Two numbers rather than one, and the first version had only the wrong one.** It
+> reported the frame-to-frame interval — 16.66 ms — which is the display's refresh rate
+> and not a cost. Read on its own it says egui takes 16 ms a frame; what it actually
+> measures is vsync. The interval is still reported, because it is what says whether
+> anything was dropped, but the work figure is the one with headroom in it.
+>
+> Two caveats, recorded rather than buried. This is the `glow` rung, chosen so the number
+> is comparable with `overlay-probe`'s; the wgpu rung of the fallback chain below is a
+> separate measurement. And the worst interval is a hitch of 44 ms against a worst *work*
+> of 0.52 ms, so whatever caused it was not the drawing — on a desktop with other things
+> running, that is the expected shape and not a finding.
+
 **Why 11.5 and not 10:** net of dropping the localisation conversion (−1.0), the
 phase gains a framework spike, the GPU fallback chain and the performance
 baseline the footprint claims are currently asserted without.

@@ -378,6 +378,16 @@ mod tests {
         // `BlockedByElevation`, and that is the right answer rather than a failure. What
         // must not happen is `NotFound`, which is the silent one.
         eprintln!("attachment to Among Us: {attachment:?}");
+        let bounds = super::content_bounds(game).expect("the game window has bounds");
+        eprintln!("content bounds: {bounds:?}");
+        assert!(
+            bounds.is_drawable(),
+            "the game reported {bounds:?}, which an overlay cannot be sized to"
+        );
+        // The other half of the overlay's question, reported together because the two are
+        // only meaningful side by side: a window the overlay may follow, on a display it
+        // would actually be composited on.
+        eprintln!("display state: {:?}", crate::fullscreen::display_state());
     }
 
     /// This process's own window, for the positive half.
