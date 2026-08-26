@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[lib]
+name = "acl_helper"
+path = "src/lib.rs"
+
 [[bin]]
 name = "acl-helper"
 path = "src/main.rs"
@@ -29,11 +33,20 @@ thiserror.workspace = true
 # elevated process must not be left waiting for a client that is never coming.
 windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
+	"Win32_System_LibraryLoader",
+	"Win32_UI_WindowsAndMessaging",
 	"Win32_System_Threading",
 ] }
 
 [dev-dependencies]
+# `tests/overlay_window.rs` asks the operating system what the window's styles and
+# rectangle actually are, rather than trusting that it was asked for the right ones.
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_UI_WindowsAndMessaging",
+] }
 # For `launch::arguments`, so the test builds the command line the same way the core does
 # rather than spelling it out a third time.
 acl-core = { path = "../acl-core", version = "0.0.0" }

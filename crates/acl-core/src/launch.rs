@@ -83,6 +83,7 @@ mod platform {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle};
     use std::path::Path;
     use std::ptr;
+    use std::time::Duration;
     use windows_sys::Win32::Foundation::{ERROR_CANCELLED, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{GetProcessId, WaitForSingleObject};
     use windows_sys::Win32::UI::Shell::{
@@ -125,6 +126,23 @@ mod platform {
             // SAFETY: a valid process handle; zero means "do not wait, just report".
             let waited = unsafe { WaitForSingleObject(self.handle.as_raw_handle().cast(), 0) };
             waited == WAIT_TIMEOUT
+        }
+
+        /// Waits for it to exit, for a bounded time.
+        ///
+        /// Returns whether it did. **This matters more than it looks.** The helper's pipe
+        /// is created with `FILE_FLAG_FIRST_PIPE_INSTANCE` and named after the core's
+        /// process id, so a replacement started while its predecessor is still shutting
+        /// down cannot create the pipe at all -- and the core then waits thirty seconds
+        /// for a name that will never appear. That is the retry path after
+        /// `HelperState::Lost`, not a corner.
+        #[must_use]
+        pub fn wait(&self, patience: Duration) -> bool {
+            let milliseconds = u32::try_from(patience.as_millis()).unwrap_or(u32::MAX);
+            // SAFETY: a valid process handle and a documented timeout.
+            let waited =
+                unsafe { WaitForSingleObject(self.handle.as_raw_handle().cast(), milliseconds) };
+            waited != WAIT_TIMEOUT
         }
     }
 

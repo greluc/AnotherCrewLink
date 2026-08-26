@@ -246,6 +246,87 @@ fn the_link_reads_a_real_game() {
     link.stop();
 }
 
+/// The overlay, driven from the core through the pipe.
+///
+/// The overlay's own tests build one in-process and check what the operating system says
+/// about it. This checks the other half: that the commands survive the crossing and reach
+/// the window in a *different* process, which is where the interesting failure lives —
+/// four integers that arrive transposed put the overlay off-screen, and nothing in either
+/// process would notice.
+#[test]
+fn the_core_can_place_and_show_the_helper_overlay() {
+    let _serially = serially();
+
+    let mut link = acl_core::link::Link::new();
+    link.start(
+        std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+        acl_core::launch::Elevation::AsIs,
+        OFFSETS.as_bytes(),
+    )
+    .expect("the helper starts and answers");
+
+    let (x, y, width, height) = (140, 90, 300, 180);
+    link.place_overlay(x, y, width, height);
+    // A sprite rather than a whole picture, and not for tidiness: `acl_ipc::MAX_FRAME` is
+    // 64 KiB, so a 300x180 frame at four bytes a pixel is already three times the limit
+    // and a full-screen one is two hundred times it. The overlay composes.
+    let sprite: i32 = 32;
+    link.clear_overlay();
+    link.draw_sprite(
+        4,
+        4,
+        sprite,
+        sprite,
+        vec![255u8; usize::try_from(sprite * sprite * 4).unwrap_or_default()],
+    );
+    link.present_overlay();
+    link.show_overlay(true);
+
+    let placed = wait_for_overlay(|rect| {
+        rect.left == x
+            && rect.top == y
+            && rect.right - rect.left == width
+            && rect.bottom - rect.top == height
+    });
+    assert!(
+        placed,
+        "the overlay never reached {x},{y} {width}x{height} in the helper process"
+    );
+
+    link.stop();
+}
+
+/// Polls the helper's overlay window until its rectangle matches.
+///
+/// Found by title across the process boundary, which is the only handle this side has:
+/// the window belongs to the helper.
+fn wait_for_overlay(mut matches: impl FnMut(windows_sys::Win32::Foundation::RECT) -> bool) -> bool {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
+
+    let mut title: Vec<u16> = acl_helper::overlay::WINDOW_TITLE.encode_utf16().collect();
+    title.push(0);
+    for _ in 0..200 {
+        // SAFETY: a documented call with a null class and a null-terminated title.
+        let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+        if !window.is_null() {
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            // SAFETY: a valid window handle and a live local for the answer.
+            unsafe { GetWindowRect(window, &raw mut rect) };
+            if matches(rect) {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
 /// A bundle that parses, which is all this needs: the helper rejects one that does not and
 /// stops, and a test that fed it rubbish would be testing that path instead.
 ///

@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use acl_game::offsets::Offsets;
 use acl_game::reader::{ReadContext, read_state};
 use acl_game::resolve::resolve_offsets;
+use acl_helper::overlay::{Frame, Placement, Sprite};
 use acl_ipc::stream::StreamTransport;
 use acl_ipc::{CoreMessage, HelperMessage, PROTOCOL_VERSION, Transport};
 
@@ -216,6 +217,11 @@ fn run() -> Result<(), Fatal> {
 /// afford because it is already awake every [`SAMPLE_INTERVAL`].
 #[cfg(windows)]
 fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Result<(), Fatal> {
+    // Started once, kept for the life of the helper, and hidden until the core asks. A
+    // machine with no interactive desktop -- which is not a case this client runs in, but
+    // is one a test harness can be -- gets `None` and every overlay command is ignored
+    // rather than being a reason to stop reading the game.
+    let overlay = acl_helper::overlay::start().ok();
     let mut offsets: Option<Offsets> = None;
     let mut sampler: Option<Sampler> = None;
     let mut reading = false;
@@ -264,12 +270,54 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
                     }
                 }
                 CoreMessage::StartReading => reading = true,
-                CoreMessage::StopReading => {
-                    reading = false;
-                    // Released rather than kept idle: the handle is debug-level access to
-                    // another process, and holding one nothing is using is the standing
-                    // privilege this whole split exists to avoid.
-                    sampler = None;
+                CoreMessage::SetOverlayVisible(wanted) => {
+                    if let Some(overlay) = overlay.as_ref() {
+                        overlay.show(wanted);
+                    }
+                }
+                CoreMessage::PlaceOverlay {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    if let Some(overlay) = overlay.as_ref() {
+                        overlay.place(Placement {
+                            x,
+                            y,
+                            width,
+                            height,
+                        });
+                    }
+                }
+                CoreMessage::ClearOverlay => {
+                    if let Some(overlay) = overlay.as_ref() {
+                        overlay.clear();
+                    }
+                }
+                CoreMessage::DrawSprite {
+                    x,
+                    y,
+                    width,
+                    height,
+                    pixels,
+                } => {
+                    if let Some(overlay) = overlay.as_ref() {
+                        overlay.blit(Sprite {
+                            x,
+                            y,
+                            frame: Frame {
+                                width,
+                                height,
+                                pixels,
+                            },
+                        });
+                    }
+                }
+                CoreMessage::PresentOverlay => {
+                    if let Some(overlay) = overlay.as_ref() {
+                        overlay.present();
+                    }
                 }
                 CoreMessage::Shutdown => {
                     stop(transport, "the core asked it to");
