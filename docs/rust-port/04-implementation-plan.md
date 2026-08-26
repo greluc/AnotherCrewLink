@@ -1340,17 +1340,31 @@ will otherwise reintroduce them:
 > | Push-to-talk poll | `acl-core::keys` — `GetAsyncKeyState`'s high bit, turning a level into edges |
 > | Exclusive-fullscreen detection | `acl-core::fullscreen` — the bit `overlay::availability` always took and nobody produced |
 > | The pipe between the two halves | `acl-ipc::pipe` — the helper is the server, because a pipe server can impersonate its client |
+> | The elevated process | `acl-helper` — reads the game, sends frames, and exits when the core does |
+> | Starting it, elevated or not | `acl-core::launch` — unelevated first, UAC second, and a declined prompt is an ordinary state |
+> | The UIPI access check | `acl-core::game_window` — ported from `windows.c`, quirk included: a hung window refuses the probe with the same error an integrity mismatch gives |
 >
-> **Not built, and the larger half.** The overlay window with its UIPI access check; the
-> elevation path, meaning the on-demand `runas` launch and the "the user clicked No" state
-> that `acl-core::helper` already models; autostart; and `acl-helper` itself — there is a
-> boundary and a transport for it, and no process on the other end.
+> **Not built.** The overlay window itself — the layered, click-through, always-on-top
+> window that follows the game, and the pre-rasterised sprites it receives instead of
+> decoding images. `experiments/overlay-probe` established that eframe can produce such a
+> window on Windows (`layered=true transparent=true topmost=true`, `exstyle=0x000c0138`),
+> so what is left is the following and the drawing, and the second of those wants P6's
+> renderer decision rather than preceding it.
 >
-> One thing the four have in common is worth recording. Every one of them was decided by a
-> measurement on a real machine, and two of those measurements contradicted what this
-> document said: the single-instance name was not the mutex named here, and the display
-> state under a running game is `QUNS_BUSY` rather than the D3D-exclusive value the
-> overlay logic keys on. The platform layer is where a port stops being a translation.
+> **And one item struck rather than deferred.** This section lists autostart. The Electron
+> client has none — no `setLoginItemSettings`, no run key, nothing in `ISettings` — so there
+> is nothing to port and no shipped behaviour to match. It is a new feature, and it should
+> be decided as one rather than arrive as a line in a platform checklist.
+>
+> One thing the built items have in common is worth recording. Every one of them was
+> decided by a measurement on a real machine, and four of those measurements contradicted
+> something believed beforehand: the single-instance name was not the mutex this document
+> named; the display state under a running game is `QUNS_BUSY` rather than the
+> D3D-exclusive value the overlay logic keys on; `WaitNamedPipeW` does not wait for a pipe
+> that does not exist yet, which is the only case it was called for; and a duplicated pipe
+> handle deadlocks, because it refers to the same synchronous file object. Three of the
+> four looked correct and passed a first message before failing. The platform layer is
+> where a port stops being a translation.
 
 **Why 6 and not 3:** the client becomes two processes, and the overlay moves into
 the elevated one.

@@ -35,6 +35,10 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# For `the_game_has_a_window_this_process_may_follow`, which is ignored by default: it
+# needs the game running, and finding its process id is `acl-game`'s job rather than a
+# second process enumeration here.
+acl-game = { path = "../acl-game", version = "0.0.0", default-features = false }
 # `product_name_still_matches_package_json` reads the Electron manifest, because the
 # directory 1.x writes into is `productName` and a rename there is silent here.
 serde_json.workspace = true

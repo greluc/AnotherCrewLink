@@ -10,6 +10,7 @@
 //! answers a dialog with No and then cannot speak.
 
 pub mod fullscreen;
+pub mod game_window;
 pub mod helper;
 pub mod keys;
 pub mod launch;
