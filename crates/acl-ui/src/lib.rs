@@ -10,6 +10,7 @@
 //! `LobbyBrowser.tsx` and was not a consistent ordering for the whole life of the
 //! feature, because nothing could reach it to check.
 
+pub mod config;
 pub mod cosmetics;
 pub mod lobby_list;
 pub mod renderer;
