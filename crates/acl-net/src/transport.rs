@@ -14,6 +14,14 @@
 //! user behind a TLS-inspecting corporate proxy is "won't connect at all". Both are P4's
 //! to close, and until then this is honest about being incomplete rather than appearing
 //! to work everywhere.
+//!
+//! **Measured against a deployed server on 2026-08-26**, and the incompleteness is
+//! narrower than "does not work": webpki's roots accept an ordinary public certificate, so
+//! `acl-core`'s `against_a_deployed_server` completes a `wss://` handshake with the
+//! production server and is issued a relay credential. What is still open is exactly the
+//! case named above — a machine whose trust anchor lives in the operating system's store
+//! and not in webpki's, which is what TLS inspection and a private certificate authority
+//! both look like. The proxy half is untouched by that measurement.
 
 use std::time::{Duration, Instant};
 
