@@ -34,10 +34,12 @@ dependencies = [
  "acl-core",
  "acl-game",
  "acl-i18n",
+ "acl-types",
  "acl-ui",
  "eframe",
  "egui",
  "serde_json",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 

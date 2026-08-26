@@ -147,6 +147,16 @@ impl Collection {
         self.sets.values().map(|set| set.hats.len()).sum()
     }
 
+    /// Every id in the collection.
+    ///
+    /// For anything that has to sweep it -- a cache warm-up, or a test that checks every
+    /// name the collection can produce is one the caller will accept.
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.sets
+            .values()
+            .flat_map(|set| set.hats.keys().map(String::as_str))
+    }
+
     /// Finds one cosmetic by the id the game reports.
     ///
     /// The base collection first, then the mod's — see the module documentation for why
@@ -195,6 +205,13 @@ impl Found<'_> {
     ///
     /// The base is joined verbatim: [`acl_types::cosmetics::HAT_COLLECTION_URL`] already
     /// ends in a slash, and re-deriving that here is a second place for it to be wrong.
+    ///
+    /// **The file name is percent-encoded**, and that is not tidiness. Eighteen of the
+    /// 1,095 files in the shipped collection have a space in the name, and one of those
+    /// eighteen also has an apostrophe -- `pk01_Captain's Hat.png`. A raw space is not a
+    /// URL at all: curl refuses it as malformed before a request goes out, and so does
+    /// every other client. Measured against the CDN on 2026-08-26: the raw form does not
+    /// resolve and the encoded form returns 200.
     #[must_use]
     pub fn image_url(&self, base: &str, back: bool) -> Option<String> {
         let file = if back {
@@ -202,8 +219,42 @@ impl Found<'_> {
         } else {
             self.hat.image.as_ref()
         }?;
-        Some(format!("{base}{}/{file}", self.set))
+        Some(format!(
+            "{base}{}/{}",
+            encode_segment(self.set),
+            encode_segment(file)
+        ))
     }
+}
+
+/// Percent-encodes one path segment.
+///
+/// The unreserved set of RFC 3986 — letters, digits, and `-._~` — passes through and
+/// everything else becomes `%XX`. Narrow on purpose: the collection uses spaces and one
+/// apostrophe today, and a rule that lists what is *allowed* needs no revisiting when it
+/// starts using something else.
+///
+/// A slash is encoded too, so a name that contains one cannot become a path.
+fn encode_segment(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            // `char::from_digit` rather than a lookup table, which cannot be indexed
+            // without the compiler being told the index is in range -- and it always is,
+            // because a nibble is four bits.
+            let nibble = |value: u8| {
+                char::from_digit(u32::from(value), 16)
+                    .unwrap_or('0')
+                    .to_ascii_uppercase()
+            };
+            encoded.push('%');
+            encoded.push(nibble(byte >> 4));
+            encoded.push(nibble(byte & 0x0F));
+        }
+    }
+    encoded
 }
 
 /// Reads one entry.
@@ -451,6 +502,58 @@ mod tests {
         assert_eq!(kinds, ["hats", "skins", "visors"]);
         assert!(collection.find("skin_D2Titan", BASE).is_some());
         assert!(collection.find("visor_pk01_Security1Visor", BASE).is_some());
+    }
+
+    /// Eighteen of the shipped names cannot be used raw: they contain a space, and one of
+    /// them also contains an apostrophe. A raw space is not a URL — curl refuses it as
+    /// malformed before a request goes out — so without encoding those eighteen cosmetics
+    /// simply never load, silently, for everybody.
+    #[test]
+    fn the_names_with_spaces_in_them_are_encoded() {
+        let collection = shipped();
+        let mut encoded = 0;
+        for id in collection.ids() {
+            let Some(found) = collection.find(id, BASE) else {
+                continue;
+            };
+            for back in [false, true] {
+                let Some(url) = found.image_url("https://example.invalid/", back) else {
+                    continue;
+                };
+                assert!(!url.contains(' '), "a raw space in {url}");
+                assert!(!url.contains('\''), "a raw apostrophe in {url}");
+                if url.contains("%20") || url.contains("%27") {
+                    encoded += 1;
+                }
+            }
+        }
+        assert_eq!(encoded, 18, "the shipped count changed");
+    }
+
+    /// And the encoding is the one the CDN actually serves. Checked against it on
+    /// 2026-08-26: `pk01_Captain%27s%20Hat.png` returns 200 and the raw form does not
+    /// resolve at all.
+    #[test]
+    fn the_encoding_is_the_one_the_cdn_serves() {
+        let collection = shipped();
+        let found = collection
+            .find("hat_pk01_Captain", BASE)
+            .or_else(|| {
+                collection
+                    .ids()
+                    .find(|id| {
+                        collection
+                            .find(id, BASE)
+                            .and_then(|found| found.hat.image.clone())
+                            .is_some_and(|image| image.contains('\''))
+                    })
+                    .and_then(|id| collection.find(id, BASE))
+            })
+            .expect("the one name with an apostrophe");
+        let url = found
+            .image_url("https://example.invalid/", false)
+            .expect("a URL");
+        assert!(url.ends_with("pk01_Captain%27s%20Hat.png"), "{url}");
     }
 
     /// The URL is the pinned one joined to the file, and the pin already ends in a slash.
