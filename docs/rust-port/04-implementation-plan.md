@@ -1778,6 +1778,38 @@ us.
    this project would have owned permanently. It went on 2026-08-25 with Linux, and
    one update path is the improvement.)
 
+   > **Half built 2026-08-26, and the fork is closed.** `self_update` is at
+   > `1.0.0-rc.6` — measured, not assumed — so "track its 1.0 line and pin exactly once
+   > stable" is not something that can be done today. The choice was settled by
+   > availability rather than preference: `minisign-verify` 0.2.5 (MIT, zero
+   > dependencies) and `self-replace` 1.5.0.
+   >
+   > `crates/acl-updater` holds the half that is all decision and no side effect: the
+   > manifest and its signature, and the policy that says whether to install what it
+   > offers. Neither downloads anything, runs anything, or touches a file, which is why
+   > both are tested rather than argued about. The downloading and the installing are the
+   > other half and are not written.
+   >
+   > **It fails closed, and it is closed.** `PUBLIC_KEYS` is empty: no release key
+   > exists, generating one is a ceremony the maintainer performs offline, and a
+   > placeholder here would be a key whose private half is in a scratch directory.
+   > Every manifest is refused until it is filled in, and `no_keys_means_no_updates` is
+   > the test that says so. An updater that accepted unsigned manifests while the keys
+   > were "not done yet" is the exact accident this design exists to prevent.
+   >
+   > **The manifest carries four fields** — version, URL, SHA-512, size — and nothing
+   > else, because a field nothing checks is a field somebody will believe. The digest is
+   > SHA-512 so that this path and `latest.yml` mean the same thing by "the same file".
+   > There is no unverified read: the only way to obtain a `Manifest` is to hand over a
+   > signature that a trusted key made over those exact bytes.
+   >
+   > The rollback rule, the bypass and the elevation refusal are `policy::decide`, and the
+   > order is not alphabetical: elevation is answered first, because telling a user their
+   > update is a downgrade when the real problem is that they started the client as
+   > administrator sends them to fix the wrong thing. `nothing_here_depends_on_the_clock`
+   > is a test with no clock in it — a date reaching that function would have to change
+   > its signature, which is a visible change rather than a line inside a body.
+
    **This is signed where the offsets bundle is not, and the difference is
    availability, not importance.** A release is a planned event: it happens when
    the maintainer decides it happens, and a key that has to be fetched from

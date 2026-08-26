@@ -10,9 +10,9 @@ imported:
 
 | | |
 | --- | --- |
-| Crates in the tree | 578 |
-| Covered by a shared audit | 66, and 7 partially |
-| Exemptions — this workspace asserting it has not looked | 490 |
+| Crates in the tree | 587 |
+| Covered by a shared audit | 66, and 8 partially |
+| Exemptions — this workspace asserting it has not looked | 497 |
 
 `docs/rust-port/08-dependency-review.md` predicted that ratio and asked that it be said
 plainly rather than left for a supply-chain table to imply coverage that does not exist.
@@ -26,7 +26,14 @@ the WebSocket transport landed, 346 when the overlay probe named eframe's `x11` 
 6 moved the renderer from `glow` to `wgpu`. Each time the gate failed until the new crates
 were written down, which is the whole mechanism working.
 
-**The last jump is 22 crates, and it bought the fallback chain.** Measured on the client's
+**2026-08-26, +9 for the updater.** `minisign-verify` is the whole reason it is a
+small number: it has *zero* dependencies, which is most of why it was chosen over
+alternatives that verify the same signatures. The nine are `minisign` and what it brings —
+and `minisign` is a **development** dependency, used only so the tests sign a manifest with
+a keypair they made a moment ago rather than with a committed private key. `cargo vet`
+wants `safe-to-run` rather than `safe-to-deploy` for those, and the store now records that.
+
+**The jump before it is 22 crates, and it bought the fallback chain.** Measured on the client's
 own dependency tree rather than on the workspace's, it is 37 — 309 to 346 — because some of
 what wgpu brings was already in the tree beneath something else. The crates are `wgpu`,
 `wgpu-core`, `wgpu-hal`, `wgpu-types`, the `naga` shader compiler and their platform
