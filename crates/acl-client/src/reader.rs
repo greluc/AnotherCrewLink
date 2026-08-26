@@ -22,6 +22,18 @@ pub(crate) enum Command {
     Start,
     /// Stop reading and let the helper go.
     Stop,
+    /// Show or hide the overlay.
+    ShowOverlay(bool),
+    /// One frame of the overlay: where it goes, and what is on it.
+    ///
+    /// Composed here rather than in the helper because §4.7 keeps every image decoder out
+    /// of the elevated process. What crosses the pipe is bytes and coordinates.
+    Overlay {
+        /// Where the overlay window belongs, in screen coordinates.
+        placement: (i32, i32, i32, i32),
+        /// The sprites, each with its position inside the overlay.
+        sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)>,
+    },
 }
 
 /// What the reader thread reports.
@@ -113,6 +125,20 @@ impl Reader {
     pub(crate) fn ask_to_stop(&self) {
         let _ = self.commands.send(Command::Stop);
     }
+
+    /// Shows or hides the overlay.
+    pub(crate) fn show_overlay(&self, visible: bool) {
+        let _ = self.commands.send(Command::ShowOverlay(visible));
+    }
+
+    /// Hands one overlay frame across.
+    pub(crate) fn draw_overlay(
+        &self,
+        placement: (i32, i32, i32, i32),
+        sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)>,
+    ) {
+        let _ = self.commands.send(Command::Overlay { placement, sprites });
+    }
 }
 
 /// How often the thread looks for frames when it is not doing anything else.
@@ -131,6 +157,23 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
                 link.stop();
                 let _ = reports.send(Report::State(link.state()));
             }
+            #[cfg(windows)]
+            Ok(Command::ShowOverlay(visible)) => link.show_overlay(visible),
+            #[cfg(windows)]
+            Ok(Command::Overlay { placement, sprites }) => {
+                let (x, y, width, height) = placement;
+                link.place_overlay(x, y, width, height);
+                // Clear, then every sprite, then present -- one frame appears at once
+                // rather than half-composed, which on a talking ring would be a flicker
+                // every time somebody spoke.
+                link.clear_overlay();
+                for (at_x, at_y, bitmap) in sprites {
+                    link.draw_sprite(at_x, at_y, bitmap.width, bitmap.height, bitmap.pixels);
+                }
+                link.present_overlay();
+            }
+            #[cfg(not(windows))]
+            Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             // The window has gone. Stopping the link takes the helper with it, which is
             // the whole reason it is worth doing on the way out rather than leaving to the
