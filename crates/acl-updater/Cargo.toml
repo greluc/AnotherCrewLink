@@ -12,6 +12,19 @@ publish = false
 name = "acl_updater"
 path = "src/lib.rs"
 
+[[bin]]
+# Separate from the client, and that is the point: it replaces the client's files, so it
+# must not be one of them. A client updating itself in place is a client holding open the
+# handles the installer needs to write.
+name = "acl-updater"
+path = "src/main.rs"
+
+[features]
+default = ["http"]
+# The manifest and the artefact are fetched over HTTPS. Off in a build that only wants the
+# decisions -- which is every test here, because none of them touches a network.
+http = ["dep:ureq"]
+
 [dependencies]
 # The verification, in a purpose-built crate rather than here. §4.9: "that is not writing
 # crypto". Zero dependencies of its own, which is most of why it is the one.
@@ -24,6 +37,17 @@ sha2 = "0.10"
 semver = "1.0"
 serde_json.workspace = true
 thiserror.workspace = true
+# The same client the offsets store and the hat store use, with the same certificate
+# handling. A third HTTP crate would be a third TLS configuration to get right.
+ureq = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# One question: is this process elevated? §4.9 item 3 refuses to install an update if it is.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 # Signing, so the tests verify a real signature made a moment ago rather than a recorded
