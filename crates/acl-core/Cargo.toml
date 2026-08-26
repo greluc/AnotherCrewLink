@@ -21,6 +21,10 @@ windows-sys = { version = "0.61", features = [
 	# feature even though the pointer passed is always null.
 	"Win32_Security",
 	"Win32_System_Threading",
+	# GetAsyncKeyState, for the push-to-talk poll.
+	"Win32_UI_Input_KeyboardAndMouse",
+	# SHQueryUserNotificationState, for exclusive-fullscreen detection.
+	"Win32_UI_Shell",
 	"Win32_UI_WindowsAndMessaging",
 ] }
 
