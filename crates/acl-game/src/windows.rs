@@ -208,6 +208,39 @@ pub fn find_process(executable: &str) -> Option<u32> {
     found
 }
 
+/// Where a process was started from.
+///
+/// The first module of a process is the executable itself, and the snapshot already
+/// carries its full path — so this is the same call the module list comes from, asked one
+/// field further. That is why it is here rather than a `QueryFullProcessImageNameW` of its
+/// own: a second way to ask is a second thing to get wrong about access rights.
+///
+/// `None` when the process is gone, or when the snapshot cannot be taken — which happens
+/// for a process at a higher integrity level, and is not an error worth a type.
+#[must_use]
+pub fn executable_path(pid: u32) -> Option<std::path::PathBuf> {
+    // SAFETY: a documented call with no pointer arguments.
+    let snapshot =
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut entry = MODULEENTRY32W {
+        dwSize: u32::try_from(size_of::<MODULEENTRY32W>()).unwrap_or(0),
+        ..unsafe { std::mem::zeroed() }
+    };
+    // SAFETY: `entry` is live and its `dwSize` is set.
+    let found = unsafe { Module32FirstW(snapshot, &raw mut entry) } != 0;
+    // SAFETY: the snapshot came from CreateToolhelp32Snapshot and is closed once.
+    unsafe {
+        windows_sys::Win32::Foundation::CloseHandle(snapshot);
+    }
+    found
+        .then(|| wide_to_string(&entry.szExePath))
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 fn enumerate_modules(pid: u32) -> Vec<Module> {
     // TH32CS_SNAPMODULE32 as well as TH32CS_SNAPMODULE: without it a 64-bit reader sees
     // no modules at all in a 32-bit target, which is every Among Us install on the
@@ -259,6 +292,44 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::*;
+
+    use super::executable_path;
+
+    /// Asked about this very process, which needs no game and no other machine: the answer
+    /// is knowable independently, through `current_exe`.
+    ///
+    /// It checks the call, the wide-string conversion and the snapshot flags together --
+    /// and those are the parts that fail quietly, by returning an empty string rather than
+    /// an error.
+    #[test]
+    fn the_path_of_this_process_is_this_executable() {
+        let mine = executable_path(std::process::id()).expect("this process has a path");
+        let expected = std::env::current_exe().expect("and the runtime knows it");
+        assert_eq!(
+            mine.file_name(),
+            expected.file_name(),
+            "{mine:?} is not {expected:?}"
+        );
+        assert!(mine.is_absolute(), "{mine:?} is not a full path");
+        assert!(mine.exists(), "{mine:?} does not exist");
+    }
+
+    /// A process id nothing has answers `None` rather than an empty path. An empty path
+    /// would be passed to `detect_mod`, whose parent directory is nothing, and the mod
+    /// would read as none for a reason that has nothing to do with mods.
+    #[test]
+    fn a_process_that_is_not_there_has_no_path() {
+        // Ids are recycled, so this is "very probably not a process" rather than "certainly
+        // not one" -- but an id that *is* live still gives a path, and the assertion below
+        // holds either way: what must not happen is an empty one.
+        let answer = executable_path(u32::MAX - 4);
+        assert!(
+            answer
+                .as_ref()
+                .is_none_or(|path| !path.as_os_str().is_empty()),
+            "an empty path came back: {answer:?}"
+        );
+    }
 
     #[test]
     fn asks_for_reading_and_nothing_else() {
