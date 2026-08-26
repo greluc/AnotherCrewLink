@@ -382,6 +382,12 @@ struct Client {
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
     link: net::Link,
+    /// Who has been heard since the last frame.
+    ///
+    /// Taken from the link once a frame and held for the drawing, because the roster asks
+    /// about each player in turn and taking it per question would answer the first one and
+    /// nobody else.
+    speaking: std::collections::BTreeSet<i64>,
     /// The lobby the session has been asked to join, so the ask happens on the edges.
     ///
     /// A join sent every frame is a join the server rate-limits, and `within_limit` in the
@@ -418,6 +424,7 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
             link: net::Link::start(),
+            speaking: std::collections::BTreeSet::new(),
             joined: None,
             mods: None,
             page: Screen::Main,
@@ -1017,6 +1024,9 @@ impl eframe::App for Client {
         }
         self.hats.pump();
         self.link.pump();
+        // Once a frame, and it decays on its own: a peer who stops sending is not in the
+        // next one, with nothing having to notice they went quiet.
+        self.speaking = self.link.take_speaking();
         self.follow_the_lobby();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
@@ -1154,11 +1164,14 @@ impl eframe::App for Client {
             // between a player who has arrived and one who can be heard. The rest still
             // waits on audio moving.
             let link = &self.link;
+            let speaking = &self.speaking;
             let voice = Voice {
+                // `talking` is the game's own idea of who is speaking and still has no
+                // source; `audible` is this end's, and audio arriving is exactly it.
                 talking: &|_| false,
                 dead: &|_| false,
                 connected: &|client_id| link.hears(client_id),
-                audible: &|_| false,
+                audible: &|client_id| speaking.contains(&client_id),
                 local_talking: false,
                 local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
                 impostor_radio: None,

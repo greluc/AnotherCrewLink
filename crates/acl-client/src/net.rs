@@ -68,6 +68,11 @@ pub(crate) enum Report {
     /// Boxed because [`Event`] is large and this is a channel of them; an unboxed variant
     /// makes every message the size of the largest one.
     Event(Box<Event>),
+    /// Audio arrived from a peer since the last drain.
+    Audio {
+        /// Whose.
+        socket_id: String,
+    },
     /// A peer connection changed state.
     Peer {
         /// Whose.
@@ -113,6 +118,12 @@ pub(crate) struct Link {
     /// the server is the only thing that sees both. Kept here because it is the only place
     /// both halves pass through.
     sockets: std::collections::BTreeMap<i64, String>,
+    /// Which peers have sent audio since the window last looked.
+    ///
+    /// Cleared by [`Link::take_speaking`], which is what makes it mean "recently" rather
+    /// than "ever". A set rather than a count: what the window asks is whether somebody is
+    /// speaking, and how many packets arrived is a question nothing here has.
+    speaking: std::collections::BTreeSet<String>,
     /// Which peers have a connection that is up.
     ///
     /// The window shows this as the difference between a player who has arrived and one who
@@ -141,6 +152,7 @@ impl Link {
             answer: None,
             connected: std::collections::BTreeSet::new(),
             sockets: std::collections::BTreeMap::new(),
+            speaking: std::collections::BTreeSet::new(),
         }
     }
 
@@ -153,6 +165,7 @@ impl Link {
                         // Every peer went with the socket they were signalled over.
                         self.connected.clear();
                         self.sockets.clear();
+                        self.speaking.clear();
                         // A connection that has gone takes its lobbies with it. Leaving
                         // them on screen would offer a player a join that cannot be sent.
                         self.lobbies.clear();
@@ -160,6 +173,12 @@ impl Link {
                     self.state = state;
                 }
                 Report::Event(event) => self.absorb(*event),
+                Report::Audio { socket_id } => {
+                    // A moment rather than a level. The window redraws five times a second
+                    // and audio arrives fifty times a second, so what it needs is "recently"
+                    // -- and `pump` running is what makes this decay.
+                    self.speaking.insert(socket_id);
+                }
                 Report::Peer {
                     socket_id,
                     connected,
@@ -230,6 +249,21 @@ impl Link {
     /// The last answer to a join, if there has been one.
     pub(crate) fn answer(&self) -> Option<&str> {
         self.answer.as_deref()
+    }
+
+    /// Whether a player has been heard since this was last asked, and forgets it.
+    ///
+    /// Taken rather than read, so "speaking" decays on its own: a peer who stops sending
+    /// stops being in the set the next time the window looks, with nothing having to notice
+    /// they went quiet.
+    #[must_use]
+    pub(crate) fn take_speaking(&mut self) -> std::collections::BTreeSet<i64> {
+        let sockets = std::mem::take(&mut self.speaking);
+        self.sockets
+            .iter()
+            .filter(|(_, socket)| sockets.contains(*socket))
+            .map(|(client_id, _)| *client_id)
+            .collect()
     }
 
     /// Whether a player's connection is up.
@@ -511,7 +545,7 @@ async fn drain(
     let Some(mesh) = mesh.as_mut() else {
         return;
     };
-    let (outbound, peer_events) = mesh.drain();
+    let (outbound, peer_events, audio) = mesh.drain();
     for out in outbound {
         let _ = session.signal(&out.to, out.payload.to_value()).await;
     }
@@ -521,6 +555,20 @@ async fn drain(
             socket_id: peer,
             connected: state == webrtc::peer_connection::RTCPeerConnectionState::Connected,
         });
+    }
+    // The packets themselves are not carried to the window -- it has nothing to do with
+    // them and a channel of audio frames into a paint loop is a queue that grows. What it
+    // is told is *that* a peer is speaking, which is the one question `roster::Voice` asks
+    // that nothing could answer: `audible`.
+    //
+    // Decoding, jitter buffering and mixing are `acl-audio`'s and are not wired yet. This
+    // is deliberately the smallest true thing: audio is arriving from this peer.
+    let mut heard: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for packet in audio {
+        heard.insert(packet.peer);
+    }
+    for peer in heard {
+        let _ = answers.send(Report::Audio { socket_id: peer });
     }
 }
 
