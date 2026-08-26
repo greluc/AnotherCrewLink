@@ -756,6 +756,31 @@ fixtures.
 > only prove the two implementations share an author's assumptions, which is the
 > one thing this gate is not for.
 
+> **Extended 2026-08-26.** A fourth session took the corpus from 4653 frames to **12574**
+> and the gate broke on 23 of them, which is what a corpus is for: a branch neither reader
+> reaches compares equal on both sides, so the only way to find a divergence is to reach
+> it. Four fixes, all in the Rust reader — the menu hold that keeps reporting a menu until
+> the game has rebuilt its player table, the 9999 sentinel for a player the reader cannot
+> make sense of, a player dropped for having a null object pointer, and two fields that
+> are `undefined` on the Electron side and therefore cannot be a `u32` and a `bool` here.
+>
+> Two things it reached that were not expected to be reachable without a round, and both
+> only because they were tried:
+>
+> * **32-bit in a game.** Pointer width changes the player-array, door-list and dictionary
+>   strides, and every in-game recording before this was 64-bit.
+> * **Every map.** From an online lobby's *settings*, which is the only route: the reader
+>   takes the map from the game options, and freeplay does not write its map there. A whole
+>   freeplay session on Polus arrives labelled `THE_SKELD` — the reader is not wrong, the
+>   field really does say Skeld. `maxPlayers` is the same object and the same route, and
+>   three abandoned lobbies at 15, 10 and 8 is what gave it three values.
+>
+> **And one thing that is now known to be impossible rather than merely awkward.** The
+> paragraph above says freeplay cannot reach the `TASKS` branch. It is stronger than that:
+> comms, doors and cameras are all read *inside* `if (state === GameState.TASKS)`, so
+> sabotaging in freeplay changes nothing in a recording, because nothing looks. Issue #10
+> cannot be closed by a more determined solo session; it needs four players.
+
 > **Gate G1 — parity of the reader.**
 > For every recorded frame, the Rust reader's `AmongUsState` must equal the
 > Electron reader's, field for field, with float positions within 1e-6.
@@ -1304,6 +1329,29 @@ will otherwise reintroduce them:
 
 ## 4.7 Phase 5 — Platform layer (6 weeks)
 
+> **Status, 2026-08-26. Four of the platform calls exist; the two processes do not.**
+>
+> This phase's shape was "the decision logic stands and is tested; the platform calls are
+> missing entirely", and four of them were one call each.
+>
+> | Built | Where |
+> | --- | --- |
+> | Single-instance lock | `acl-core::single_instance` — measured against a running 1.x rather than guessed; see the note further down |
+> | Push-to-talk poll | `acl-core::keys` — `GetAsyncKeyState`'s high bit, turning a level into edges |
+> | Exclusive-fullscreen detection | `acl-core::fullscreen` — the bit `overlay::availability` always took and nobody produced |
+> | The pipe between the two halves | `acl-ipc::pipe` — the helper is the server, because a pipe server can impersonate its client |
+>
+> **Not built, and the larger half.** The overlay window with its UIPI access check; the
+> elevation path, meaning the on-demand `runas` launch and the "the user clicked No" state
+> that `acl-core::helper` already models; autostart; and `acl-helper` itself — there is a
+> boundary and a transport for it, and no process on the other end.
+>
+> One thing the four have in common is worth recording. Every one of them was decided by a
+> measurement on a real machine, and two of those measurements contradicted what this
+> document said: the single-instance name was not the mutex named here, and the display
+> state under a running game is `QUNS_BUSY` rather than the D3D-exclusive value the
+> overlay logic keys on. The platform layer is where a port stops being a translation.
+
 **Why 6 and not 3:** the client becomes two processes, and the overlay moves into
 the elevated one.
 
@@ -1686,17 +1734,28 @@ from the client even after our own 1.x support ends.
 | H3 1.x/Node envelope and OBS | 2.5 | committed | alongside P0+–P1+ |
 | P0+ Server | 4.0 | committed | independent |
 | **Committed subtotal** | **11.5** | | ends at the decision point |
-| P1+ Foundations | 5.0 | planned | no |
-| P2+ Game reader | 6.0 | planned | with P3+ |
-| P3+ Audio engine | 10.0 | planned | critical path |
-| P4+ Transport | 10.5 | planned | critical path |
-| P5+ Platform | 6.0 | planned | with P4+ |
+| P1+ Foundations | 5.0 | built | no |
+| P2+ Game reader | 6.0 | built, G1 met | with P3+ |
+| P3+ Audio engine | 10.0 | built, G2 met | critical path |
+| P4+ Transport | 10.5 | decisions built, transport not wired | critical path |
+| P5+ Platform | 6.0 | partly built | with P4+ |
 | P6+ GUI | 11.5 | planned | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
 | P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
 | **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
 | **Two developers** | not half | | P3+ and P4+ are both on the critical path, and P7+ waits on both |
 | P9 Post-1.x cleanup | 3.0 | planned | outside the 2.0 budget |
+
+> **Status column corrected 2026-08-26.** Every phase above read "planned" long after
+> it stopped being true — P1+ through P3+ are written, and the two gates they carry are
+> met. The weeks are untouched: they are what the phases were estimated at, not a record
+> of what they cost, and nothing here re-prices them.
+>
+> "Partly built" for P5+ is the honest word rather than a hedge. What exists is the
+> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check and the
+> named pipe the two processes speak over. What does not is the overlay window, the
+> elevation path, autostart, and the `acl-helper` binary that would hold the first two.
+> §4.7 carries the detail.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation
