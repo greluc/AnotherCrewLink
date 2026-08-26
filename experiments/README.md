@@ -1,9 +1,12 @@
 # Experiments
 
-Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9, and one from
-§4.6 item 1. All three take hours to answer now and are, in the plan's words, brutal to
-discover in month nine — each one decides how a later phase is planned rather than how it
-is written.
+Two questions from `docs/rust-port/04-implementation-plan.md` §4.3 item 9, one from §4.6
+item 1, and one from §4.8 item 6. All of them take hours to answer now and are, in the
+plan's words, brutal to discover in month nine — each one decides how a later phase is
+planned rather than how it is written.
+
+`gui-spike` is the odd one out: it answers §4.8 item 1's framework question, and it is a
+benchmark rather than a probe.
 
 They stay in the workspace rather than being deleted once answered, because each checks a
 property that a dependency update can take away again.
@@ -214,3 +217,43 @@ crate, on loopback, with no relay and no NAT. G3 was the thing that would have p
 interoperability with a 1.0.2 Chromium client, through coturn, across a NAT — and it was
 struck. So "the crate is usable" is established and "the client is interoperable" is not,
 by anything, until the field says so.
+
+
+## 4. `gpu-probe` — which renderer rungs does a Windows machine actually offer?
+
+**Answered 2026-08-26: two, not three. It removed a rung from the plan.**
+
+§4.8 item 6 asked for "wgpu/DX12, then WARP through `force_fallback_adapter`, then a CPU
+rasteriser". Two of those three are assertions about what Windows provides, and the client
+has to choose between them at start-up on a machine nobody here has seen. So this
+enumerates the DX12 adapters and prints what each one is.
+
+```
+cargo run -p gpu-probe --release
+```
+
+```text
+RESULT adapters=3
+  DiscreteGpu name="NVIDIA GeForce RTX 5090" driver="32.0.16.1656" backend=Dx12
+  IntegratedGpu name="AMD Radeon(TM) Graphics" driver="32.0.21045.5002" backend=Dx12
+  Cpu name="Microsoft Basic Render Driver" driver="10.0.26100.8972" backend=Dx12
+RUNG Hardware available=true
+RUNG SoftwareAdapter available=true
+```
+
+**WARP *is* the CPU rasteriser.** The third adapter is Windows's own Direct3D 12
+implementation running on the processor, and its driver version is the operating system's
+build number rather than a vendor's — which is what says it ships with Windows rather than
+with a card. The plan's second and third rungs named one adapter twice.
+
+Nothing was lost by dropping the third. There is no CPU rasteriser for egui outside a wgpu
+adapter — no crate provides one — so it named something that could not have been built.
+What it was there to guarantee still holds and holds better: the last rung is part of the
+operating system rather than of a driver.
+
+It stays in the workspace for the reason all of these do. If a future wgpu drops the DX12
+`Cpu` adapter, or a machine turns out not to enumerate it, this is what says so — and the
+answer is load-bearing, because "no GPU is not a failure to launch" rests on that one row.
+
+The probe reports through `acl_ui::renderer::choose`, the shipped rule, rather than through
+a copy of it: the `RUNG` lines are what the client would decide given the adapters above.

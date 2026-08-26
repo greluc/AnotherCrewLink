@@ -137,8 +137,9 @@ combination of fullscreen, transparent and always-on-top. Since eframe picks one
 renderer per process for every viewport, that is a constraint on the framework
 decision and not a detail inside it. Row 9 also carries a requirement the table
 cannot show: a GPU fallback chain. Linux defaults to software, as the Electron
-client already does; Windows goes wgpu/DX12, then WARP, then a CPU rasteriser,
-with no glow rung.
+client already does; Windows goes wgpu/DX12, then WARP, with no glow rung.
+
+> **Corrected 2026-08-26.** The CPU rung is gone: WARP *is* the CPU rasteriser — Windows's own Direct3D 12 implementation, running on the processor — so the second and third rungs named one adapter twice. `experiments/gpu-probe` enumerates it as `Cpu`, "Microsoft Basic Render Driver", with the operating system's build number for a driver version. Nothing was lost: there is no CPU rasteriser for egui outside a wgpu adapter, so the third rung named something that could not have been built.
 
 ## 2.3 The four things that decide it
 

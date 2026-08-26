@@ -5,14 +5,14 @@ hand-added comments, which is why this note is a file of its own.
 
 ## The measurement
 
-Taken 2026-08-25 with Mozilla's, Google's and the Bytecode Alliance's shared audit sets
+Taken 2026-08-26 with Mozilla's, Google's and the Bytecode Alliance's shared audit sets
 imported:
 
 | | |
 | --- | --- |
-| Crates in the tree | 556 |
-| Covered by a shared audit | 62, and 3 partially |
-| Exemptions — this workspace asserting it has not looked | 491 |
+| Crates in the tree | 578 |
+| Covered by a shared audit | 66, and 7 partially |
+| Exemptions — this workspace asserting it has not looked | 490 |
 
 `docs/rust-port/08-dependency-review.md` predicted that ratio and asked that it be said
 plainly rather than left for a supply-chain table to imply coverage that does not exist.
@@ -20,10 +20,25 @@ Of the crates that matter most here, **`sonora`, `eframe`, `egui`, `winit`, `x11
 `windows-sys`, `kurbo`, `serde_json`, `tokio-tungstenite` and `webpki-roots` have no
 audit in any shared set**. `postcard` does.
 
-The count has moved four times while this phase was being written: 283 at first, 316 when
+The count has moved five times while this phase was being written: 283 at first, 316 when
 the WebSocket transport landed, 346 when the overlay probe named eframe's `x11` and
-`wayland` features, and 556 when the P4 spike added `webrtc` `=0.20.3`. Each time the gate
-failed until the new crates were written down, which is the whole mechanism working.
+`wayland` features, 556 when the P4 spike added `webrtc` `=0.20.3`, and 578 when §4.8 item
+6 moved the renderer from `glow` to `wgpu`. Each time the gate failed until the new crates
+were written down, which is the whole mechanism working.
+
+**The last jump is 22 crates, and it bought the fallback chain.** Measured on the client's
+own dependency tree rather than on the workspace's, it is 37 — 309 to 346 — because some of
+what wgpu brings was already in the tree beneath something else. The crates are `wgpu`,
+`wgpu-core`, `wgpu-hal`, `wgpu-types`, the `naga` shader compiler and their platform
+shims; the ones that are unreachable on Windows (`objc2-metal`, `wgpu-core-deps-apple`,
+`wgpu-core-deps-wasm`, `wgpu-core-deps-emscripten`) are listed for the same reason the
+`x11` and `wayland` ones are, and are noted below. None of them has an audit in any shared
+set, so all of them are exemptions.
+
+What it bought is stated in `docs/rust-port/04-implementation-plan.md` §4.8: glow has no
+adapter selection, so under it there is nothing to demote *to*, and "no GPU is not a
+failure to launch" cannot be honoured. The reachable-code footprint of the swap is 4.8 MB
+of binary.
 
 **That last jump is 141 crates from one dependency, and it deserves to be looked at rather
 than absorbed.** Most of it is the `rtc-*` family the sans-IO core is split into — sixteen
