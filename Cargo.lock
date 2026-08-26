@@ -116,6 +116,8 @@ dependencies = [
 name = "acl-ui"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "url",
 ]
 

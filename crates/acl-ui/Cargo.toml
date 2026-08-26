@@ -9,7 +9,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# `window_state` is read from and written to `windows.json`, which 1.x also writes.
+serde.workspace = true
+# The older `window-state.json` is read as a loose document: it predates this client and
+# only its two dimensions are required, so it is not deserialised into a type.
+serde_json.workspace = true
 url.workspace = true
+
 
 [lints]
 workspace = true
