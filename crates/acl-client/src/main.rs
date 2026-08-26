@@ -41,14 +41,15 @@ const MIN_HEIGHT: i32 = 350;
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = 32.0;
 
-/// How large one crewmate is in the overlay, and how far apart they sit.
+/// How large one crewmate is in the overlay.
+///
+/// How far apart they sit is `acl_ui::overlay_layout::GAP`, which is also what the strip
+/// is sized from -- one number, in the module that does the arithmetic.
 ///
 /// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
 /// physical size, and scaling by the window would make the overlay twice as large on the
 /// larger monitor for no reason anybody asked for.
 const OVERLAY_SPRITE: i32 = 56;
-/// See [`OVERLAY_SPRITE`].
-const OVERLAY_GAP: i32 = 8;
 
 fn main() -> eframe::Result<()> {
     let paths = match Paths::resolve(Environment {
@@ -388,11 +389,26 @@ impl Client {
         let Some(reader) = self.reader.as_ref() else {
             return;
         };
+        // The three settings that decide whether there is an overlay at all, read every
+        // frame rather than cached: they are changed on the settings page, which is this
+        // same process, and a cached copy is one more thing to invalidate.
+        let settings = self.settings.config();
+        let enabled = settings.bool_at("enableOverlay");
+        // `meetingOverlay` is read by nothing yet. It switches on a second overlay that
+        // draws the players over the meeting table, which needs the meeting hud's
+        // on-screen geometry out of the game -- a reader question rather than a drawing
+        // one, and not one this has an answer to. The setting is kept and honoured as soon
+        // as there is something for it to switch on.
+        let position =
+            acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
+        let compact = settings.bool_at("compactOverlay") || position.forces_compact();
+
         let game = acl_game::windows::find_process("Among Us.exe");
         let bounds = game.and_then(game_window::content_bounds);
-        let Some(bounds) = bounds.filter(|bounds| bounds.is_drawable()) else {
-            // No game, or nothing to draw over. Hidden rather than left showing the last
-            // frame over whatever the player switched to.
+        let bounds = bounds.filter(|bounds| bounds.is_drawable());
+        let Some(bounds) = bounds.filter(|_| enabled) else {
+            // No game, nothing to draw over, or the overlay is switched off. Hidden rather
+            // than left showing the last frame over whatever the player switched to.
             if self.overlay_shown {
                 self.overlay_shown = false;
                 reader.show_overlay(false);
@@ -411,12 +427,47 @@ impl Client {
             local_is_impostor: false,
         };
         let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
-        let shown = overlay(&seats, &voice, false);
+        let shown = overlay(&seats, &voice, compact);
+
+        // `Menu` is not "the menu layout" -- it is no overlay at all. `Overlay.tsx`
+        // returns null on it before it reaches the layout, so the `gamestate_menu` styling
+        // it carries is reachable only from `Unknown`, which is the reader attached and
+        // the state not yet readable. Following the class name rather than the early
+        // return would put a strip over the main menu that the shipped client never shows.
+        if state.game_state == acl_game::GameState::Menu {
+            if self.overlay_shown {
+                self.overlay_shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        }
+        let in_menu = state.game_state == acl_game::GameState::Unknown;
+        let laid = acl_ui::overlay_layout::lay_out(
+            position,
+            in_menu,
+            acl_ui::overlay_layout::Rect {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            shown.len(),
+            OVERLAY_SPRITE,
+        );
+        let Some(laid) = laid else {
+            // Hidden, or nobody to draw. An empty strip is still a rectangle of nothing
+            // sitting over the game.
+            if self.overlay_shown {
+                self.overlay_shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        };
 
         let sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
             .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| {
+            .zip(laid.sprites.iter())
+            .filter_map(|(entry, (x, y))| {
                 let player = state.players.get(entry.at)?;
                 let (body, shadow) =
                     acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
@@ -429,16 +480,19 @@ impl Client {
                         alive: entry.alive,
                     },
                 );
-                let at = i32::try_from(slot).unwrap_or(0);
-                Some((
-                    OVERLAY_GAP + at * (OVERLAY_SPRITE + OVERLAY_GAP),
-                    OVERLAY_GAP,
-                    bitmap,
-                ))
+                Some((*x, *y, bitmap))
             })
             .collect();
 
-        reader.draw_overlay((bounds.x, bounds.y, bounds.width, bounds.height), sprites);
+        reader.draw_overlay(
+            (
+                laid.placement.x,
+                laid.placement.y,
+                laid.placement.width,
+                laid.placement.height,
+            ),
+            sprites,
+        );
         if !self.overlay_shown {
             self.overlay_shown = true;
             reader.show_overlay(true);
