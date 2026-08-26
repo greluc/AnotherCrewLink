@@ -17,6 +17,7 @@ pub mod renderer;
 pub mod roster;
 pub mod server_url;
 pub mod settings;
+pub mod settings_screen;
 pub mod sprite;
 pub mod views;
 pub mod window_state;

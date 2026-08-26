@@ -11,3 +11,4 @@
 
 pub mod colour;
 pub mod main;
+pub mod settings;

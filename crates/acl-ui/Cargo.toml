@@ -22,6 +22,11 @@ serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
 
+[dev-dependencies]
+# `settings_screen` names i18n keys; the catalogue is what says whether they exist. A
+# development dependency rather than a real one because the views take their strings from
+# the caller -- this crate does not load a locale, it only names keys.
+acl-i18n.workspace = true
 
 [lints]
 workspace = true
