@@ -116,3 +116,24 @@ panic = "abort"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# §4.9 item 1: cargo-dist "for archives and the release job only". The installer is the
+# hand-built NSIS script in `installer/`, because there is no NSIS backend here and MSI
+# would strand every installed 1.x client -- `electron-updater`'s `findFile` picks by
+# extension, so changing artefact type is the same act as abandoning the installed base.
+[workspace.metadata.dist]
+cargo-dist-version = "0.30.0"
+ci = "github"
+# Deliberately empty. Its installer set is shell, PowerShell, npm, Homebrew and MSI, and
+# none of those is a thing this project may publish. Archives are what it is here for.
+installers = []
+targets = ["x86_64-pc-windows-msvc"]
+# "Turn on `github-attestations` and `cargo-auditable`" -- §4.9 item 1. With no code
+# signing, an attestation is what answers "prove this binary came from this commit", and it
+# answers it better than a certificate proves who built it.
+github-attestations = true
+cargo-auditable = true
+# The output is checked-in GitHub Actions YAML, which is what makes a one-maintainer build
+# tool an acceptable dependency: if it were abandoned tomorrow the workflow keeps working
+# and is editable by hand.
+allow-dirty = ["ci"]

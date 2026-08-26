@@ -1742,6 +1742,31 @@ us.
    > picking it and nothing about the update path changes. Turn on `github-attestations` and `cargo-auditable`, and
    write down the exit: the output is checked-in GitHub Actions YAML, which is
    what makes a one-maintainer build tool an acceptable dependency.
+   > **Built 2026-08-26.** `installer/anothercrewlink.nsi` is the script;
+   > `[workspace.metadata.dist]` is the cargo-dist config, with `installers = []` because
+   > every installer it can produce is one this project may not publish; and
+   > `.github/workflows/rust-release.yml` is the release job, every action pinned to a
+   > commit SHA that was checked against the API rather than copied from a README.
+   >
+   > **The contract is held by a test rather than by care.**
+   > `crates/acl-updater/tests/installer_contract.rs` reads the script as text and fails if
+   > it stops handling `--updated`, `/S` or `/D=`, if a silent install would open a window,
+   > if anything overwrites `$INSTDIR` after NSIS has filled it from `/D=`, if the artefact
+   > name changes, or if the directory drifts from `acl_core::paths::APP_DIRECTORY`. It
+   > cannot run `makensis` and does not pretend to; `installer/README.md` carries the
+   > three manual checks that a text test cannot, and §4.9's own instruction — prove it by
+   > shipping an ordinary 1.0.x release with it — is stronger than all of them.
+   >
+   > **The release job writes no `latest.yml`, deliberately.** That file is what the
+   > installed fleet's `electron-updater` follows, so writing one here would move every
+   > 1.x machine as a side effect of tagging a 2.x build. Moving the fleet is §4.12 and it
+   > is a different act with a different blast radius. The release is drafted rather than
+   > published for the same reason: a release that publishes itself is one nobody looked
+   > at.
+   >
+   > The job also fails when the tag and `Cargo.toml`'s version disagree. That is silent
+   > for everybody except the person reading an issue about it later.
+
 2. **No Authenticode code signing.** Windows artefacts ship unsigned and users go
    on seeing the unknown-publisher warning on every install, exactly as they do
    with 1.0.2 today. Nothing regresses and nothing improves. The
@@ -1853,6 +1878,18 @@ us.
    `electron` bump currently patches libopus, libvpx, BoringSSL and libpng at
    once, with CVE numbers and a public feed. After the port that becomes a named
    human with a named upstream watch list, and it needs an owner here.
+
+   > **Partly built 2026-08-26.** `rust.yml` has carried `check`, `test`, `deny`,
+   > `attribution` and `auditable` for some time — `cargo-deny` and `cargo-vet` in place of
+   > `npm audit`, and `cargo-about` producing the attribution file GPL distribution wants.
+   > CodeQL still covers the repository through its own workflow. `rust-release.yml` is
+   > new and is the release half.
+   >
+   > **The loss this item names is unchanged and still unowned.** RustSec does not
+   > systematically track CVEs in the C vendored inside `-sys` crates, so `cargo audit`
+   > will never report a libopus or an APM security release. Nothing built here changes
+   > that; it needs a named human with a named watch list, and naming one is not something
+   > a commit can do.
 6. ~~The Linux tarball with a documented `setcap cap_sys_ptrace+ep` step.~~ Struck
    2026-08-25 with the client's Linux support. It was here because on the common
    `ptrace_scope=1` default the client cannot read the game at all, and an AppImage
