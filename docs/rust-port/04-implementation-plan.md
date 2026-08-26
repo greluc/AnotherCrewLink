@@ -1383,13 +1383,32 @@ will otherwise reintroduce them:
 > | The UIPI access check | `acl-core::game_window` — ported from `windows.c`, quirk included: a hung window refuses the probe with the same error an integrity mismatch gives |
 > | Following the game's window | `acl-core::game_window::Follow` — polled, not hooked, for the reason below |
 > | The driver that owns all of it | `acl-core::link` — §4.6 says this belongs here, and it is what keeps `HelperState` true |
+> | The overlay window | `acl-helper::overlay` — a layered window, composed from sprites, with no toolkit and no GPU under it |
 >
-> **Not built.** The overlay window itself — the layered, click-through, always-on-top
-> window, and the pre-rasterised sprites it receives instead of decoding images.
-> `experiments/overlay-probe` established that eframe can produce such a window on Windows
-> (`layered=true transparent=true topmost=true`, `exstyle=0x000c0138`), and
-> `experiments/gui-spike` has since measured what drawing into one costs, so what is left
-> is the drawing itself and the sprite channel.
+> **The overlay window, 2026-08-26.** Built, and not with a GUI framework. §6's checklist
+> says what this process may be — "no listening socket, no HTTP client, no image decoder
+> and **no GPU context**" — and a toolkit-drawn overlay has the last of those. The rest of
+> these documents already describe the alternative without naming it as one: §3.3 calls it
+> a *layered window* throughout, and this section says it "receives pre-rasterised sprites
+> ... and never fetches or decodes an image". `UpdateLayeredWindow` from a premultiplied
+> bitmap needs no toolkit, no renderer and no GPU, and pre-rasterised is exactly what it
+> wants. `experiments/overlay-probe` used eframe, and that is not a contradiction — it
+> answered whether such a window is available at all, in P1, with the framework candidate
+> to hand. Its answer transfers; its implementation does not.
+>
+> **And "sprites" is a size limit, not a turn of phrase.** The first version of the IPC
+> carried a whole frame. `acl_ipc::MAX_FRAME` is 64 KiB and an overlay covering a 2560×1440
+> screen is 14.7 MB of premultiplied BGRA, so a picture cannot cross that pipe and never
+> could. The protocol is `ClearOverlay`, `DrawSprite` and `PresentOverlay`, and the
+> composition happens on the far side — a blend, which needs no decoder.
+>
+> Its tests ask the operating system rather than looking: every extended style is asserted
+> with the failure its absence causes, because a window that is merely invisible looks
+> exactly like one that is transparent, and one that swallows clicks looks exactly like one
+> that does not until somebody tries to play through it.
+>
+> **What is left is the content**, which is §4.8 item 5 rather than this phase: what the
+> overlay shows, and the rasterising that turns it into sprites.
 >
 > **This section says "port `windows.c` directly rather than re-deriving it", and one part
 > of it is deliberately not ported.** That file follows the game with

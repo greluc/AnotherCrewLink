@@ -83,6 +83,53 @@ pub enum CoreMessage {
     StopReading,
     /// Show or hide the overlay window.
     SetOverlayVisible(bool),
+    /// Where the overlay window belongs, in screen coordinates.
+    ///
+    /// Sent by the core because the core is what can see it. Reading another process's
+    /// window rectangle is a read, and UIPI does not filter reads — it filters
+    /// manipulation, which is the half that has to happen in the elevated process and is
+    /// the whole reason the overlay lives there.
+    PlaceOverlay {
+        /// Screen x of the top-left corner.
+        x: i32,
+        /// Screen y of the top-left corner.
+        y: i32,
+        /// Width in pixels.
+        width: i32,
+        /// Height in pixels.
+        height: i32,
+    },
+    /// Wipes the overlay's canvas to transparent.
+    ///
+    /// The start of a frame. The canvas is the size of the last [`CoreMessage::PlaceOverlay`].
+    ClearOverlay,
+    /// One pre-rasterised sprite, blended into the canvas at a position.
+    ///
+    /// **Sprites and not frames, and that is a size limit rather than a preference.**
+    /// [`MAX_FRAME`] is 64 KiB; an overlay covering a 2560x1440 screen is 14.7 MB of
+    /// premultiplied BGRA, so a whole picture cannot cross this pipe and never could. §4.7
+    /// says "pre-rasterised sprites" for that reason, and the composition happens on the
+    /// far side — which needs no image decoder, only a blend.
+    ///
+    /// Premultiplied BGRA, `width * height * 4` bytes, top row first.
+    DrawSprite {
+        /// Where its left edge goes, relative to the overlay's own top-left.
+        x: i32,
+        /// Where its top edge goes.
+        y: i32,
+        /// Width in pixels.
+        width: i32,
+        /// Height in pixels.
+        height: i32,
+        /// The pixels.
+        pixels: Vec<u8>,
+    },
+    /// Puts the canvas on the screen.
+    ///
+    /// Separate from the sprites so that a frame appears at once. Presenting after each
+    /// one would show the overlay half-composed, which on a talking indicator is a flicker
+    /// every time somebody speaks.
+    PresentOverlay,
     /// Exit.
     Shutdown,
 }
