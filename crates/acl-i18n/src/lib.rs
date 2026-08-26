@@ -30,6 +30,73 @@ pub enum Direction {
     RightToLeft,
 }
 
+/// Every shipped locale, and what it calls itself.
+///
+/// A table rather than a lookup of the directory listing, because a language picker
+/// showing `zh_CN` and `zh_TW` is a picker nobody can use. The names are the languages'
+/// own -- `Deutsch`, not `German` -- which is what the Electron client shows and the only
+/// convention that works in a list somebody is reading *because* they cannot read the
+/// current one.
+///
+/// Ported from `src/renderer/language/languages.ts`, and `the_names_match_the_electron_client`
+/// reads that file and compares rather than trusting this was transcribed correctly.
+///
+/// In its order, not alphabetical: English first, and after that whatever order the
+/// translations arrived in. Sorting it would be an improvement to make deliberately, in
+/// both clients at once, rather than as a side effect of a port.
+pub const NAMES: [(&str, &str); 37] = [
+    ("en", "English"),
+    ("af", "Afrikaans"),
+    ("ar", "العربية"),
+    ("az", "Azərbaycan"),
+    ("ca", "Català"),
+    ("zh_CN", "简体中文"),
+    ("zh_TW", "繁體中文"),
+    ("cs", "Čeština"),
+    ("da", "Dansk"),
+    ("nl", "Nederlands"),
+    ("eo", "Esperanto"),
+    ("fi", "Suomi"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("el", "Ελληνικά"),
+    ("he", "עברית"),
+    ("hu", "Magyar"),
+    ("id", "Bahasa Indonesia"),
+    ("it", "Italiano"),
+    ("ja", "日本語"),
+    ("ko", "한국인"),
+    ("no", "Norsk"),
+    ("fa", "فارسی"),
+    ("pl", "Polski"),
+    ("pt", "Português (Portugal)"),
+    ("pt_BR", "Português (Brasil)"),
+    ("ro", "Română"),
+    ("ru", "Русский"),
+    ("sr", "Српски"),
+    ("sk", "Slovenčina"),
+    ("sl", "Slovenščina"),
+    ("es", "Español"),
+    ("sv", "Svenska"),
+    ("tt", "Татар"),
+    ("tr", "Türkçe"),
+    ("uk", "Українська"),
+    ("vi", "Tiếng Việt"),
+];
+
+/// What a locale calls itself, if it is one this build ships.
+///
+/// `None` for anything else, including a tag that is a real language: the client can only
+/// offer what is in `static/locales`, and inventing a name for a locale with no catalogue
+/// would put an entry in the picker that selects nothing.
+#[must_use]
+pub fn name_of(locale: &str) -> Option<&'static str> {
+    NAMES
+        .iter()
+        .find(|(tag, _)| *tag == locale)
+        .map(|(_, name)| *name)
+}
+
 /// The locales in `static/locales` whose script runs right to left.
 const RIGHT_TO_LEFT: [&str; 3] = ["ar", "fa", "he"];
 
@@ -208,8 +275,90 @@ fn flatten(value: &Value, prefix: &mut String, out: &mut HashMap<String, String>
 
 #[cfg(test)]
 mod tests {
+    // A test that cannot unwrap has to invent error handling for cases that cannot
+    // happen, which is noise around the thing being checked.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+    /// The names are ported, so they can drift. This reads the file they were ported from.
+    #[test]
+    fn the_names_match_the_electron_client() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/renderer/language/languages.ts"),
+        )
+        .expect("the Electron client is beside the crates");
+
+        // Deliberately literal, for the reason `settings`'s parser is: a tolerant one would
+        // skip an entry whose shape it did not recognise, and a skipped entry is exactly
+        // the one that has drifted.
+        let mut found: Vec<(String, String)> = Vec::new();
+        let lines: Vec<&str> = source.lines().collect();
+        for (at, line) in lines.iter().enumerate() {
+            let Some(tag) = line
+                .strip_prefix('\t')
+                .and_then(|rest| rest.strip_suffix(": {"))
+            else {
+                continue;
+            };
+            if !tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            let Some(name) = lines
+                .get(at + 2)
+                .and_then(|line| line.trim().strip_prefix("name: '"))
+                .and_then(|rest| rest.strip_suffix("',"))
+            else {
+                continue;
+            };
+            found.push((tag.to_owned(), name.to_owned()));
+        }
+
+        assert_eq!(found.len(), NAMES.len(), "a locale was added or removed");
+        for (at, (tag, name)) in found.iter().enumerate() {
+            assert_eq!(
+                (tag.as_str(), name.as_str()),
+                NAMES[at],
+                "entry {at} has drifted"
+            );
+        }
+    }
+
+    /// Every name has a catalogue behind it, and every catalogue has a name. A tag in the
+    /// picker with no directory selects nothing; a directory with no name is a translation
+    /// nobody can reach.
+    #[test]
+    fn the_table_and_the_tree_agree() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static/locales");
+        let mut shipped: Vec<String> = std::fs::read_dir(&root)
+            .expect("the locale tree")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        shipped.sort();
+
+        let mut named: Vec<String> = NAMES.iter().map(|(tag, _)| (*tag).to_owned()).collect();
+        named.sort();
+        assert_eq!(named, shipped);
+    }
+
+    /// A tag this build does not ship has no name rather than a guessed one: the picker can
+    /// only offer what has a catalogue.
+    #[test]
+    fn an_unshipped_locale_has_no_name() {
+        assert_eq!(name_of("en"), Some("English"));
+        assert_eq!(
+            name_of("zh_CN"),
+            NAMES.iter().find(|(t, _)| *t == "zh_CN").map(|(_, n)| *n)
+        );
+        assert_eq!(name_of("xx"), None);
+        assert_eq!(name_of(""), None);
+        assert_eq!(
+            name_of("EN"),
+            None,
+            "tags are matched as the directories are named"
+        );
+    }
     use super::*;
     use std::path::PathBuf;
 

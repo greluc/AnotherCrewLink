@@ -33,6 +33,7 @@ version = "0.0.0"
 dependencies = [
  "acl-core",
  "acl-game",
+ "acl-i18n",
  "acl-ui",
  "eframe",
  "egui",

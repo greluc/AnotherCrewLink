@@ -21,6 +21,8 @@ path = "src/main.rs"
 acl-core = { path = "../acl-core", version = "0.0.0" }
 acl-game = { path = "../acl-game", version = "0.0.0" }
 acl-ui = { path = "../acl-ui", version = "0.0.0" }
+# The 37 locale names and the catalogue the settings screen reads its strings from.
+acl-i18n.workspace = true
 # `wgpu`, as §3.3 chose and §4.8 item 6 settled on 2026-08-26. It was `glow` until then,
 # because the fallback chain is what the choice turns on and the chain was not built yet:
 # `force_fallback_adapter` and adapter selection are wgpu's, and glow has no equivalent —
