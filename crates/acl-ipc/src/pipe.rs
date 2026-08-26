@@ -354,6 +354,12 @@ mod platform {
         }
     }
 
+    impl crate::stream::Peek for PipeConnection {
+        fn available(&self) -> io::Result<usize> {
+            Self::available(self)
+        }
+    }
+
     impl io::Read for PipeConnection {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             let mut read = 0u32;

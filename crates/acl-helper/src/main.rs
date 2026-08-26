@@ -227,22 +227,20 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
         // Everything the core has said since the last tick. A command therefore takes at
         // most one interval to be acted on, which is below anything a person notices about
         // a push-to-talk or an overlay toggle.
+        //
+        // `try_recv`, which consults the transport's own buffer before the pipe. A loop
+        // that peeked only at the pipe dropped every frame that arrived in the same read
+        // as the one before it -- and that is not hypothetical: it is why this helper took
+        // its offsets and then never read the game. `StartReading` came in with them.
         loop {
-            match transport.stream().available() {
-                // Nothing waiting. Not a close: a pipe with a live peer and an empty buffer
-                // says zero, which is the ordinary case here.
-                Ok(0) => break,
-                // The pipe is gone, which means the core is. Nothing to report and nothing
-                // to stay alive for.
+            let message = match transport.try_recv::<CoreMessage>() {
+                Ok(Some(message)) => message,
+                // Nothing waiting. Not a close: a live peer with nothing to say looks
+                // exactly like this, and it is the ordinary case.
+                Ok(None) => break,
+                // A clean close, a torn frame, or a pipe that is gone. All three mean the
+                // core is not there, so there is nothing to report and nobody to report to.
                 Err(_) => return Ok(()),
-                Ok(_) => {}
-            }
-            // May block, but only to finish a frame whose first bytes have already
-            // arrived. A core that writes half a message and dies would hold this open;
-            // the watchdog is what ends that, because it is watching the core rather than
-            // the pipe.
-            let Ok(Some(message)) = transport.recv::<CoreMessage>() else {
-                return Ok(());
             };
             match message {
                 CoreMessage::SetOffsets(bundle) => {

@@ -175,19 +175,17 @@ impl Link {
         };
 
         loop {
-            match transport.stream().available() {
-                Ok(0) => break,
-                Ok(_) => {}
+            // `try_recv`, which consults this transport's own buffer before the pipe. A
+            // loop that peeked only at the pipe would drop every frame that arrived in the
+            // same read as the one before it -- see `StreamTransport::try_recv`.
+            let message = match transport.try_recv::<HelperMessage>() {
+                Ok(Some(message)) => message,
+                Ok(None) => break,
+                // A clean close, a torn frame, or a pipe that is gone.
                 Err(_) => {
                     self.lost();
                     return events;
                 }
-            }
-            // A clean close or a torn frame both mean the conversation is over, and so
-            // does anything that is not a message.
-            let Ok(Some(message)) = transport.recv::<HelperMessage>() else {
-                self.lost();
-                return events;
             };
             match message {
                 HelperMessage::GameState(payload) => {

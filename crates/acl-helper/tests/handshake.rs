@@ -213,9 +213,11 @@ fn the_link_reads_a_real_game() {
     )
     .expect("the helper starts and answers");
 
-    // The helper samples five times a second, and attaching to the game happens on the
-    // first tick after the offsets arrive. Three seconds is a dozen frames' worth of room.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    // Long enough to cover a failed first attach and the retry after it: the helper backs
+    // off 7.5 s when it cannot reach the game, the same as `hook.ts` does, so a shorter
+    // deadline could only ever see the first attempt -- and would report "the chain is
+    // broken" for a game that was merely still loading.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut frames = 0usize;
     let mut last = None;
     while std::time::Instant::now() < deadline {
@@ -231,16 +233,16 @@ fn the_link_reads_a_real_game() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    let state = last.unwrap_or_else(|| {
-        panic!("no frame arrived in three seconds; is the game running and readable?")
-    });
+    let state =
+        last.unwrap_or_else(|| panic!("no frame arrived; is the game running and readable?"));
     eprintln!(
         "{frames} frames; last: state={:?} map={} players={}",
         state.game_state,
         state.map,
         state.players.len()
     );
-    assert!(frames > 5, "only {frames} frames in three seconds");
+    // Five a second, so ten seconds is forty-odd even allowing for the attach.
+    assert!(frames > 20, "only {frames} frames");
     link.stop();
 }
 
