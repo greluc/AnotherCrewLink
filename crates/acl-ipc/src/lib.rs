@@ -86,6 +86,7 @@ pub enum CoreMessage {
 /// disk. Refusing to talk is better than reading a struct that has changed shape.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+pub mod pipe;
 pub mod stream;
 
 /// Why a frame could not be read or written.

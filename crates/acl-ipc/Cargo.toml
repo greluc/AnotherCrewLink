@@ -16,5 +16,21 @@ postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 serde.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# The named pipe the two processes talk over. Security, Authorization and Threading are
+# not incidental: the pipe carries an explicit descriptor because a default one created by
+# an elevated process cannot be written to by the unelevated core.
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Security_Authorization",
+	"Win32_Storage_FileSystem",
+	# ReadFile, WriteFile and ConnectNamedPipe all take an OVERLAPPED pointer, so their
+	# declarations live behind this even though every call here passes null.
+	"Win32_System_IO",
+	"Win32_System_Pipes",
+	"Win32_System_Threading",
+] }
+
 [lints]
 workspace = true
