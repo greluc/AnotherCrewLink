@@ -19,6 +19,7 @@
 //! performance number already on record is the one this runs on.
 
 mod reader;
+mod settings_page;
 
 use std::path::PathBuf;
 
@@ -127,7 +128,7 @@ fn main() -> eframe::Result<()> {
             wgpu_options: renderer_options(acl_ui::renderer::chain(accelerated)),
             ..Default::default()
         },
-        Box::new(move |_| Ok(Box::new(Client::new(file)))),
+        Box::new(move |_| Ok(Box::new(Client::new(file, &paths)))),
     )
 }
 
@@ -135,6 +136,47 @@ fn main() -> eframe::Result<()> {
 ///
 /// Both, because §4.10 has the 2.0 build read what 1.x wrote — and somebody upgrading from
 /// further back than that has only `window-state.json`.
+/// Loads the strings for whichever language the settings name.
+///
+/// The stored default is `unkown` — the shipped spelling, and a sentinel meaning "ask the
+/// operating system" rather than a language tag. It is left alone rather than corrected,
+/// because correcting it would make every existing installation look like a fresh one; a
+/// value that is not a locale this build ships falls back to English, which is what the
+/// catalogue is anyway.
+fn load_catalogue(settings: &settings_page::Page) -> Option<acl_i18n::Catalogue> {
+    let wanted = settings.config().text_at("language");
+    let locale = if acl_i18n::name_of(&wanted).is_some() {
+        wanted
+    } else {
+        "en".to_owned()
+    };
+    let root = locale_root()?;
+    acl_i18n::Catalogue::load(&root, &locale)
+        .or_else(|_| acl_i18n::Catalogue::load(&root, "en"))
+        .ok()
+}
+
+/// Where the locale tree is.
+///
+/// Beside the executable in an installed build, and up two directories from `target/debug`
+/// in a development one. Both are tried rather than one being configured: a client that
+/// cannot find its strings shows keys, and finding out which layout it is in costs two
+/// `exists` calls.
+fn locale_root() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let beside = executable.parent()?.join("static").join("locales");
+    if beside.is_dir() {
+        return Some(beside);
+    }
+    let repository = executable
+        .parent()?
+        .parent()?
+        .parent()?
+        .join("static")
+        .join("locales");
+    repository.is_dir().then_some(repository)
+}
+
 /// The wgpu setup, with the fallback chain as its adapter selector.
 ///
 /// eframe asks for one adapter and the chain names two, so the walk happens inside the
@@ -250,6 +292,15 @@ fn displays() -> Vec<Rect> {
     Vec::new()
 }
 
+/// Which page the window is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Screen {
+    /// Who is in the lobby.
+    Main,
+    /// The settings.
+    Settings,
+}
+
 /// One player of the reader's state, as the roster wants to see them.
 ///
 /// A wrapper rather than an implementation on `acl_game::Player`, because the trait belongs
@@ -289,6 +340,16 @@ struct Client {
     reader: Option<reader::Reader>,
     /// What the window was last seen at, for saving on the way out.
     last_seen: Option<WindowState>,
+    /// The settings, and everything that happens to them.
+    settings: settings_page::Page,
+    /// Which page is showing.
+    page: Screen,
+    /// The strings, in whichever language the settings name.
+    ///
+    /// `None` when the locale tree cannot be found — an unusual installation, or a
+    /// development run from somewhere unexpected. Every lookup then answers with the key,
+    /// which is `t`'s documented behaviour and is legible enough to work from.
+    catalogue: Option<acl_i18n::Catalogue>,
     /// Whether the overlay is currently meant to be on screen.
     ///
     /// Kept so that show and hide are sent on the edges rather than every frame: the
@@ -298,9 +359,14 @@ struct Client {
 }
 
 impl Client {
-    fn new(state_file: PathBuf) -> Self {
+    fn new(state_file: PathBuf, paths: &Paths) -> Self {
+        let settings = settings_page::Page::open(paths.config_file());
+        let catalogue = load_catalogue(&settings);
         Self {
             state_file,
+            settings,
+            page: Screen::Main,
+            catalogue,
             // A reader that will not start is not a reason to refuse to open: the window is
             // where somebody would find out about it, so it opens and says so.
             reader: reader::Reader::start().ok(),
@@ -397,13 +463,62 @@ impl Client {
         }
     }
 
+    /// Draws the settings, and does whatever they asked for.
+    ///
+    /// The device lists are empty until the audio pipeline lands in this process: a
+    /// picker with nothing in it still shows what is stored, which is the truth about a
+    /// client that is not yet listening to anything. Wiring it to `acl_audio::device`
+    /// belongs with the pipeline that will use the answer.
+    fn show_settings(&mut self, ui: &mut egui::Ui) {
+        let catalogue = self.catalogue.as_ref();
+        let translate = move |key: &str| {
+            catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let locales = settings_page::locales();
+        let context = acl_ui::views::settings::Context {
+            t: &translate,
+            microphones: &[],
+            speakers: &[],
+            locales: &locales,
+            // Both false until this process has a session: nobody is host of a lobby it
+            // has not joined. Saying so is what puts the "not in a lobby" explanation on
+            // the rules rather than leaving them silently dead.
+            host_may_change: false,
+            in_menu_or_lobby: false,
+            capturing: self.settings.capturing(),
+        };
+        let effects = egui::ScrollArea::vertical()
+            .show(ui, |ui| self.settings.show(ui, &context))
+            .inner;
+
+        for effect in effects {
+            match effect {
+                settings_page::Effect::RestoreDefaults => {
+                    self.settings.restore_defaults();
+                    self.catalogue = load_catalogue(&self.settings);
+                }
+                settings_page::Effect::LanguageChanged => {
+                    self.catalogue = load_catalogue(&self.settings);
+                }
+                settings_page::Effect::ResetOffsets => {
+                    // The offsets belong to the helper, which owns the file and the
+                    // fetch. Nothing here can throw them away, and pretending otherwise
+                    // would leave the client showing a reset that did not happen.
+                    if let Some(reader) = self.reader.as_ref() {
+                        reader.ask_to_stop();
+                    }
+                }
+            }
+        }
+    }
+
     /// The title bar: a drag handle and the two buttons the shipped window has.
     ///
     /// There is no maximise button, matching `maximizable: false`. Dragging is
     /// `StartDrag`, which hands the move to the window manager rather than repositioning
     /// the window per frame — the difference is visible as smoothness and as whether snap
     /// layouts work at all.
-    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) {
         let bar = egui::Rect::from_min_size(
             ui.max_rect().min,
             egui::vec2(ui.max_rect().width(), TITLE_BAR),
@@ -427,6 +542,19 @@ impl Client {
                     }
                     if ui.button("—").on_hover_text("Minimise").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    // One button rather than two, and it says where it goes rather than
+                    // where you are: a gear on the settings page reads as "settings are
+                    // here", which is where you already were.
+                    let (glyph, hint) = match page {
+                        Screen::Main => ("⚙", "Settings"),
+                        Screen::Settings => ("⏴", "Back"),
+                    };
+                    if ui.button(glyph).on_hover_text(hint).clicked() {
+                        *page = match page {
+                            Screen::Main => Screen::Settings,
+                            Screen::Settings => Screen::Main,
+                        };
                     }
                 });
             });
@@ -474,6 +602,21 @@ impl eframe::App for Client {
             self.compose_overlay(&state);
         }
 
+        // Every frame while a capture is running, because it reads the key state rather
+        // than waiting for an event. Escape abandons it: the settings screen is the one
+        // place where a key press means "this key" rather than "do the thing this key
+        // does", so leaving needs a way out that is not a binding.
+        if self.settings.capturing().is_some() {
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.settings.cancel_capture();
+            } else {
+                self.settings.poll_capture();
+            }
+            // A capture is the one thing here that is waiting on something faster than the
+            // game's five frames a second.
+            ctx.request_repaint();
+        }
+
         if ctx.input(|input| input.viewport().close_requested()) {
             self.write_window_state();
         }
@@ -486,9 +629,16 @@ impl eframe::App for Client {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui::CentralPanel::default().show(ui, |ui| {
-            Self::title_bar(ui, &ctx);
+            let mut page = self.page;
+            Self::title_bar(ui, &ctx, &mut page);
+            self.page = page;
             ui.add_space(TITLE_BAR);
             ui.separator();
+
+            if self.page == Screen::Settings {
+                self.show_settings(ui);
+                return;
+            }
 
             let Some(reader) = self.reader.as_ref() else {
                 ui.label("The game reader could not be started.");

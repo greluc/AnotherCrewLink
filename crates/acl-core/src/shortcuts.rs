@@ -120,6 +120,192 @@ pub const fn mouse_button_key(button: u8) -> Option<u16> {
     }
 }
 
+/// Every key the settings screen can capture, as virtual-key codes.
+///
+/// The list exists so that capturing scans a fixed set rather than all 256 codes. Most of
+/// what is left is unassigned, reserved, or a key no keyboard has -- and several of the
+/// ones that *are* assigned would be caught by a scan and should not be: `VK_LBUTTON` is
+/// the click that started the capture.
+///
+/// In the order it is scanned, and the order matters in one place: the sided modifiers
+/// come before the unsided ones do not appear at all, so a player pressing the right
+/// control key gets `RControl` rather than `Control`. Binding one side is what the
+/// shipped defaults do -- `RControl` and `RAlt` -- and a capture that widened it to both
+/// would quietly change what the shortcut does.
+pub const CAPTURABLE: &[u16] = &[
+    // Modifiers first: a player pressing Shift+something means the modifier, and the
+    // other key is what they happened to hit next.
+    vk::LSHIFT,
+    vk::RSHIFT,
+    vk::LCONTROL,
+    vk::RCONTROL,
+    vk::LMENU,
+    vk::RMENU,
+    XBUTTON1,
+    XBUTTON2,
+    vk::SPACE,
+    vk::BACK,
+    vk::DELETE,
+    vk::RETURN,
+    vk::UP,
+    vk::DOWN,
+    vk::LEFT,
+    vk::RIGHT,
+    vk::HOME,
+    vk::END,
+    vk::PRIOR,
+    vk::NEXT,
+    vk::CAPITAL,
+    vk::ESCAPE,
+    vk::MULTIPLY,
+    vk::ADD,
+    vk::SUBTRACT,
+    vk::DECIMAL,
+    vk::DIVIDE,
+    // 0-9, A-Z, F1-F12, Numpad0-9. Written out because a range would need a `const fn`
+    // loop and this is read once.
+    //
+    // **F12 and not F24.** `binding_for` resolves F1 to F12 and nothing above, and
+    // `out_of_range_lookalikes_bind_nothing` records that as deliberate -- F13 is "a name
+    // nothing writes". Capturing one would write it, and it would resolve to nothing: a
+    // shortcut that looks set and does nothing. So a keyboard with the extra keys cannot
+    // bind them, which is what the poll can honour.
+    0x30,
+    0x31,
+    0x32,
+    0x33,
+    0x34,
+    0x35,
+    0x36,
+    0x37,
+    0x38,
+    0x39,
+    0x41,
+    0x42,
+    0x43,
+    0x44,
+    0x45,
+    0x46,
+    0x47,
+    0x48,
+    0x49,
+    0x4A,
+    0x4B,
+    0x4C,
+    0x4D,
+    0x4E,
+    0x4F,
+    0x50,
+    0x51,
+    0x52,
+    0x53,
+    0x54,
+    0x55,
+    0x56,
+    0x57,
+    0x58,
+    0x59,
+    0x5A,
+    0x60,
+    0x61,
+    0x62,
+    0x63,
+    0x64,
+    0x65,
+    0x66,
+    0x67,
+    0x68,
+    0x69,
+    0x70,
+    0x71,
+    0x72,
+    0x73,
+    0x74,
+    0x75,
+    0x76,
+    0x77,
+    0x78,
+    0x79,
+    0x7A,
+    0x7B,
+];
+
+/// The name to store for a key the player just pressed.
+///
+/// The other direction from [`binding_for`], and the settings screen's half of it: a
+/// capture reads a virtual-key code and has to write down something the poll will resolve
+/// back to the same key. `every_captured_name_resolves_to_the_key_it_came_from` is what
+/// holds the two together.
+///
+/// `None` for a code this client cannot name, which is most of them. A capture that
+/// stored a name the poll does not recognise would look like it worked and do nothing.
+#[must_use]
+pub fn name_for(virtual_key: u16) -> Option<&'static str> {
+    // The sided modifiers, not the unsided ones. A player who pressed the right control
+    // key means that key; widening it to both is a change to what the shortcut does, made
+    // silently, at the moment they were trying to be specific.
+    let named = match virtual_key {
+        vk::LSHIFT => "LShift",
+        vk::RSHIFT => "RShift",
+        vk::LCONTROL => "LControl",
+        vk::RCONTROL => "RControl",
+        vk::LMENU => "LAlt",
+        vk::RMENU => "RAlt",
+        XBUTTON1 => "MouseButton4",
+        XBUTTON2 => "MouseButton5",
+        vk::SPACE => "Space",
+        vk::BACK => "Backspace",
+        vk::DELETE => "Delete",
+        vk::RETURN => "Enter",
+        vk::UP => "Up",
+        vk::DOWN => "Down",
+        vk::LEFT => "Left",
+        vk::RIGHT => "Right",
+        vk::HOME => "Home",
+        vk::END => "End",
+        vk::PRIOR => "PageUp",
+        vk::NEXT => "PageDown",
+        vk::CAPITAL => "CapsLock",
+        vk::ESCAPE => "Escape",
+        vk::MULTIPLY => "NumpadMultiply",
+        vk::ADD => "NumpadAdd",
+        vk::SUBTRACT => "NumpadSubtract",
+        vk::DECIMAL => "NumpadDecimal",
+        vk::DIVIDE => "NumpadDivide",
+        _ => return spelled(virtual_key),
+    };
+    Some(named)
+}
+
+/// The names that are spelled from the code rather than looked up: letters, digits, the
+/// function keys and the numeric keypad.
+///
+/// Static strings rather than a `String`, so a capture allocates nothing and the return
+/// type stays the same as the table above. The tables are the digits themselves, which is
+/// why they are short enough to write out.
+fn spelled(virtual_key: u16) -> Option<&'static str> {
+    const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    const LETTERS: [&str; 26] = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
+    // F1 to F12, matching what `binding_for` resolves. See `CAPTURABLE`.
+    const FUNCTION: [&str; 12] = [
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    ];
+    const NUMPAD: [&str; 10] = [
+        "Numpad0", "Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7",
+        "Numpad8", "Numpad9",
+    ];
+    match virtual_key {
+        0x30..=0x39 => DIGITS.get(usize::from(virtual_key - 0x30)).copied(),
+        0x41..=0x5A => LETTERS.get(usize::from(virtual_key - 0x41)).copied(),
+        vk::F1..=0x7B => FUNCTION.get(usize::from(virtual_key - vk::F1)).copied(),
+        vk::NUMPAD0..=0x69 => NUMPAD.get(usize::from(virtual_key - vk::NUMPAD0)).copied(),
+        _ => None,
+    }
+}
+
 /// Resolves a stored shortcut name.
 ///
 /// Single characters are uppercased first. The pre-1.0.4 code compared a character code
@@ -213,8 +399,96 @@ mod tests {
     // A test that cannot unwrap has to invent error handling for cases that cannot
     // happen, which is noise around the thing being checked.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-
     use super::*;
+
+    /// The two directions have to agree, or a capture writes down a name the poll will
+    /// not resolve -- a shortcut that looks set and does nothing, which is the exact bug
+    /// `binding_for` already carries a comment about.
+    #[test]
+    fn every_captured_name_resolves_to_the_key_it_came_from() {
+        for &code in CAPTURABLE {
+            let name = name_for(code).unwrap_or_else(|| panic!("{code:#04X} has no name"));
+            let binding = binding_for(name);
+            match binding {
+                Binding::Keys(ref codes) => assert!(
+                    codes.contains(&code),
+                    "{name} came from {code:#04X} and resolves to {codes:?}"
+                ),
+                Binding::Mouse(button) => assert_eq!(
+                    mouse_button_key(button),
+                    Some(code),
+                    "{name} came from {code:#04X}"
+                ),
+                other => panic!("{name} came from {code:#04X} and resolves to {other:?}"),
+            }
+        }
+    }
+
+    /// A capture never widens a sided modifier. A player pressing the right control key
+    /// means that key; `Control` would bind both, silently, at the moment they were being
+    /// specific -- and the shipped defaults are sided, so it would also change what an
+    /// untouched installation does.
+    #[test]
+    fn a_captured_modifier_keeps_its_side() {
+        assert_eq!(name_for(vk::RCONTROL), Some("RControl"));
+        assert_eq!(name_for(vk::LCONTROL), Some("LControl"));
+        assert_eq!(name_for(vk::RMENU), Some("RAlt"));
+        for name in [name_for(vk::LSHIFT), name_for(vk::RSHIFT)] {
+            let name = name.expect("both shift keys are nameable");
+            assert_ne!(name, "Shift", "a sided key was widened to both");
+        }
+    }
+
+    /// The shipped defaults are all capturable, which is what says the screen can reproduce
+    /// a fresh installation rather than only depart from it.
+    #[test]
+    fn the_shipped_defaults_can_all_be_captured() {
+        for name in ["V", "RControl", "RAlt", "F"] {
+            let Binding::Keys(codes) = binding_for(name) else {
+                panic!("{name} is not a key binding");
+            };
+            let code = codes.first().copied().expect("a bound key");
+            assert!(CAPTURABLE.contains(&code), "{name} cannot be captured");
+            assert_eq!(name_for(code), Some(name));
+        }
+    }
+
+    /// The function keys stop where `binding_for` stops.
+    ///
+    /// A keyboard with F13 upward cannot bind them, and that is the honest answer rather
+    /// than a limitation: `out_of_range_lookalikes_bind_nothing` records F13 as a name
+    /// nothing writes, so capturing one would store a shortcut that resolves to nothing.
+    #[test]
+    fn the_function_keys_stop_where_the_poll_stops() {
+        assert_eq!(name_for(vk::F1 + 11), Some("F12"));
+        assert_eq!(
+            name_for(vk::F1 + 12),
+            None,
+            "F13 has no binding to come back to"
+        );
+        assert_eq!(binding_for("F13"), Binding::None);
+    }
+
+    /// Codes this client cannot name have no name rather than a guessed one.
+    #[test]
+    fn an_unnameable_code_has_no_name() {
+        // `VK_LBUTTON` is the click that started the capture, and is deliberately absent.
+        assert_eq!(name_for(0x01), None);
+        assert_eq!(name_for(0x00), None);
+        assert_eq!(name_for(0xFF), None);
+        assert!(!CAPTURABLE.contains(&0x01));
+    }
+
+    /// `NumpadEnter` is the one name the poll cannot reproduce, and nothing captures it:
+    /// the numeric keypad's Enter is `VK_RETURN` with an extended-key flag that is not in
+    /// the key state, so a capture sees plain Enter and stores `Enter`, which is true.
+    #[test]
+    fn nothing_captures_the_name_the_poll_cannot_reproduce() {
+        for &code in CAPTURABLE {
+            assert_ne!(name_for(code), Some("NumpadEnter"), "{code:#04X}");
+        }
+        assert_eq!(binding_for("NumpadEnter"), Binding::Unsupported);
+    }
 
     #[test]
     fn a_lowercase_letter_binds_the_same_key_as_an_uppercase_one() {
