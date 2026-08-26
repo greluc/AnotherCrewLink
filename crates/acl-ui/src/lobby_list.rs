@@ -42,6 +42,63 @@ impl LobbyRow {
     }
 }
 
+/// Why a lobby is listed but cannot be joined.
+///
+/// Three reasons, each with its own string, because "you cannot join this" without saying
+/// why sends the player to try the next row and the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The game has already started.
+    InProgress,
+    /// There is no room.
+    Full,
+    /// It is running a different mod, so the two clients would not agree about the game.
+    DifferentMod,
+}
+
+impl Refusal {
+    /// The i18n key that says so.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::InProgress => "lobbybrowser.code_tooltips.in_progress",
+            Self::Full => "lobbybrowser.code_tooltips.full_lobby",
+            Self::DifferentMod => "lobbybrowser.code_tooltips.incompatible",
+        }
+    }
+}
+
+impl LobbyRow {
+    /// Why this lobby cannot be joined, if it cannot.
+    ///
+    /// The order is the order the Electron browser asks in, and it is the order a player
+    /// would: a game in progress is not worth mentioning the mod of.
+    ///
+    /// **Full is `is_full`, not `players == capacity`.** The Electron browser tests the
+    /// strict equality here — the same mistake `sortLobbies` made, in the same feature —
+    /// so a lobby the server reports as *over* its own limit is offered as joinable, and
+    /// the join fails at the server. The ordering was corrected when it was ported; this
+    /// is the second place it had to be.
+    #[must_use]
+    pub const fn refusal(self, mods_match: bool) -> Option<Refusal> {
+        if !self.waiting {
+            Some(Refusal::InProgress)
+        } else if self.is_full() {
+            Some(Refusal::Full)
+        } else if mods_match {
+            None
+        } else {
+            Some(Refusal::DifferentMod)
+        }
+    }
+
+    /// Whether the join button is offered at all.
+    #[must_use]
+    pub const fn joinable(self, mods_match: bool) -> bool {
+        self.refusal(mods_match).is_none()
+    }
+}
+
 impl Ord for LobbyRow {
     /// Three keys, each applied in both directions.
     ///
@@ -83,6 +140,75 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::*;
+
+    /// The three reasons are distinct and each has its own string. "You cannot join this"
+    /// without saying why sends the player to try the next row, and the next.
+    #[test]
+    fn each_refusal_says_something_different() {
+        let waiting_half = LobbyRow {
+            waiting: true,
+            players: 5,
+            capacity: 10,
+        };
+        assert_eq!(waiting_half.refusal(true), None);
+        assert!(waiting_half.joinable(true));
+        assert_eq!(
+            waiting_half.refusal(false),
+            Some(Refusal::DifferentMod),
+            "a lobby with room, running something else"
+        );
+
+        let started = LobbyRow {
+            waiting: false,
+            ..waiting_half
+        };
+        assert_eq!(started.refusal(true), Some(Refusal::InProgress));
+
+        let full = LobbyRow {
+            players: 10,
+            ..waiting_half
+        };
+        assert_eq!(full.refusal(true), Some(Refusal::Full));
+
+        let mut strings = vec![
+            Refusal::InProgress.reason(),
+            Refusal::Full.reason(),
+            Refusal::DifferentMod.reason(),
+        ];
+        strings.sort_unstable();
+        strings.dedup();
+        assert_eq!(strings.len(), 3, "two refusals share a string");
+    }
+
+    /// A started game is not worth mentioning the mod of, and a full one is not worth
+    /// mentioning either: the first reason asked is the one that is shown.
+    #[test]
+    fn the_first_reason_is_the_one_that_matters() {
+        let hopeless = LobbyRow {
+            waiting: false,
+            players: 12,
+            capacity: 10,
+        };
+        assert_eq!(hopeless.refusal(false), Some(Refusal::InProgress));
+    }
+
+    /// The one the Electron browser gets wrong.
+    ///
+    /// It disables the join button on `current_players === max_players`, so a lobby the
+    /// server reports as over its own limit is offered as joinable and the join fails at
+    /// the server. `is_full` is `>=` for exactly this reason, and the ordering was
+    /// corrected when it was ported; the button is the second place it had to be.
+    #[test]
+    fn a_lobby_over_its_own_limit_is_full_here_too() {
+        let overfull = LobbyRow {
+            waiting: true,
+            players: 11,
+            capacity: 10,
+        };
+        assert!(overfull.is_full());
+        assert_eq!(overfull.refusal(true), Some(Refusal::Full));
+        assert!(!overfull.joinable(true));
+    }
 
     const WAITING_HALF: LobbyRow = LobbyRow {
         waiting: true,
