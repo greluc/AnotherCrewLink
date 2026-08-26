@@ -145,10 +145,10 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > `signal_route`, carries Opus over the mesh, and opens a microphone and a speaker at both
 > ends — capture, encode, send, order, decode, place by `voice_params`, mix, play.
 >
-> Two things are outside that loop and are named rather than implied: there is **no echo
-> canceller** (`acl_audio::apm` wants the playback stream as its reference, which is a
-> real-time data structure rather than a mutex) and **no resampling** (a device that offers
-> only 44.1 kHz is reported as unusable rather than quietly played at the wrong speed).
+> The echo canceller and the resampler are in it too: `Apm::render` is fed from the output
+> callback before every `Apm::capture`, and a device that does not offer 48 kHz is opened at
+> its own rate and resampled rather than refused. Measured on a real machine: one buffer
+> underrun at start-up, none in the twenty seconds after.
 >
 > What has never been done is the thing no test here can do: two people, two machines,
 > hearing each other.

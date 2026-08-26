@@ -17,17 +17,25 @@
 //! *tries*: a callback that blocked on the frame loop would be a callback that missed its
 //! deadline because the window was busy drawing hats.
 //!
-//! # What is deliberately not here
+//! # The reference signal, and why it flows the way it does
 //!
-//! **No resampling yet.** The device is opened at 48 kHz or the pipeline does not start,
-//! and `Chosen::needs_resampling` is what says which — `acl-audio` has `rubato` behind it
-//! and joining it is one more step. A device that only offers 44.1 kHz is a device this
-//! reports as unusable rather than one it quietly plays at the wrong speed.
+//! The echo canceller has to be told what the speakers are about to play *before* it is
+//! asked to clean what the microphone heard — the other order asks it to remove an echo of
+//! something it has not been told about yet. So the output callback copies every frame it
+//! plays into a queue, and the capture side drains that queue into `Apm::render` before
+//! each `Apm::capture`.
 //!
-//! **No echo cancellation in the loop.** `acl_audio::apm` exists and wants the playback
-//! stream as its reference signal, which means handing the output callback's buffer back to
-//! the input callback's. That is a real-time data structure and not a `Mutex`, and doing it
-//! badly is worse than not doing it.
+//! Both queues are behind locks the callbacks only ever *try*. A callback that blocked
+//! would miss a deadline measured in milliseconds, and the worst case of not blocking is a
+//! frame of reference the canceller did not get — which costs some cancellation for one
+//! frame. Blocking costs a click.
+//!
+//! # Rates
+//!
+//! The pipeline works at 48 kHz because Opus does. A device that offers it is opened at it;
+//! one that does not is opened at its own rate and resampled by `acl_audio::resample`,
+//! which is `rubato` underneath. The alternative — refusing the device — is a client with
+//! no microphone on hardware that has one.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -94,7 +102,7 @@ impl Audio {
         let (encoded, outgoing) = std::sync::mpsc::channel::<Vec<u8>>();
         let placements = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
 
-        match Self::open(packets, encoded, &placements) {
+        match Self::open(packets, &encoded, &placements) {
             Ok(streams) => Self {
                 incoming,
                 outgoing,
@@ -148,20 +156,21 @@ impl Audio {
 
     /// Opens both devices and starts the mixing thread.
     ///
-    /// The order matters only in one way: the mixing thread is started first, so a packet
-    /// that arrives while a device is still opening has somewhere to go.
+    /// The order matters in one way: the mixing thread is started first, so a packet that
+    /// arrives while a device is still opening has somewhere to go.
     #[cfg(feature = "audio")]
     fn open(
         packets: Receiver<Incoming>,
-        encoded: Sender<Vec<u8>>,
+        encoded: &Sender<Vec<u8>>,
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
-        use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
-
         // What the mixing thread produces and the output callback consumes. A mutex the
         // callback only ever *tries*: blocking there would miss a deadline measured in
         // milliseconds because the mixer was busy, and a click is worse than a gap.
         let ready: Arc<Mutex<std::collections::VecDeque<f32>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        // What the speakers played, on its way to the echo canceller.
+        let played: Arc<Mutex<std::collections::VecDeque<f32>>> =
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
 
         let mixing = Arc::clone(&ready);
@@ -172,109 +181,198 @@ impl Audio {
             .map_err(|error| format!("the mixer could not be started: {error}"))?;
 
         let host = cpal::default_host();
-        let mut streams: Vec<Box<dyn std::any::Any + Send>> = Vec::new();
-
-        // The speaker. Opened first, because a client that can hear is useful on its own
-        // and a microphone failure should not cost it.
-        let output = host
-            .default_output_device()
-            .ok_or_else(|| "no output device".to_owned())?;
-        let config = at_wanted_rate(&output, false)?;
-        let playing = Arc::clone(&ready);
-        let stream = output
-            .build_output_stream(
-                config,
-                move |buffer: &mut [f32], _| {
-                    // Silence first, so every path out of here leaves a defined buffer --
-                    // an untouched output buffer is whatever was in it last time, which is
-                    // the previous frame played again.
-                    buffer.fill(0.0);
-                    let Ok(mut ready) = playing.try_lock() else {
-                        return;
-                    };
-                    for slot in buffer.iter_mut() {
-                        let Some(sample) = ready.pop_front() else {
-                            break;
-                        };
-                        *slot = sample;
-                    }
-                },
-                |error| eprintln!("AnotherCrewLink: output stream: {error}"),
-                None,
-            )
-            .map_err(|error| format!("the speaker could not be opened: {error}"))?;
-        stream
-            .play()
-            .map_err(|error| format!("the speaker would not start: {error}"))?;
-        streams.push(Box::new(stream));
-
-        // The microphone.
-        let input = host
-            .default_input_device()
-            .ok_or_else(|| "no input device".to_owned())?;
-        let config = at_wanted_rate(&input, true)?;
-        let channels = config.channels as usize;
-        let mut opus = Encoder::new().map_err(|error| format!("the encoder refused: {error}"))?;
-        let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
-        let mut packet = Vec::new();
-        let stream = input
-            .build_input_stream(
-                config,
-                move |buffer: &[f32], _| {
-                    // Down to mono here rather than later: the encoder is mono, and
-                    // carrying two channels as far as the encoder only to average them
-                    // there is twice the memory for the same answer.
-                    for frame in buffer.chunks(channels.max(1)) {
-                        let sum: f32 = frame.iter().sum();
-                        #[expect(
-                            clippy::cast_precision_loss,
-                            reason = "a channel count, which is one or two"
-                        )]
-                        pending.push(sum / channels.max(1) as f32);
-                    }
-                    while pending.len() >= FRAME_SAMPLES {
-                        let frame: Vec<f32> = pending.drain(..FRAME_SAMPLES).collect();
-                        packet.clear();
-                        if encode_frame(&mut opus, &frame, &mut packet).is_ok()
-                            && encoded.send(packet.clone()).is_err()
-                        {
-                            // Nobody is listening any more, which is a client on its way
-                            // out. Stop trying rather than filling a queue nothing drains.
-                            return;
-                        }
-                    }
-                },
-                |error| eprintln!("AnotherCrewLink: input stream: {error}"),
-                None,
-            )
-            .map_err(|error| format!("the microphone could not be opened: {error}"))?;
-        stream
-            .play()
-            .map_err(|error| format!("the microphone would not start: {error}"))?;
-        streams.push(Box::new(stream));
-
-        Ok(streams)
+        // The speaker first, because a client that can hear is useful on its own and a
+        // microphone failure should not cost it.
+        let speaker = open_speaker(&host, &ready, &played)?;
+        let microphone = open_microphone(&host, encoded, &played)?;
+        Ok(vec![speaker, microphone])
     }
 
     /// Off Windows, or in a build without the audio feature, there are no devices.
     #[cfg(not(feature = "audio"))]
     fn open(
         _packets: Receiver<Incoming>,
-        _encoded: Sender<Vec<u8>>,
+        _encoded: &Sender<Vec<u8>>,
         _placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         Err("this build has no audio devices; enable the `audio` feature".to_owned())
     }
 }
 
-/// A configuration at the rate the pipeline works in, or a refusal.
-///
-/// **48 kHz or nothing, for now.** `acl-audio` has `rubato` behind it and
-/// `Chosen::needs_resampling` is what says a device needs it; joining the two is one more
-/// step. A device that only offers 44.1 kHz is reported as unusable rather than quietly
-/// played at the wrong speed, which is the failure that sounds like a broken microphone.
+/// Opens the speaker: mixed frames out, and a copy of them for the canceller.
 #[cfg(feature = "audio")]
-fn at_wanted_rate(device: &cpal::Device, input: bool) -> Result<cpal::StreamConfig, String> {
+fn open_speaker(
+    host: &cpal::Host,
+    ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+    played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+) -> Result<Box<dyn std::any::Any + Send>, String> {
+    use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
+
+    let output = host
+        .default_output_device()
+        .ok_or_else(|| "no output device".to_owned())?;
+    let config = at_any_rate(&output, false)?;
+    let channels = config.channels.max(1) as usize;
+    let playing = Arc::clone(ready);
+    let recording = Arc::clone(played);
+
+    let stream = output
+        .build_output_stream(
+            config,
+            move |buffer: &mut [f32], _: &_| {
+                // Silence first, so every path out of here leaves a defined buffer -- an
+                // untouched output buffer is whatever was in it last time, which is the
+                // previous frame played again.
+                buffer.fill(0.0);
+                if let Ok(mut ready) = playing.try_lock() {
+                    for slot in buffer.iter_mut() {
+                        let Some(sample) = ready.pop_front() else {
+                            break;
+                        };
+                        *slot = sample;
+                    }
+                }
+                // A copy for the canceller, averaged to mono. Tried rather than waited on:
+                // a frame of reference it did not get costs some cancellation for one
+                // frame, and blocking here costs a click.
+                if let Ok(mut played) = recording.try_lock() {
+                    // Capped for the same reason the playback queue is: a capture stream
+                    // that has stopped draining must not turn this into a queue that grows.
+                    const CAP: usize = FRAME_SAMPLES * 25;
+                    if played.len() < CAP {
+                        for frame in buffer.chunks(channels) {
+                            let sum: f32 = frame.iter().sum();
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "a channel count, which is one or two"
+                            )]
+                            played.push_back(sum / channels as f32);
+                        }
+                    }
+                }
+            },
+            |error| eprintln!("AnotherCrewLink: output stream: {error}"),
+            None,
+        )
+        .map_err(|error| format!("the speaker could not be opened: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("the speaker would not start: {error}"))?;
+    Ok(Box::new(stream))
+}
+
+/// Opens the microphone: resample, cancel the echo, encode, hand over.
+#[cfg(feature = "audio")]
+fn open_microphone(
+    host: &cpal::Host,
+    encoded: &Sender<Vec<u8>>,
+    played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+) -> Result<Box<dyn std::any::Any + Send>, String> {
+    use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
+
+    let input = host
+        .default_input_device()
+        .ok_or_else(|| "no input device".to_owned())?;
+    let config = at_any_rate(&input, true)?;
+    let channels = config.channels.max(1) as usize;
+
+    let mut opus = Encoder::new().map_err(|error| format!("the encoder refused: {error}"))?;
+    // `None` when the device already runs at 48 kHz, which is the common case and the one
+    // that should cost nothing.
+    let mut rates = if config.sample_rate == acl_audio::stream::WANTED_RATE {
+        None
+    } else {
+        Some(
+            acl_audio::resample::Resampler::new(config.sample_rate, FRAME_SAMPLES)
+                .map_err(|error| format!("no resampler for this device: {error}"))?,
+        )
+    };
+    let mut apm: Box<dyn acl_audio::apm::Apm> = Box::new(acl_audio::apm::Sonora::new());
+    // A starting point rather than a measurement: the canceller refines it, and what it
+    // needs is the right region. Two device buffers is what a default-sized `cpal` stream
+    // comes to on Windows.
+    apm.set_delay_ms(40);
+
+    let reference = Arc::clone(played);
+    let encoded = encoded.clone();
+    let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
+    let mut converted: Vec<f32> = Vec::new();
+    let mut packet = Vec::new();
+
+    let stream = input
+        .build_input_stream(
+            config,
+            move |buffer: &[f32], _: &_| {
+                // Down to mono here rather than later: the encoder is mono, and carrying
+                // two channels as far as the encoder only to average them there is twice
+                // the memory for the same answer.
+                let mut mono: Vec<f32> = Vec::with_capacity(buffer.len());
+                for frame in buffer.chunks(channels) {
+                    let sum: f32 = frame.iter().sum();
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "a channel count, which is one or two"
+                    )]
+                    mono.push(sum / channels as f32);
+                }
+
+                match rates.as_mut() {
+                    Some(rates) => {
+                        converted.clear();
+                        if rates.push(&mono, &mut converted).is_ok() {
+                            pending.extend_from_slice(&converted);
+                        }
+                    }
+                    None => pending.extend_from_slice(&mono),
+                }
+
+                while pending.len() >= FRAME_SAMPLES {
+                    let mut frame: Vec<f32> = pending.drain(..FRAME_SAMPLES).collect();
+
+                    // What the speakers played, before what the microphone heard. The other
+                    // order asks the canceller to remove an echo of something it has not
+                    // been told about yet.
+                    if let Ok(mut played) = reference.try_lock() {
+                        while played.len() >= FRAME_SAMPLES {
+                            let render: Vec<f32> = played.drain(..FRAME_SAMPLES).collect();
+                            let _ = apm.render(&render);
+                        }
+                    }
+                    let _ = apm.capture(&mut frame);
+
+                    packet.clear();
+                    if encode_frame(&mut opus, &frame, &mut packet).is_ok()
+                        && encoded.send(packet.clone()).is_err()
+                    {
+                        // Nobody is listening any more, which is a client on its way out.
+                        // Stop trying rather than filling a queue nothing drains.
+                        return;
+                    }
+                }
+            },
+            // Printed rather than swallowed. Measured on a real machine: exactly one
+            // underrun, at start-up, and none in the twenty seconds after -- the first
+            // callback pays for the encoder's and the canceller's warm-up while the device
+            // is already running. Worth knowing about, and worth not mistaking for the
+            // recurring kind, which would sound like a stutter rather than like nothing.
+            |error| eprintln!("AnotherCrewLink: input stream: {error}"),
+            None,
+        )
+        .map_err(|error| format!("the microphone could not be opened: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("the microphone would not start: {error}"))?;
+    Ok(Box::new(stream))
+}
+
+/// A configuration for a device, at 48 kHz if it offers it and at its own rate if not.
+///
+/// `acl_audio::stream::choose` makes the choice — it is tested without a sound card — and
+/// this translates `cpal`'s types into what it takes and back. A device that cannot give
+/// 48 kHz is opened at what it has and resampled, because refusing it would be a client
+/// with no microphone on hardware that has one.
+#[cfg(feature = "audio")]
+fn at_any_rate(device: &cpal::Device, input: bool) -> Result<cpal::StreamConfig, String> {
     use cpal::traits::DeviceTrait as _;
 
     let configs: Vec<cpal::SupportedStreamConfigRange> = if input {
@@ -307,13 +405,6 @@ fn at_wanted_rate(device: &cpal::Device, input: bool) -> Result<cpal::StreamConf
 
     let chosen = acl_audio::stream::choose(&supported, if input { 1 } else { 2 })
         .map_err(|error| error.to_string())?;
-    if chosen.needs_resampling() {
-        return Err(format!(
-            "the device offers {} Hz and this build needs {}",
-            chosen.rate,
-            acl_audio::stream::WANTED_RATE
-        ));
-    }
     Ok(cpal::StreamConfig {
         channels: chosen.channels,
         sample_rate: chosen.rate,
