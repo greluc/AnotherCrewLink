@@ -1941,7 +1941,7 @@ from the client even after our own 1.x support ends.
 | P1+ Foundations | 5.0 | built | no |
 | P2+ Game reader | 6.0 | built, G1 met | with P3+ |
 | P3+ Audio engine | 10.0 | built, G2 met | critical path |
-| P4+ Transport | 10.5 | decisions built; signalling wired, voice not | critical path |
+| P4+ Transport | 10.5 | decisions built; mesh wired, audio not | critical path |
 | P5+ Platform | 6.0 | built | with P4+ |
 | P6+ GUI | 11.5 | built | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
@@ -1967,9 +1967,11 @@ from the client even after our own 1.x support ends.
 > meeting overlay — turned out to be arithmetic over the window's shape plus one boolean
 > the reader already had.
 >
-> What P4+ has gained is narrower than it sounds: the client holds a signalling session,
-> and it holds it for the lobby browser. No peer connection is made and no audio moves.
-> "Signalling wired, voice not" is the whole of it.
+> What P4+ has gained, twice over. It first held a signalling session for the lobby browser
+> and nothing else; it now drives the peer mesh from it — joining the lobby the reader
+> reports, offering to newcomers, routing signals, and reporting which peers are reachable,
+> with two clients meeting through a real server to prove it. No audio moves yet, so "mesh
+> wired, audio not" is the honest form.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation
