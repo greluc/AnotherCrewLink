@@ -222,7 +222,7 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
     // is one a test harness can be -- gets `None` and every overlay command is ignored
     // rather than being a reason to stop reading the game.
     let overlay = acl_helper::overlay::start().ok();
-    let mut offsets: Option<Offsets> = None;
+    let mut offsets = Bundles::default();
     let mut sampler: Option<Sampler> = None;
     let mut reading = false;
     let mut next_attempt = Instant::now();
@@ -249,10 +249,14 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
                 Err(_) => return Ok(()),
             };
             match message {
-                CoreMessage::SetOffsets(bundle) => {
+                CoreMessage::SetOffsets { is_64bit, bundle } => {
                     match serde_json::from_slice::<Offsets>(&bundle) {
                         Ok(parsed) => {
-                            offsets = Some(parsed);
+                            if is_64bit {
+                                offsets.for_64bit = Some(parsed);
+                            } else {
+                                offsets.for_32bit = Some(parsed);
+                            }
                             // The old one described a different build. Dropping the sampler
                             // makes the next tick re-resolve signatures against the new
                             // bundle rather than keep reading through the previous one's
@@ -330,11 +334,8 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
             }
         }
 
-        if let Some(offsets) = offsets
-            .as_ref()
-            .filter(|_| reading && Instant::now() >= next_attempt)
-        {
-            sample_once(transport, offsets, &mut sampler, &mut next_attempt)?;
+        if reading && Instant::now() >= next_attempt && offsets.any() {
+            sample_once(transport, &offsets, &mut sampler, &mut next_attempt)?;
         }
 
         // What is left of the interval after the work, rather than a flat sleep: a sample
@@ -343,11 +344,39 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
     }
 }
 
+/// The offsets bundles the core has sent, one per architecture of the game.
+///
+/// Both, because which applies is decided by the process this helper finds rather than by
+/// anything the core can see. See `acl_ipc::CoreMessage::SetOffsets`.
+#[cfg(windows)]
+#[derive(Default)]
+struct Bundles {
+    for_32bit: Option<Offsets>,
+    for_64bit: Option<Offsets>,
+}
+
+#[cfg(windows)]
+impl Bundles {
+    /// Whether there is anything to try at all.
+    fn any(&self) -> bool {
+        self.for_32bit.is_some() || self.for_64bit.is_some()
+    }
+
+    /// The one for a game of this width.
+    fn pick(&self, is_64bit: bool) -> Option<&Offsets> {
+        if is_64bit {
+            self.for_64bit.as_ref()
+        } else {
+            self.for_32bit.as_ref()
+        }
+    }
+}
+
 /// Attaches if needed, reads one frame, and sends it.
 #[cfg(windows)]
 fn sample_once(
     transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>,
-    offsets: &Offsets,
+    offsets: &Bundles,
     sampler: &mut Option<Sampler>,
     next_attempt: &mut Instant,
 ) -> Result<(), Fatal> {
@@ -404,12 +433,16 @@ impl Sampler {
     /// the ordinary case and is not worth a type; the game running elevated while this
     /// process is not is the case the elevation prompt exists for, and the core already
     /// knows what to do about it.
-    fn attach(offsets: &Offsets) -> Option<Self> {
+    fn attach(offsets: &Bundles) -> Option<Self> {
         use acl_game::ProcessMemory;
 
         let process = acl_game::windows::WindowsProcess::open_by_name(GAME_EXECUTABLE).ok()?;
         let module = process.module(GAME_MODULE)?;
-        let resolved = resolve_offsets(&process, &module, offsets).ok()?.offsets;
+        // The bundle is chosen here, where the game's width is known. Choosing on the
+        // other side of the pipe would be guessing, and a wrong guess resolves every
+        // pointer chain to nothing -- which reads as a game that is not running.
+        let bundle = offsets.pick(process.is_64bit())?;
+        let resolved = resolve_offsets(&process, &module, bundle).ok()?.offsets;
         let context = ReadContext::new(module.base, acl_game::mods::Mod::None);
         Some(Self {
             process,

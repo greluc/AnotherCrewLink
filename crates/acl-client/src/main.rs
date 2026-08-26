@@ -1,0 +1,329 @@
+//! The window.
+//!
+//! §4.8 item 1: the shell, a custom title bar, and window state persistence. It is also the
+//! first thing in this port that assembles the rest — the single-instance lock, the paths,
+//! the restored geometry, the helper and the reader all meet here, and until they did,
+//! every one of them was a library nobody called.
+//!
+//! # What it looks like to the operating system
+//!
+//! Frameless, resizable, not maximisable and not full-screenable, minimum 250 by 350 —
+//! which is `new BrowserWindow({ frame: false, ... })` in `src/main/index.ts`, number for
+//! number. The defaults are the minimum because that is what the shipped client passes.
+//!
+//! # The renderer
+//!
+//! `glow`, and §3.3 chooses `wgpu`. That choice comes with §4.8 item 6 — the GPU fallback
+//! chain — and the dependency review that belongs to it; a shell that has to open a window
+//! does not need to start either. `experiments/gui-spike` measured this rung, so the
+//! performance number already on record is the one this runs on.
+
+mod reader;
+
+use std::path::PathBuf;
+
+use acl_core::paths::{Environment, Paths};
+use acl_core::single_instance;
+use acl_ui::window_state::{Rect, Stored, WindowState, restore, worth_saving};
+use eframe::egui;
+
+/// The window's minimum, and its default.
+///
+/// `MAIN_WINDOW_MIN_WIDTH` and `MAIN_WINDOW_MIN_HEIGHT` in `src/main/index.ts`, where the
+/// defaults are the minimums too.
+const MIN_WIDTH: i32 = 250;
+/// See [`MIN_WIDTH`].
+const MIN_HEIGHT: i32 = 350;
+
+/// How tall the title bar is drawn.
+const TITLE_BAR: f32 = 32.0;
+
+fn main() -> eframe::Result<()> {
+    let paths = match Paths::resolve(Environment {
+        app_data: std::env::var("APPDATA").ok().as_deref(),
+    }) {
+        Ok(paths) => paths,
+        Err(error) => {
+            // Before a window exists, so there is nowhere to show it but here. A client
+            // that cannot work out where its files go cannot start, and saying so beats a
+            // window with no settings in it.
+            eprintln!("AnotherCrewLink: {error}");
+            return Ok(());
+        }
+    };
+
+    // Before anything else takes a resource. Two clients against one game means two
+    // keyboard hooks, two memory readers and two overlays -- see `single_instance`, which
+    // also explains why the check is a window rather than the mutex §4.7 first named.
+    #[cfg(windows)]
+    let _instance = match single_instance::claim(paths.user_data()) {
+        Ok(guard) => guard,
+        Err(occupant) => {
+            eprintln!("AnotherCrewLink: {}", occupant.message());
+            return Ok(());
+        }
+    };
+
+    let file = paths.window_state_file();
+    let saved = read_state(&file);
+    let opening = restore(saved, &displays(), MIN_WIDTH, MIN_HEIGHT);
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "window dimensions in pixels, far below f32's exact integer range"
+    )]
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("AnotherCrewLink")
+        // Frameless, because the title bar is drawn below.
+        //
+        // **The style word is not how to check this.** Measured on 2026-08-26: the window
+        // keeps `WS_CAPTION | WS_THICKFRAME` -- style `0x16cf0000` -- and is undecorated all
+        // the same. winit removes the non-client area with `WM_NCCALCSIZE` rather than by
+        // dropping the styles, which is what keeps snap layouts and the resize borders
+        // working on a frameless window. What says it worked is the client rectangle
+        // equalling the window rectangle, which it does: 458x351 both ways, a one-pixel
+        // inset at the top.
+        .with_decorations(false)
+        .with_resizable(true)
+        // Neither is offered by the shipped client, and the window state keeper skips
+        // saving in both -- so allowing them here would produce a state nothing restores.
+        .with_maximize_button(false)
+        .with_inner_size([opening.width as f32, opening.height as f32])
+        .with_min_inner_size([MIN_WIDTH as f32, MIN_HEIGHT as f32]);
+    if let Some(rect) = opening.rect() {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "screen coordinates in pixels, far below f32's exact integer range"
+        )]
+        {
+            viewport = viewport.with_position([rect.x as f32, rect.y as f32]);
+        }
+    }
+
+    eframe::run_native(
+        "anothercrewlink",
+        eframe::NativeOptions {
+            viewport,
+            ..Default::default()
+        },
+        Box::new(move |_| Ok(Box::new(Client::new(file)))),
+    )
+}
+
+/// Reads the saved geometry, falling back to the older flat file.
+///
+/// Both, because §4.10 has the 2.0 build read what 1.x wrote — and somebody upgrading from
+/// further back than that has only `window-state.json`.
+fn read_state(file: &PathBuf) -> Option<WindowState> {
+    if let Ok(text) = std::fs::read_to_string(file)
+        && let Ok(stored) = serde_json::from_str::<Stored>(&text)
+        && let Some(state) = stored.get(acl_ui::window_state::MAIN_WINDOW)
+    {
+        return Some(state);
+    }
+    let legacy = file.with_file_name(acl_ui::window_state::LEGACY_FILE);
+    std::fs::read_to_string(legacy)
+        .ok()
+        .as_deref()
+        .and_then(acl_ui::window_state::from_legacy)
+}
+
+/// The screens, as rectangles.
+///
+/// Empty when they cannot be asked for, which [`restore`] reads as "restore nothing" — the
+/// safe direction, since the alternative is opening at coordinates nothing draws.
+#[cfg(windows)]
+fn displays() -> Vec<Rect> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    // The virtual screen: the bounding box of every monitor, as one rectangle. Coarser than
+    // enumerating them -- a window in the gap of an L-shaped arrangement reads as visible --
+    // and it catches the case this exists for, which is a monitor that is simply gone.
+    // Enumerating properly wants `EnumDisplayMonitors` and a callback, and is worth doing
+    // when the arrangement rather than the count is what changed.
+    // SAFETY: four documented calls taking a constant and returning an integer.
+    let rect = unsafe {
+        Rect {
+            x: GetSystemMetrics(SM_XVIRTUALSCREEN),
+            y: GetSystemMetrics(SM_YVIRTUALSCREEN),
+            width: GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            height: GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }
+    };
+    if rect.width > 0 && rect.height > 0 {
+        vec![rect]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(not(windows))]
+fn displays() -> Vec<Rect> {
+    Vec::new()
+}
+
+struct Client {
+    state_file: PathBuf,
+    reader: Option<reader::Reader>,
+    /// What the window was last seen at, for saving on the way out.
+    last_seen: Option<WindowState>,
+}
+
+impl Client {
+    fn new(state_file: PathBuf) -> Self {
+        Self {
+            state_file,
+            // A reader that will not start is not a reason to refuse to open: the window is
+            // where somebody would find out about it, so it opens and says so.
+            reader: reader::Reader::start().ok(),
+            last_seen: None,
+        }
+    }
+
+    /// Writes the geometry back, keeping every other window's.
+    ///
+    /// Named for what it does rather than `App::save`, which eframe calls with its own
+    /// storage and on its own schedule -- a different thing that happens to share a verb.
+    fn write_window_state(&self) {
+        let Some(state) = self.last_seen else {
+            return;
+        };
+        let mut stored = std::fs::read_to_string(&self.state_file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Stored>(&text).ok())
+            .unwrap_or_default();
+        stored.set(acl_ui::window_state::MAIN_WINDOW, state);
+        if let Ok(text) = serde_json::to_string(&stored) {
+            let _ = std::fs::write(&self.state_file, text);
+        }
+    }
+
+    /// The title bar: a drag handle and the two buttons the shipped window has.
+    ///
+    /// There is no maximise button, matching `maximizable: false`. Dragging is
+    /// `StartDrag`, which hands the move to the window manager rather than repositioning
+    /// the window per frame — the difference is visible as smoothness and as whether snap
+    /// layouts work at all.
+    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context) {
+        let bar = egui::Rect::from_min_size(
+            ui.max_rect().min,
+            egui::vec2(ui.max_rect().width(), TITLE_BAR),
+        );
+        let response = ui.interact(
+            bar,
+            ui.id().with("title-bar"),
+            egui::Sense::click_and_drag(),
+        );
+        if response.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("AnotherCrewLink").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("✕").on_hover_text("Close").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("—").on_hover_text("Minimise").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                });
+            });
+        });
+    }
+}
+
+impl eframe::App for Client {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(reader) = self.reader.as_mut() {
+            reader.pump();
+        }
+
+        // Remembered every frame and written once, on the way out. The shipped keeper
+        // debounces instead, because it is reacting to move and resize events; this is
+        // already awake, so there is nothing to debounce.
+        let minimised = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+        let maximised = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+        let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        if worth_saving(minimised, maximised, fullscreen)
+            && let Some(outer) = ctx.input(|input| input.viewport().outer_rect)
+        {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "screen coordinates, rounded to the pixel they are stored as"
+            )]
+            {
+                self.last_seen = Some(WindowState {
+                    width: outer.width() as i32,
+                    height: outer.height() as i32,
+                    x: Some(outer.min.x as i32),
+                    y: Some(outer.min.y as i32),
+                });
+            }
+        }
+
+        if ctx.input(|input| input.viewport().close_requested()) {
+            self.write_window_state();
+        }
+
+        // The game state arrives five times a second and nothing else moves, so there is no
+        // reason to redraw faster than that.
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        egui::CentralPanel::default().show(ui, |ui| {
+            Self::title_bar(ui, &ctx);
+            ui.add_space(TITLE_BAR);
+            ui.separator();
+
+            let Some(reader) = self.reader.as_ref() else {
+                ui.label("The game reader could not be started.");
+                return;
+            };
+
+            ui.horizontal(|ui| {
+                ui.label("Game reader:");
+                ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
+            });
+            if let Some(trouble) = reader.trouble() {
+                ui.colored_label(egui::Color32::from_rgb(230, 140, 90), trouble);
+            }
+
+            ui.horizontal(|ui| {
+                if ui.button("Start").clicked() {
+                    reader.ask_to_start();
+                }
+                if ui.button("Stop").clicked() {
+                    reader.ask_to_stop();
+                }
+            });
+
+            ui.separator();
+            match reader.latest() {
+                Some(state) => {
+                    ui.label(format!("Lobby: {}", state.lobby_code));
+                    ui.label(format!("State: {:?}", state.game_state));
+                    ui.label(format!("Map: {}", state.map));
+                    ui.separator();
+                    for player in &state.players {
+                        ui.label(format!(
+                            "{}{}{}",
+                            player.name,
+                            if player.is_local { " (you)" } else { "" },
+                            if player.is_dead { " — dead" } else { "" }
+                        ));
+                    }
+                }
+                None => {
+                    ui.label("No frame yet. Start the reader with Among Us running.");
+                }
+            }
+        });
+    }
+}

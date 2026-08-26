@@ -161,7 +161,7 @@ fn the_link_starts_the_helper_and_keeps_it() {
     link.start(
         std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
         acl_core::launch::Elevation::AsIs,
-        OFFSETS.as_bytes(),
+        OFFSETS,
     )
     .expect("the helper starts and answers");
     assert_eq!(link.state(), acl_core::helper::HelperState::Running);
@@ -209,7 +209,7 @@ fn the_link_reads_a_real_game() {
     link.start(
         std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
         acl_core::launch::Elevation::AsIs,
-        OFFSETS.as_bytes(),
+        OFFSETS,
     )
     .expect("the helper starts and answers");
 
@@ -261,7 +261,7 @@ fn the_core_can_place_and_show_the_helper_overlay() {
     link.start(
         std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
         acl_core::launch::Elevation::AsIs,
-        OFFSETS.as_bytes(),
+        OFFSETS,
     )
     .expect("the helper starts and answers");
 
@@ -327,12 +327,16 @@ fn wait_for_overlay(mut matches: impl FnMut(windows_sys::Win32::Foundation::RECT
     false
 }
 
-/// A bundle that parses, which is all this needs: the helper rejects one that does not and
+/// Bundles that parse, which is all this needs: the helper rejects one that does not and
 /// stops, and a test that fed it rubbish would be testing that path instead.
 ///
-/// The embedded floor, so the test carries no fixture of its own and cannot drift from the
-/// shape the reader expects.
-const OFFSETS: &str = include_str!("../../acl-game/assets/offsets-x86.json");
+/// The embedded floor for both architectures, so the test carries no fixture of its own,
+/// cannot drift from the shape the reader expects, and exercises the pair the client
+/// actually sends.
+const OFFSETS: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
+    for_32bit: include_bytes!("../../acl-game/assets/offsets-x86.json"),
+    for_64bit: include_bytes!("../../acl-game/assets/offsets-x64.json"),
+};
 
 /// Runs the exchange on a worker thread and gives up on it.
 ///

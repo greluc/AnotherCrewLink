@@ -1,0 +1,41 @@
+[package]
+name = "acl-client"
+description = "The window: §4.8 item 1's shell, and the first thing that assembles the rest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+# The name the product has had since 1.0, because the installer, the single-instance lock
+# and `%APPDATA%\AnotherCrewLink` all key on it.
+name = "anothercrewlink"
+path = "src/main.rs"
+
+[dependencies]
+# `acl-core` is the unelevated process §3.2 describes; this crate is the binary that *is*
+# it. Separate so that no library in the workspace has to carry a GUI dependency -- in
+# particular `acl-helper`, whose tests depend on `acl-core` and have no use for a window.
+acl-core = { path = "../acl-core", version = "0.0.0" }
+acl-game = { path = "../acl-game", version = "0.0.0" }
+acl-ui = { path = "../acl-ui", version = "0.0.0" }
+# `glow`, and not the `wgpu` §3.3 chooses. That choice belongs with §4.8 item 6, which is
+# the GPU fallback chain and the dependency review that comes with it; a shell that only
+# has to open a window does not need to start that. `experiments/gui-spike` measured this
+# rung, so the number already on record is the one this runs on.
+eframe = { version = "0.36.1", default-features = false, features = [
+    "glow",
+    "default_fonts",
+] }
+egui = "0.36.1"
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# The virtual screen's rectangle, for deciding whether a saved window position is still on
+# a monitor. Four calls, no other use.
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[lints]
+workspace = true

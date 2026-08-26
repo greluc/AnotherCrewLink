@@ -77,6 +77,20 @@ pub enum LinkError {
 #[cfg(windows)]
 const SHUTDOWN_PATIENCE: Duration = Duration::from_secs(2);
 
+/// The offsets bundles handed to the helper.
+///
+/// Both, and that is not belt and braces. Among Us ships as 32- and 64-bit, the bundles are
+/// different files, and which one applies depends on the process the helper finds — which
+/// the core cannot see. Sending one made this side guess, and a wrong guess is not an error
+/// anywhere: every pointer chain resolves to nothing and the game reads as absent.
+#[derive(Clone, Copy, Debug)]
+pub struct Offsets<'a> {
+    /// The bundle for a 32-bit game.
+    pub for_32bit: &'a [u8],
+    /// The bundle for a 64-bit game.
+    pub for_64bit: &'a [u8],
+}
+
 /// The helper, and the conversation with it.
 #[derive(Debug, Default)]
 pub struct Link {
@@ -115,7 +129,7 @@ impl Link {
         &mut self,
         executable: &Path,
         elevation: Elevation,
-        offsets: &[u8],
+        offsets: Offsets<'_>,
     ) -> Result<(), LinkError> {
         self.stop();
         self.state = HelperState::Starting;
@@ -148,7 +162,12 @@ impl Link {
 
     /// Connects, checks who answered, and agrees on a protocol.
     #[cfg(windows)]
-    fn shake_hands(&mut self, helper: &Helper, core: u32, offsets: &[u8]) -> Result<(), LinkError> {
+    fn shake_hands(
+        &mut self,
+        helper: &Helper,
+        core: u32,
+        offsets: Offsets<'_>,
+    ) -> Result<(), LinkError> {
         let connection = connect(&pipe_name(core))?;
         // The other half of the mutual check. The helper refuses a client that is not the
         // id on its command line; this refuses a pipe server that is not the process the
@@ -162,8 +181,16 @@ impl Link {
         }
 
         // Offsets before the instruction to read, because the helper has nothing to read
-        // the game with until they arrive.
-        transport.send(&CoreMessage::SetOffsets(offsets.to_vec()))?;
+        // the game with until they arrive. Both of them: which applies is decided by the
+        // process the helper finds, and only the helper can see that.
+        transport.send(&CoreMessage::SetOffsets {
+            is_64bit: false,
+            bundle: offsets.for_32bit.to_vec(),
+        })?;
+        transport.send(&CoreMessage::SetOffsets {
+            is_64bit: true,
+            bundle: offsets.for_64bit.to_vec(),
+        })?;
         transport.send(&CoreMessage::StartReading)?;
         self.transport = Some(transport);
         Ok(())
