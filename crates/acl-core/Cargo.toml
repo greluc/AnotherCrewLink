@@ -18,6 +18,9 @@ publish = false
 # gate. Worth doing if the reader ever becomes unwanted here; not worth doing for tidiness.
 acl-game = { path = "../acl-game", version = "0.0.0", default-features = false }
 acl-ipc.workspace = true
+# The signalling half. `session` is the driver §4.6 item 3 leaves to this crate.
+acl-net = { path = "../acl-net", version = "0.0.0" }
+serde_json.workspace = true
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
 
@@ -47,6 +50,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# For `tests/session_conformance.rs`, which drives two sessions against a real server.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net"] }
 
 # `product_name_still_matches_package_json` reads the Electron manifest, because the
 # directory 1.x writes into is `productName` and a rename there is silent here.

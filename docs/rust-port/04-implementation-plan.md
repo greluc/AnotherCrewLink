@@ -1200,7 +1200,8 @@ Run the same impairments through the Electron client for reference numbers.
 
 ## 4.6 Phase 4 — Transport and signalling (10.5 weeks)
 
-> **Status, 2026-08-25. The decisions are built and tested; the wiring is not.**
+> **Status, 2026-08-25, amended 2026-08-26. The decisions are built and tested; one of
+> the two missing pieces of wiring is now there.**
 >
 > The same split `acl-net` already used for the Socket.IO client: everything that decides
 > anything is a pure function with tests, and the layer that touches a transport is
@@ -1210,7 +1211,7 @@ Run the same impairments through the Electron client for reference numbers.
 > | --- | --- |
 > | 1 The crate spike | three of four questions answered by `experiments/webrtc-probe` — it connects, `ring` 0.17.14 is shared with the existing tree, 141 new crates and all four supply-chain gates pass. The Chromium arm is unanswered and, with G3 struck, unanswerable |
 > | 2 `Peer` | done — candidate queue, generation counter for the un-detachable handler, connect timeout, and `rtc::to_configuration` over the crate. `tests/loopback.rs` drives two real connections through all of it |
-> | 3 The mesh | relay rules one to four, `RepairPolicy` (restart before rebuild, initiator only, once per connection), and `mesh::Membership` — join, leave, orphan reconciliation and the four rebuild guards. What is left is the driver that owns a socket, a membership and a set of connections at once, and that belongs with `acl-core` in P5 rather than here |
+> | 3 The mesh | relay rules one to four, `RepairPolicy` (restart before rebuild, initiator only, once per connection), and `mesh::Membership` — join, leave, orphan reconciliation and the four rebuild guards. The driver arrived on 2026-08-26 as `acl-core::session`, where this row said it belonged: it owns the socket and the membership and turns Socket.IO events into statements about a lobby. The set of connections is what is left, and it sits on top of that rather than inside it — every event it would act on already comes out of `Session::next` |
 > | 4 `validateClientPeerConfig` | done, with its tests |
 > | The four named regression tests | all four exist and pass |
 >
@@ -1222,6 +1223,21 @@ Run the same impairments through the Electron client for reference numbers.
 > candidate is gathered, so a naive integration test exercises the candidate queue not at
 > all — the queue's whole reason for existing is the signalling round trip, and a test
 > without one proves nothing about it.
+
+> **The driver, 2026-08-26.** `acl-core::session` is split in two, and the split is the
+> point rather than tidiness: `Lobby` holds the membership and the interpreting and touches
+> no socket, `Session` holds the connection. The first version was one type, and it cost
+> something immediately — the only way to test that a signal from outside the lobby is
+> refused was through a real server, and **the server refuses those itself**. That test
+> passed by timing out, having never reached the client's rule. It is a unit test now, and
+> it fails if the rule is removed.
+>
+> Two conformance cases run against a real server binary in CI, which already provides one:
+> two sessions join a lobby, each is told about the other by a *different* event —
+> `join` for the one already there, `setClients` for the one arriving — and a signal
+> crosses between them. That both paths produce the same `PeerJoined` is the whole reason
+> the driver exists.
+
 
 **Why 10.5 and not 5:** since 0.20.0 the `webrtc` crate is a runtime-agnostic
 rewrite on a sans-IO core rather than a Pion port, so this is a port and not a
