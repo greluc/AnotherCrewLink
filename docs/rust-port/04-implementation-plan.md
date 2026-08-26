@@ -1992,7 +1992,7 @@ from the client even after our own 1.x support ends.
 | P1+ Foundations | 5.0 | built | no |
 | P2+ Game reader | 6.0 | built, G1 met | with P3+ |
 | P3+ Audio engine | 10.0 | built, G2 met | critical path |
-| P4+ Transport | 10.5 | decisions built, transport not wired | critical path |
+| P4+ Transport | 10.5 | mesh carries audio; devices not wired | critical path |
 | P5+ Platform | 6.0 | partly built | with P4+ |
 | P6+ GUI | 11.5 | planned | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
