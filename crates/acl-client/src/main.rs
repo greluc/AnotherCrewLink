@@ -43,6 +43,25 @@ const MIN_HEIGHT: i32 = 350;
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = 32.0;
 
+/// The smallest rectangle containing both.
+///
+/// The meeting overlay's window is only as large as the seats that are drawn into it, and
+/// which those are changes with who is speaking.
+#[cfg(windows)]
+fn union(
+    left: acl_ui::overlay_layout::Rect,
+    right: acl_ui::overlay_layout::Rect,
+) -> acl_ui::overlay_layout::Rect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    acl_ui::overlay_layout::Rect {
+        x,
+        y,
+        width: (left.x + left.width).max(right.x + right.width) - x,
+        height: (left.y + left.height).max(right.y + right.height) - y,
+    }
+}
+
 /// How large one crewmate is in the overlay.
 ///
 /// How far apart they sit is `acl_ui::overlay_layout::GAP`, which is also what the strip
@@ -411,11 +430,9 @@ impl Client {
         // same process, and a cached copy is one more thing to invalidate.
         let settings = self.settings.config();
         let enabled = settings.bool_at("enableOverlay");
-        // `meetingOverlay` is read by nothing yet. It switches on a second overlay that
-        // draws the players over the meeting table, which needs the meeting hud's
-        // on-screen geometry out of the game -- a reader question rather than a drawing
-        // one, and not one this has an answer to. The setting is kept and honoured as soon
-        // as there is something for it to switch on.
+        // While a meeting is up the players go over the seats of the meeting table instead
+        // of into a corner, which is what `meetingOverlay` switches on.
+        let meeting = settings.bool_at("meetingOverlay");
         let position =
             acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
         let compact = settings.bool_at("compactOverlay") || position.forces_compact();
@@ -459,6 +476,10 @@ impl Client {
             return;
         }
         let in_menu = state.game_state == acl_game::GameState::Unknown;
+        if meeting && state.game_state == acl_game::GameState::Discussion {
+            Self::compose_meeting(&mut self.overlay_shown, reader, &bounds, state);
+            return;
+        }
         let laid = acl_ui::overlay_layout::lay_out(
             position,
             in_menu,
@@ -481,38 +502,7 @@ impl Client {
             return;
         };
 
-        // Which crewmate wears what, collected while the sprites are built and applied
-        // afterwards: the artwork lives behind `&mut self` and the closure below is
-        // already borrowing the reader's state.
-        let mut wearing: Vec<(usize, String, String)> = Vec::new();
-        let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
-            .iter()
-            .zip(laid.sprites.iter())
-            .filter_map(|(entry, (x, y))| {
-                let player = state.players.get(entry.at)?;
-                let (body, shadow) =
-                    acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
-                let bitmap = acl_ui::sprite::crewmate(
-                    OVERLAY_SPRITE,
-                    acl_ui::sprite::Crewmate {
-                        body: (body.r(), body.g(), body.b()),
-                        shadow: (shadow.r(), shadow.g(), shadow.b()),
-                        talking: entry.talking,
-                        alive: entry.alive,
-                    },
-                );
-                Some((*x, *y, bitmap))
-            })
-            .collect();
-        for (at, (entry, _)) in shown.iter().zip(laid.sprites.iter()).enumerate() {
-            let Some(player) = state.players.get(entry.at) else {
-                continue;
-            };
-            if at < sprites.len() {
-                wearing.push((at, player.hat_id.clone(), player.visor_id.clone()));
-            }
-        }
-        Self::dress(&mut self.hats, &mut sprites, &wearing);
+        let sprites = Self::strip_sprites(&mut self.hats, &shown, state, &laid);
 
         reader.draw_overlay(
             (
@@ -544,6 +534,141 @@ impl Client {
         stored.set(acl_ui::window_state::MAIN_WINDOW, state);
         if let Ok(text) = serde_json::to_string(&stored) {
             let _ = std::fs::write(&self.state_file, text);
+        }
+    }
+
+    /// The crewmates of the corner strip, dressed and placed.
+    ///
+    /// Its own function because `compose_overlay` was doing four things: reading the
+    /// settings, deciding whether there is anything to draw, laying it out, and drawing
+    /// it. This is the last one.
+    #[cfg(windows)]
+    fn strip_sprites(
+        hats: &mut hat_store::Loader,
+        shown: &[acl_ui::roster::Shown],
+        state: &acl_game::AmongUsState,
+        laid: &acl_ui::overlay_layout::Layout,
+    ) -> Vec<(i32, i32, acl_ui::sprite::Bitmap)> {
+        // Which crewmate wears what, collected while the sprites are built and applied
+        // afterwards: the artwork lives behind `&mut self` and the closure below is
+        // already borrowing the reader's state.
+        let mut wearing: Vec<(usize, String, String)> = Vec::new();
+        let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
+            .iter()
+            .zip(laid.sprites.iter())
+            .filter_map(|(entry, (x, y))| {
+                let player = state.players.get(entry.at)?;
+                let (body, shadow) =
+                    acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
+                let bitmap = acl_ui::sprite::crewmate(
+                    OVERLAY_SPRITE,
+                    acl_ui::sprite::Crewmate {
+                        body: (body.r(), body.g(), body.b()),
+                        shadow: (shadow.r(), shadow.g(), shadow.b()),
+                        talking: entry.talking,
+                        alive: entry.alive,
+                    },
+                );
+                Some((*x, *y, bitmap))
+            })
+            .collect();
+        for (at, (entry, _)) in shown.iter().zip(laid.sprites.iter()).enumerate() {
+            let Some(player) = state.players.get(entry.at) else {
+                continue;
+            };
+            if at < sprites.len() {
+                wearing.push((at, player.hat_id.clone(), player.visor_id.clone()));
+            }
+        }
+        Self::dress(hats, &mut sprites, &wearing);
+        sprites
+    }
+
+    /// Draws the players over the seats of the meeting table.
+    ///
+    /// The seats are worked out by [`acl_ui::overlay_layout::meeting`] from the game
+    /// window's shape -- nothing is read out of memory for it but `old_meeting_hud`, which
+    /// says which of two tables this build has.
+    ///
+    /// **Everybody gets a seat, in the game's own order.** This is not the corner strip:
+    /// there, the roster hides the dead and sorts the disconnected to the end, because the
+    /// strip is a list. A seat is a *place*, and it has to be the place the game drew that
+    /// player at, so the order is the game's and nobody is left out of it. Only the ring is
+    /// conditional -- a player who is not speaking has an empty seat drawn over them, which
+    /// is nothing at all.
+    ///
+    /// Takes the reader and the flag rather than `&self`, so that the reader's borrow and
+    /// the flag's can coexist: they are disjoint fields, and the borrow checker only knows
+    /// that when they are named separately.
+    #[cfg(windows)]
+    fn compose_meeting(
+        shown: &mut bool,
+        reader: &reader::Reader,
+        bounds: &acl_core::game_window::Bounds,
+        state: &acl_game::AmongUsState,
+    ) {
+        let game = acl_ui::overlay_layout::Rect {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        };
+        let seats = acl_ui::overlay_layout::meeting::seats(
+            game,
+            state.old_meeting_hud,
+            state.players.len(),
+        );
+
+        let mut placement: Option<acl_ui::overlay_layout::Rect> = None;
+        let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = Vec::new();
+        for (player, seat) in state.players.iter().zip(seats.iter()) {
+            // Nothing knows who is talking yet, so no seat is marked. The shape is here and
+            // the audio is what fills it in; drawing every seat lit would be worse than
+            // drawing none, because it would say something false rather than nothing.
+            let talking = false;
+            if !talking {
+                continue;
+            }
+            let (body, shadow) =
+                acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
+            let side = seat.width.min(seat.height).max(1);
+            let bitmap = acl_ui::sprite::crewmate(
+                side,
+                acl_ui::sprite::Crewmate {
+                    body: (body.r(), body.g(), body.b()),
+                    shadow: (shadow.r(), shadow.g(), shadow.b()),
+                    talking: true,
+                    alive: !player.is_dead,
+                },
+            );
+            let grown = placement.map_or(*seat, |so_far| union(so_far, *seat));
+            placement = Some(grown);
+            sprites.push((seat.x, seat.y, bitmap));
+        }
+
+        let Some(placement) = placement else {
+            // Nobody is speaking, so there is nothing over the table. Hidden rather than
+            // left showing whoever spoke last.
+            if *shown {
+                *shown = false;
+                reader.show_overlay(false);
+            }
+            return;
+        };
+
+        // The sprites were placed in screen coordinates; the helper wants them relative to
+        // the window it is about to draw into.
+        let sprites = sprites
+            .into_iter()
+            .map(|(x, y, bitmap)| (x - placement.x, y - placement.y, bitmap))
+            .collect();
+        reader.draw_overlay(
+            (placement.x, placement.y, placement.width, placement.height),
+            sprites,
+        );
+        if !*shown {
+            *shown = true;
+            reader.show_overlay(true);
         }
     }
 
