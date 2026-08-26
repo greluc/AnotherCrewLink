@@ -140,12 +140,100 @@ pub enum Event {
     Closed(CloseReason),
     /// The server answered and refused.
     Refused(Option<Value>),
+    /// The public lobbies, in full.
+    ///
+    /// Sent once when the browser is opened, and never again — after this the server sends
+    /// only the differences.
+    Lobbies(Vec<PublicLobby>),
+    /// One lobby appeared or changed.
+    ///
+    /// The same event for both: the server emits `update_lobby` whether or not the browser
+    /// has seen this id before, so the caller inserts rather than replaces.
+    LobbyUpdated(Box<PublicLobby>),
+    /// One lobby is gone.
+    LobbyRemoved(u64),
+    /// The answer to [`Session::join_lobby`].
+    ///
+    /// The code is what the player types into the game: this client stopped writing it
+    /// into the game's memory on 2026-08-24, when the write path was removed.
+    LobbyCode {
+        /// The lobby code.
+        code: String,
+        /// Which region it is on, which the player has to be on too.
+        server: String,
+    },
+    /// A join that was refused, with whatever the server said.
+    ///
+    /// Refusals are ordinary here: a lobby that filled up or started between the browser
+    /// showing it and the player clicking it is the common case, not an error.
+    LobbyUnavailable(String),
     /// An event arrived that this build does not act on.
     ///
     /// Reported rather than dropped, because the alternative is a client that silently
-    /// ignores half a protocol and a maintainer who finds out from a bug report. The lobby
-    /// browser's three events land here until something wants them.
+    /// ignores half a protocol and a maintainer who finds out from a bug report.
     Ignored(String),
+}
+
+/// One publicly advertised lobby, as the server sends it.
+///
+/// A port of `PublicLobby` in the server's `state.rs`, which is where the shape is decided.
+/// Every field is read tolerantly and defaulted, for the reason the server itself gives
+/// about the *other* direction: "every field is whatever the sender chose". A row missing
+/// its title is a row with an empty title, not a browser that shows nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublicLobby {
+    /// The server's id for it, and what [`Session::join_lobby`] is given.
+    pub id: u64,
+    /// What the host called it.
+    pub title: String,
+    /// The host's name in the game.
+    pub host: String,
+    /// How many are in it.
+    pub current_players: i64,
+    /// How many it holds.
+    pub max_players: i64,
+    /// The host's chosen language tag.
+    pub language: String,
+    /// The mod id it advertises.
+    pub mods: String,
+    /// Which region it is on.
+    pub server: String,
+    /// The game state, as the reader's numbering has it.
+    pub game_state: i64,
+    /// When it entered that state, in milliseconds since the epoch.
+    pub state_time: i64,
+}
+
+impl PublicLobby {
+    /// Reads one row.
+    ///
+    /// `None` only when the value is not an object at all. Everything else defaults, so a
+    /// server that adds a field or omits one this build wants costs a column rather than
+    /// the browser.
+    #[must_use]
+    pub fn read(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let text = |key: &str| {
+            object
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let number = |key: &str| object.get(key).and_then(Value::as_i64).unwrap_or_default();
+        Some(Self {
+            id: object.get("id").and_then(Value::as_u64).unwrap_or_default(),
+            title: text("title"),
+            host: text("host"),
+            current_players: number("current_players"),
+            max_players: number("max_players"),
+            language: text("language"),
+            mods: text("mods"),
+            server: text("server"),
+            game_state: number("gameState"),
+            state_time: number("stateTime"),
+        })
+    }
 }
 
 /// Everything a lobby is, minus the socket.
@@ -216,6 +304,17 @@ impl Lobby {
             Action::Refused { reason } => events.push(Event::Refused(reason)),
             // Sending is the connection's own business, and an acknowledgement is only
             // interesting for events this client sends with one -- which is none of them.
+            Action::Acked { event, args } if event == "join_lobby" => {
+                Self::on_join_lobby_ack(&args, &mut events);
+            }
+            Action::AckExpired { event } if event == "join_lobby" => {
+                // A join whose answer never came is a join that did not happen, and the
+                // button that started it is waiting for something. Saying so is the whole
+                // difference between "the server refused" and "nothing happened".
+                events.push(Event::LobbyUnavailable(
+                    "the server did not answer".to_owned(),
+                ));
+            }
             Action::Send(_) | Action::Acked { .. } | Action::AckExpired { .. } => {}
         }
         events
@@ -235,7 +334,71 @@ impl Lobby {
             "setHost" => self.on_set_host(args, events),
             "signal" => self.on_signal(args, events),
             "VAD" => Self::on_voice_activity(args, events),
+            "new_lobbies" => Self::on_lobbies(args, events),
+            "update_lobby" => Self::on_lobby_updated(args, events),
+            "remove_lobby" => Self::on_lobby_removed(args, events),
             other => events.push(Event::Ignored(other.to_owned())),
+        }
+    }
+
+    /// The whole list, sent once when the browser opens.
+    fn on_lobbies(args: &[Value], events: &mut Vec<Event>) {
+        let Some(rows) = args.first().and_then(Value::as_array) else {
+            events.push(Event::Ignored("new_lobbies with no list".to_owned()));
+            return;
+        };
+        // A row that will not read is skipped rather than failing the batch: one malformed
+        // lobby must not empty the browser.
+        events.push(Event::Lobbies(
+            rows.iter().filter_map(PublicLobby::read).collect(),
+        ));
+    }
+
+    /// One lobby, appeared or changed.
+    fn on_lobby_updated(args: &[Value], events: &mut Vec<Event>) {
+        match args.first().and_then(PublicLobby::read) {
+            Some(lobby) => events.push(Event::LobbyUpdated(Box::new(lobby))),
+            None => events.push(Event::Ignored("update_lobby with no lobby".to_owned())),
+        }
+    }
+
+    /// One lobby, gone.
+    fn on_lobby_removed(args: &[Value], events: &mut Vec<Event>) {
+        match args.first().and_then(Value::as_u64) {
+            Some(id) => events.push(Event::LobbyRemoved(id)),
+            None => events.push(Event::Ignored("remove_lobby with no id".to_owned())),
+        }
+    }
+
+    /// The answer to a join.
+    ///
+    /// The server replies `(0, code, server, lobby)` on success and `(1, message)` on
+    /// failure. Both shapes are read from a flat argument list *and* from a single array
+    /// argument, because a Socket.IO acknowledgement carrying a tuple is one call away from
+    /// either — and a client that reads only one of them fails silently on the other.
+    fn on_join_lobby_ack(args: &[Value], events: &mut Vec<Event>) {
+        let flat: &[Value] = match args.first() {
+            Some(Value::Array(nested)) if args.len() == 1 => nested,
+            _ => args,
+        };
+        let status = flat.first().and_then(Value::as_i64);
+        let text = |at: usize| {
+            flat.get(at)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        match status {
+            Some(0) => events.push(Event::LobbyCode {
+                code: text(1),
+                server: text(2),
+            }),
+            // Anything that is not success is a refusal, including a status this build does
+            // not know: the server has one success value and reserves the rest.
+            Some(_) => events.push(Event::LobbyUnavailable(text(1))),
+            None => events.push(Event::Ignored(
+                "join_lobby answered without a status".to_owned(),
+            )),
         }
     }
 
@@ -448,6 +611,51 @@ impl Session {
             .await
     }
 
+    /// Advertises this lobby to the browser, or updates what it advertises.
+    ///
+    /// The payload is passed through rather than typed, because it is the *other* direction
+    /// of `PublicLobby` and the server sanitises every field of it: "every field is
+    /// optional and every field is whatever the sender chose, so each one is coerced rather
+    /// than trusted". A type here would be a second opinion about a shape the server
+    /// already refuses to trust, and `isPublic` false is how a lobby is withdrawn.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn advertise(&mut self, code: &str, lobby: Value) -> Result<(), TransportError> {
+        self.emit("lobby", vec![json!(code), lobby]).await
+    }
+
+    /// Opens or closes the public lobby browser.
+    ///
+    /// Opening puts this session in the server's browser room and makes it send the whole
+    /// list at once; closing takes it out again. Closing matters: a session left watching
+    /// receives every change to every public lobby for as long as it is connected, which
+    /// is traffic nobody is looking at.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn watch_lobbies(&mut self, open: bool) -> Result<(), TransportError> {
+        self.emit("lobbybrowser", vec![json!(open)]).await
+    }
+
+    /// Asks for one lobby's code.
+    ///
+    /// The answer arrives as [`Event::LobbyCode`] or [`Event::LobbyUnavailable`], not as a
+    /// return value: it is an acknowledgement, which comes back through the same stream as
+    /// everything else.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn join_lobby(&mut self, id: u64) -> Result<(), TransportError> {
+        self.connection
+            .emit("join_lobby", vec![json!(id)], true)
+            .await
+            .map(drop)
+    }
+
     /// Leaves the lobby, staying connected.
     ///
     /// # Errors
@@ -508,6 +716,176 @@ mod tests {
             name: name.to_owned(),
             args,
         }
+    }
+
+    /// The whole list, as the server sends it when the browser opens: one array argument.
+    /// Confirmed against the real server by `the_browser_sees_a_lobby_and_gets_its_code`.
+    #[test]
+    fn the_list_arrives_as_one_array() {
+        let mut lobby = Lobby::new();
+        let events = lobby.interpret(event(
+            "new_lobbies",
+            vec![json!([
+                {"id": 7, "title": "One", "host": "Red", "current_players": 3,
+                 "max_players": 10, "language": "en", "mods": "NONE", "server": "eu",
+                 "gameState": 0, "stateTime": 1_700_000_000_000_i64},
+                {"id": 8, "title": "Two", "host": "Blue", "current_players": 10,
+                 "max_players": 10, "language": "de", "mods": "TOWN_OF_US", "server": "na",
+                 "gameState": 1, "stateTime": 1_700_000_000_001_i64}
+            ])],
+        ));
+        let [Event::Lobbies(lobbies)] = events.as_slice() else {
+            panic!("expected one list, got {events:?}");
+        };
+        assert_eq!(lobbies.len(), 2);
+        assert_eq!(lobbies[0].id, 7);
+        assert_eq!(lobbies[0].title, "One");
+        assert_eq!(lobbies[1].mods, "TOWN_OF_US");
+        assert_eq!(lobbies[1].game_state, 1);
+        assert_eq!(lobbies[1].state_time, 1_700_000_000_001);
+    }
+
+    /// One malformed row must not empty the browser. The rest of the list is still a list.
+    #[test]
+    fn one_bad_row_costs_that_row_and_nothing_else() {
+        let mut lobby = Lobby::new();
+        let events = lobby.interpret(event(
+            "new_lobbies",
+            vec![json!([{"id": 7, "title": "One"}, 42, "not a lobby", null])],
+        ));
+        let [Event::Lobbies(lobbies)] = events.as_slice() else {
+            panic!("expected one list, got {events:?}");
+        };
+        assert_eq!(lobbies.len(), 1, "the good row survived alone");
+        assert_eq!(lobbies[0].id, 7);
+        // And its missing fields are empty rather than absent, so the table still has a
+        // row rather than a hole.
+        assert_eq!(lobbies[0].host, "");
+        assert_eq!(lobbies[0].max_players, 0);
+    }
+
+    /// An update and a removal, which is everything that happens after the first list.
+    #[test]
+    fn a_lobby_can_change_and_go_away() {
+        let mut lobby = Lobby::new();
+        let events = lobby.interpret(event(
+            "update_lobby",
+            vec![json!({"id": 7, "title": "One", "current_players": 4})],
+        ));
+        let [Event::LobbyUpdated(updated)] = events.as_slice() else {
+            panic!("expected an update, got {events:?}");
+        };
+        assert_eq!(updated.id, 7);
+        assert_eq!(updated.current_players, 4);
+
+        assert_eq!(
+            lobby.interpret(event("remove_lobby", vec![json!(7)])),
+            vec![Event::LobbyRemoved(7)]
+        );
+    }
+
+    /// Anything the browser events arrive without is reported rather than guessed at.
+    #[test]
+    fn a_browser_event_with_nothing_in_it_says_so() {
+        let mut lobby = Lobby::new();
+        for (name, args) in [
+            ("new_lobbies", vec![]),
+            ("new_lobbies", vec![json!("not a list")]),
+            ("update_lobby", vec![]),
+            ("update_lobby", vec![json!(7)]),
+            ("remove_lobby", vec![]),
+            ("remove_lobby", vec![json!("seven")]),
+        ] {
+            let events = lobby.interpret(event(name, args));
+            assert!(
+                matches!(events.as_slice(), [Event::Ignored(_)]),
+                "{name} gave {events:?}"
+            );
+        }
+    }
+
+    /// The join acknowledgement, in both shapes it can arrive in.
+    ///
+    /// A Socket.IO acknowledgement carrying a tuple is one `ack.send` away from being a
+    /// flat argument list or a single array, and a client that reads only one of them fails
+    /// silently on the other. The real server sends the flat form — confirmed by the
+    /// conformance test — and this reads both, because the cost of the second is a match
+    /// arm.
+    #[test]
+    fn the_join_answer_is_read_in_either_shape() {
+        let mut lobby = Lobby::new();
+        let flat = lobby.interpret(Action::Acked {
+            event: "join_lobby".to_owned(),
+            args: vec![json!(0), json!("ABCDEF"), json!("eu"), json!({})],
+        });
+        let nested = lobby.interpret(Action::Acked {
+            event: "join_lobby".to_owned(),
+            args: vec![json!([0, "ABCDEF", "eu", {}])],
+        });
+        let expected = vec![Event::LobbyCode {
+            code: "ABCDEF".to_owned(),
+            server: "eu".to_owned(),
+        }];
+        assert_eq!(flat, expected);
+        assert_eq!(nested, expected, "the tuple form was not read");
+    }
+
+    /// A refusal is ordinary: a lobby that filled up or started between the browser showing
+    /// it and the player clicking it is the common case, not an error.
+    #[test]
+    fn a_refused_join_carries_what_the_server_said() {
+        let mut lobby = Lobby::new();
+        assert_eq!(
+            lobby.interpret(Action::Acked {
+                event: "join_lobby".to_owned(),
+                args: vec![json!(1), json!("Lobby is not public anymore")],
+            }),
+            vec![Event::LobbyUnavailable(
+                "Lobby is not public anymore".to_owned()
+            )]
+        );
+        // A status this build does not know is a refusal too: the server has one success
+        // value and reserves the rest.
+        assert!(matches!(
+            lobby
+                .interpret(Action::Acked {
+                    event: "join_lobby".to_owned(),
+                    args: vec![json!(99), json!("something newer")],
+                })
+                .as_slice(),
+            [Event::LobbyUnavailable(_)]
+        ));
+    }
+
+    /// An answer that never came is not the same as a refusal, and is not silence either:
+    /// the button that started the join is waiting for something.
+    #[test]
+    fn a_join_that_is_never_answered_still_answers_the_caller() {
+        let mut lobby = Lobby::new();
+        assert!(matches!(
+            lobby
+                .interpret(Action::AckExpired {
+                    event: "join_lobby".to_owned(),
+                })
+                .as_slice(),
+            [Event::LobbyUnavailable(_)]
+        ));
+    }
+
+    /// An acknowledgement for something else is not a lobby answer. `join` is acknowledged
+    /// by nothing today, but reading every ack as a join answer is the kind of thing that
+    /// works until one is added.
+    #[test]
+    fn an_acknowledgement_for_something_else_is_not_a_lobby_answer() {
+        let mut lobby = Lobby::new();
+        assert!(
+            lobby
+                .interpret(Action::Acked {
+                    event: "join".to_owned(),
+                    args: vec![json!(0), json!("ABCDEF")],
+                })
+                .is_empty()
+        );
     }
 
     /// A lobby with one peer already in it.
@@ -681,12 +1059,54 @@ mod tests {
 
     /// Every event this build does not act on still says so. The alternative is a client
     /// that silently ignores half a protocol and a maintainer who finds out from a bug
-    /// report -- the lobby browser's three events land here until something wants them.
+    /// report.
+    ///
+    /// This used to be checked with `new_lobbies`, which was the honest example while the
+    /// lobby browser's three events were unhandled. They are handled now, so it is checked
+    /// with a name the server does not send at all -- which is what the arm is actually
+    /// for.
     #[test]
     fn an_unhandled_event_is_named_rather_than_dropped() {
         let mut lobby = Lobby::new();
-        let events = lobby.interpret(event("new_lobbies", vec![json!([])]));
-        assert_eq!(events, vec![Event::Ignored("new_lobbies".to_owned())]);
+        let events = lobby.interpret(event("somethingNewer", vec![json!([])]));
+        assert_eq!(events, vec![Event::Ignored("somethingNewer".to_owned())]);
+    }
+
+    /// And everything the server sends is handled, which is what says the `Ignored` arm is
+    /// a backstop rather than where half the protocol goes.
+    ///
+    /// **Eleven, not twelve.** `CLAUDE.md` listed `lobbybrowser` as a server-to-client
+    /// event and the server never emits it: `const BROWSER_ROOM: &str = "lobbybrowser"` is
+    /// a *room name*, and the only handler for that string is the one this client calls
+    /// through `watch_lobbies`. This test found it, by failing on an event that cannot
+    /// arrive.
+    #[test]
+    fn every_event_the_server_sends_is_acted_on() {
+        let sent_by_the_server = [
+            "join",
+            "left",
+            "signal",
+            "setHost",
+            "setClient",
+            "setClients",
+            "clientPeerConfig",
+            "VAD",
+            "new_lobbies",
+            "update_lobby",
+            "remove_lobby",
+        ];
+        for name in sent_by_the_server {
+            let mut lobby = Lobby::new();
+            let events = lobby.interpret(event(name, vec![]));
+            // Every one of them either does something or complains about the empty
+            // payload. What none of them may do is come back as `Ignored(name)`, which is
+            // this build saying it has never heard of the event.
+            assert_ne!(
+                events,
+                vec![Event::Ignored(name.to_owned())],
+                "{name} is not handled at all"
+            );
+        }
     }
 
     /// A malformed event is reported and does not take the session with it. Every one of

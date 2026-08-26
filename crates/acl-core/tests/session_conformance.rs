@@ -40,6 +40,20 @@ use serde_json::json;
 /// anything it was written to check.
 const PORT: u16 = 19_740;
 
+/// The lobby browser's own, for the same reason: tests in one binary run concurrently, and
+/// two servers on one port fail on a race rather than on anything they were written to
+/// check.
+const BROWSER_PORT: u16 = 19_741;
+
+/// And the join test's.
+const JOIN_PORT: u16 = 19_742;
+
+/// The lobby the browser tests publish.
+const LOBBY_CODE: &str = "BROWSE";
+
+/// Its title, which the server truncates at twenty characters -- this is nineteen.
+const LOBBY_TITLE: &str = "A conformance lobby";
+
 /// How long to wait for something the server should send.
 ///
 /// Generous rather than tight, for the reason `acl-net`'s harness gives: a deadline that
@@ -345,4 +359,177 @@ async fn against_a_deployed_server() {
 
     pair.first.leave().await.expect("the first leaves");
     pair.second.leave().await.expect("the second leaves");
+}
+
+/// A published lobby, and two sessions watching it.
+///
+/// Shared by the two browser tests below. Returns nothing when the server binary is not
+/// named, which is how every test here skips.
+async fn published(port: u16) -> Option<(Server, Pair, u64)> {
+    let server = start(port)?;
+    assert!(wait_for_health(port).await, "the server did not come up");
+    let base = format!("http://127.0.0.1:{port}");
+
+    let host = Session::connect(&base).await.expect("the host connects");
+    let watcher = Session::connect(&base).await.expect("the watcher connects");
+    let mut pair = Pair::new(host, watcher);
+    pair.until(0, |event| matches!(event, Event::Connected(_)))
+        .await
+        .expect("the host is connected");
+    pair.until(1, |event| matches!(event, Event::Connected(_)))
+        .await
+        .expect("the watcher is connected");
+
+    pair.first
+        .join(LOBBY_CODE, 1, 11, true)
+        .await
+        .expect("the host joins");
+    // Wait for the join to be *acted on*, not merely sent. The server dispatches each event
+    // on its own task, so a `lobby` that follows a `join` closely enough is handled first --
+    // and is then refused as "a lobby this socket is not in", silently, because nothing is
+    // sent back for a refusal. Measured here: without this wait the advertisement was
+    // dropped every time.
+    //
+    // The same constraint applies to the client, which must not advertise until the server
+    // has answered the join. It answers with `setHost`.
+    pair.until(0, |event| matches!(event, Event::HostChanged(_)))
+        .await
+        .expect("the server acted on the join");
+
+    advertise(&mut pair, 3).await;
+    pair.settle(Duration::from_millis(300)).await;
+
+    pair.second
+        .watch_lobbies(true)
+        .await
+        .expect("the watcher opens the browser");
+    let listed = pair
+        .until(1, |event| matches!(event, Event::Lobbies(_)))
+        .await
+        .expect("the list arrives");
+    let Event::Lobbies(lobbies) = listed else {
+        unreachable!("the matcher above")
+    };
+    let lobby = lobbies
+        .iter()
+        .find(|lobby| lobby.title == LOBBY_TITLE)
+        .unwrap_or_else(|| panic!("not in the list; the list was {lobbies:?}"));
+
+    // Every field the browser shows, through the round trip. A rename on either side lands
+    // here rather than as an empty column somebody notices in a screenshot.
+    assert_eq!(lobby.host, "Red");
+    assert_eq!(lobby.current_players, 3);
+    assert_eq!(lobby.max_players, 10);
+    assert_eq!(lobby.language, "en");
+    assert_eq!(lobby.mods, "NONE");
+    assert_eq!(lobby.server, "test");
+    assert_ne!(lobby.id, 0, "the server assigns an id");
+    assert!(lobby.state_time > 0, "and a state time");
+
+    let id = lobby.id;
+    Some((server, pair, id))
+}
+
+/// Publishes the lobby, or republishes it with a different player count.
+async fn advertise(pair: &mut Pair, players: i64) {
+    pair.first
+        .advertise(
+            LOBBY_CODE,
+            json!({
+                "id": -1,
+                "title": LOBBY_TITLE,
+                "host": "Red",
+                "current_players": players,
+                "max_players": 10,
+                "server": "test",
+                "language": "en",
+                "mods": "NONE",
+                "isPublic": true,
+                "gameState": 0,
+            }),
+        )
+        .await
+        .expect("the host advertises");
+}
+
+/// The list, its fields, and the fact that closing the browser stops the updates.
+///
+/// Written from the server's source, and every line of it is the kind of thing that reads
+/// correctly and is wrong: whether `new_lobbies` arrives as one array argument or as many,
+/// and whether the server's field names survive into [`acl_core::session::PublicLobby`].
+#[tokio::test]
+async fn the_browser_sees_a_lobby_and_stops_when_it_is_closed() {
+    let Some((server, mut pair, _)) = published(BROWSER_PORT).await else {
+        eprintln!("skipping: set ACL_SERVER_BIN to the server binary to run the conformance tests");
+        return;
+    };
+
+    // A session left watching receives every change to every public lobby for as long as it
+    // is connected, which is traffic nobody is looking at.
+    pair.second
+        .watch_lobbies(false)
+        .await
+        .expect("the watcher closes the browser");
+    pair.settle(Duration::from_millis(200)).await;
+    pair.seen[1].clear();
+    advertise(&mut pair, 4).await;
+    pair.settle(Duration::from_millis(400)).await;
+    assert!(
+        !pair.seen[1]
+            .iter()
+            .any(|event| matches!(event, Event::LobbyUpdated(_))),
+        "a closed browser was still sent updates: {:?}",
+        pair.seen[1]
+    );
+
+    drop(server);
+}
+
+/// The acknowledgement, which is the other thing the shapes alone do not settle: whether it
+/// is a flat argument list or one tuple.
+#[tokio::test]
+async fn a_join_is_answered_with_the_code() {
+    let Some((server, mut pair, id)) = published(JOIN_PORT).await else {
+        eprintln!("skipping: set ACL_SERVER_BIN to the server binary to run the conformance tests");
+        return;
+    };
+
+    pair.second
+        .join_lobby(id)
+        .await
+        .expect("the watcher asks for the code");
+    let answered = pair
+        .until(1, |event| {
+            matches!(event, Event::LobbyCode { .. } | Event::LobbyUnavailable(_))
+        })
+        .await
+        .expect("the join is answered");
+    match answered {
+        Event::LobbyCode {
+            code: given,
+            server: region,
+        } => {
+            assert_eq!(given, LOBBY_CODE, "the code is the host's");
+            assert_eq!(region, "test");
+        }
+        other => panic!("the join was refused: {other:?}"),
+    }
+
+    // And an id nothing has is refused rather than answered with somebody else's code.
+    pair.second
+        .join_lobby(id + 10_000)
+        .await
+        .expect("the watcher asks for a lobby that is not there");
+    let refused = pair
+        .until(1, |event| {
+            matches!(event, Event::LobbyCode { .. } | Event::LobbyUnavailable(_))
+        })
+        .await
+        .expect("the second join is answered too");
+    assert!(
+        matches!(refused, Event::LobbyUnavailable(_)),
+        "a lobby that does not exist was joined: {refused:?}"
+    );
+
+    drop(server);
 }
