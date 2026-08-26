@@ -1343,13 +1343,28 @@ will otherwise reintroduce them:
 > | The elevated process | `acl-helper` — reads the game, sends frames, and exits when the core does |
 > | Starting it, elevated or not | `acl-core::launch` — unelevated first, UAC second, and a declined prompt is an ordinary state |
 > | The UIPI access check | `acl-core::game_window` — ported from `windows.c`, quirk included: a hung window refuses the probe with the same error an integrity mismatch gives |
+> | Following the game's window | `acl-core::game_window::Follow` — polled, not hooked, for the reason below |
 >
 > **Not built.** The overlay window itself — the layered, click-through, always-on-top
-> window that follows the game, and the pre-rasterised sprites it receives instead of
-> decoding images. `experiments/overlay-probe` established that eframe can produce such a
-> window on Windows (`layered=true transparent=true topmost=true`, `exstyle=0x000c0138`),
-> so what is left is the following and the drawing, and the second of those wants P6's
-> renderer decision rather than preceding it.
+> window, and the pre-rasterised sprites it receives instead of decoding images.
+> `experiments/overlay-probe` established that eframe can produce such a window on Windows
+> (`layered=true transparent=true topmost=true`, `exstyle=0x000c0138`), and
+> `experiments/gui-spike` has since measured what drawing into one costs, so what is left
+> is the drawing itself and the sprite channel.
+>
+> **This section says "port `windows.c` directly rather than re-deriving it", and one part
+> of it is deliberately not ported.** That file follows the game with
+> `SetWinEventHook` on `EVENT_OBJECT_LOCATIONCHANGE`, `EVENT_OBJECT_DESTROY` and
+> `EVENT_SYSTEM_FOREGROUND`, which is right for its consumer: JavaScript, which a poll
+> would cross into sixty times a second. This consumer is a render loop that is already
+> awake, so the hook buys nothing and costs a message loop on a dedicated thread — an
+> out-of-context hook only delivers to a thread that pumps — plus that thread's affinity.
+>
+> And the hook is not reliable on its own. `windows.c` re-checks `GetForegroundWindow()`
+> after every focus event, with a comment saying the hook fires for windows that did not
+> actually get focus: the workaround for the hook is the poll. `Follow` therefore polls,
+> which is the same reasoning this section already applied to the keyboard, for the same
+> reason — a direct call cannot be silently unhooked.
 >
 > **And one item struck rather than deferred.** This section lists autostart. The Electron
 > client has none — no `setLoginItemSettings`, no run key, nothing in `ISettings` — so there

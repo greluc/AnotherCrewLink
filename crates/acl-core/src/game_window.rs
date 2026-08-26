@@ -141,6 +141,103 @@ impl Attachment {
     }
 }
 
+/// What changed since the last look.
+///
+/// Three independent answers rather than one enum, because they are independent: a window
+/// can move and lose focus in the same frame, and a caller that handled only the first
+/// would leave the overlay visible over another application.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Change {
+    /// New geometry to apply.
+    pub bounds: Option<Bounds>,
+    /// New focus state.
+    pub focused: Option<bool>,
+    /// The window is gone, or is no longer something to draw over.
+    pub detached: bool,
+}
+
+impl Change {
+    /// Whether anything needs doing.
+    #[must_use]
+    pub const fn is_anything(self) -> bool {
+        self.bounds.is_some() || self.focused.is_some() || self.detached
+    }
+}
+
+/// Follows the game's window, by asking rather than by hooking.
+///
+/// # Why a poll, again
+///
+/// `windows.c` uses `SetWinEventHook` for `EVENT_OBJECT_LOCATIONCHANGE`,
+/// `EVENT_OBJECT_DESTROY` and `EVENT_SYSTEM_FOREGROUND`, and it is the right choice there:
+/// the consumer is JavaScript, and a poll would cross into it sixty times a second.
+///
+/// This consumer is a render loop that is already awake. The hook would buy nothing and
+/// cost three things: a message loop on a dedicated thread, since an out-of-context hook
+/// only delivers to a thread that pumps; the thread affinity that comes with it; and the
+/// hook's own unreliability. That last one is not speculation — `windows.c` re-checks
+/// `GetForegroundWindow()` after every focus event, with a comment saying the hook fires
+/// for windows that did not actually get focus. The workaround for the hook is the poll.
+///
+/// It is also the same reasoning §4.7 already applied to the keyboard, and for the same
+/// reason: a direct call cannot be silently unhooked.
+///
+/// # What it remembers
+///
+/// Only what it has already reported, so that a caller is told about a change once.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Follow {
+    reported: Option<Bounds>,
+    focused: Option<bool>,
+}
+
+impl Follow {
+    /// Nothing followed yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            reported: None,
+            focused: None,
+        }
+    }
+
+    /// Where the overlay currently believes the game is.
+    #[must_use]
+    pub const fn bounds(&self) -> Option<Bounds> {
+        self.reported
+    }
+
+    /// Takes one observation and says what changed.
+    ///
+    /// A window that reports a zero-sized client area counts as gone. That is what
+    /// minimising looks like — the window still exists, `GetClientRect` still succeeds, and
+    /// the answer is `0x0` — and an overlay resized to it is a window of no pixels that
+    /// still holds a swapchain. Restoring reports it back.
+    pub fn observe(&mut self, seen: Option<Bounds>, focused: bool) -> Change {
+        let usable = seen.filter(|bounds| bounds.is_drawable());
+        let Some(bounds) = usable else {
+            let was_attached = self.reported.is_some();
+            self.reported = None;
+            self.focused = None;
+            return Change {
+                detached: was_attached,
+                ..Change::default()
+            };
+        };
+
+        let mut change = Change::default();
+        if self.reported != Some(bounds) {
+            self.reported = Some(bounds);
+            change.bounds = Some(bounds);
+        }
+        if self.focused != Some(focused) {
+            self.focused = Some(focused);
+            change.focused = Some(focused);
+        }
+        change
+    }
+}
+
 #[cfg(windows)]
 mod platform {
     use super::Attachment;
@@ -154,8 +251,8 @@ mod platform {
     };
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowThreadProcessId, IsHungAppWindow, IsWindowVisible,
-        PostMessageW, RegisterWindowMessageW,
+        EnumWindows, GetClientRect, GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow,
+        IsWindowVisible, PostMessageW, RegisterWindowMessageW,
     };
 
     /// The message posted at the window to see whether the post is refused.
@@ -254,6 +351,32 @@ mod platform {
         bounds_of(find_window(process_id)?)
     }
 
+    /// Whether the game's window has the keyboard focus.
+    ///
+    /// Asked directly rather than tracked, because the answer is one call and the
+    /// alternative is a hook that `windows.c` does not trust either.
+    #[must_use]
+    pub fn is_focused(process_id: u32) -> bool {
+        // SAFETY: a documented call with no arguments that cannot fail.
+        let foreground = unsafe { GetForegroundWindow() };
+        find_window(process_id).is_some_and(|window| std::ptr::eq(window, foreground))
+    }
+
+    /// One observation, for [`super::Follow::observe`].
+    ///
+    /// Both halves in one call so that the geometry and the focus come from the same
+    /// moment. Read separately they can disagree -- the window can go between them -- and
+    /// the overlay would then be positioned over a window it has just been told is gone.
+    #[must_use]
+    pub fn observe(process_id: u32) -> (Option<Bounds>, bool) {
+        let Some(window) = find_window(process_id) else {
+            return (None, false);
+        };
+        // SAFETY: a documented call with no arguments that cannot fail.
+        let focused = std::ptr::eq(window, unsafe { GetForegroundWindow() });
+        (bounds_of(window), focused)
+    }
+
     /// Whether the overlay could attach to the game right now.
     #[must_use]
     pub fn attachment(process_id: u32) -> Attachment {
@@ -317,7 +440,7 @@ mod platform {
 }
 
 #[cfg(windows)]
-pub use platform::{attachment, content_bounds, find_window};
+pub use platform::{attachment, content_bounds, find_window, is_focused, observe};
 
 #[cfg(test)]
 mod tests {
@@ -350,6 +473,82 @@ mod tests {
         // Zero is the System Idle Process, which owns no windows and always exists, so
         // this asks the real question rather than one about a stale id.
         assert_eq!(super::attachment(0), Attachment::NotFound);
+    }
+
+    use super::{Bounds, Follow};
+
+    const WINDOW: Bounds = Bounds {
+        x: 100,
+        y: 50,
+        width: 1280,
+        height: 720,
+    };
+
+    /// The first look is a change, and the second is not. A caller that was told to move
+    /// the overlay on every poll would move it sixty times a second to where it already is.
+    #[test]
+    fn the_first_look_reports_and_the_second_does_not() {
+        let mut follow = Follow::new();
+        let first = follow.observe(Some(WINDOW), true);
+        assert_eq!(first.bounds, Some(WINDOW));
+        assert_eq!(first.focused, Some(true));
+        assert!(!first.detached);
+
+        assert_eq!(follow.observe(Some(WINDOW), true), super::Change::default());
+    }
+
+    /// Moving and losing focus in one poll is two things to do, not one. Reported as one
+    /// enum, a caller would handle the move and leave the overlay drawn over whatever the
+    /// player switched to.
+    #[test]
+    fn moving_and_losing_focus_are_both_reported() {
+        let mut follow = Follow::new();
+        follow.observe(Some(WINDOW), true);
+
+        let moved = Bounds { x: 0, ..WINDOW };
+        let change = follow.observe(Some(moved), false);
+        assert_eq!(change.bounds, Some(moved));
+        assert_eq!(change.focused, Some(false));
+    }
+
+    /// Minimising does not make the window disappear: it still exists, `GetClientRect`
+    /// still succeeds, and it reports nothing to draw on. An overlay resized to that is a
+    /// window of no pixels still holding a swapchain.
+    #[test]
+    fn a_minimised_window_counts_as_gone_and_comes_back() {
+        let mut follow = Follow::new();
+        follow.observe(Some(WINDOW), true);
+
+        let minimised = Bounds {
+            width: 0,
+            height: 0,
+            ..WINDOW
+        };
+        let change = follow.observe(Some(minimised), false);
+        assert!(change.detached);
+        assert_eq!(follow.bounds(), None);
+
+        let restored = follow.observe(Some(WINDOW), true);
+        assert_eq!(restored.bounds, Some(WINDOW));
+        assert_eq!(restored.focused, Some(true));
+    }
+
+    /// A window that was never there does not detach, because there was nothing attached.
+    /// Reporting one every poll while the game is not running would have the overlay
+    /// tearing itself down sixty times a second.
+    #[test]
+    fn nothing_detaches_when_nothing_was_attached() {
+        let mut follow = Follow::new();
+        assert!(!follow.observe(None, false).is_anything());
+        assert!(!follow.observe(None, false).is_anything());
+    }
+
+    #[test]
+    fn a_window_that_goes_away_detaches_once() {
+        let mut follow = Follow::new();
+        follow.observe(Some(WINDOW), true);
+        assert!(follow.observe(None, false).detached);
+        assert!(!follow.observe(None, false).detached);
     }
 
     /// Against the real game, which is the only thing that can confirm the positive half.
