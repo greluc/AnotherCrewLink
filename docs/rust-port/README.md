@@ -130,14 +130,48 @@ P8  Bridge and sunset            4.0   G4 — and a 2.0 release prerequisite
 P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 ```
 
-> **Where this actually is, 2026-08-26.** The table is effort, not progress, and reading it
-> as progress has been wrong for some days. `P1+` through `P3+` are built and both their
-> gates are met — G1 over 12 574 recorded frames, G2 in full. `P4+`'s decisions are built
-> and its transport is not wired. `P5+` is most of the way: the single-instance lock, the
-> push-to-talk poll, exclusive-fullscreen detection, the named pipe, the elevated helper
-> itself, its launcher, the UIPI check, the window follower and the driver that owns them
-> all exist; the overlay window's drawing does not. `P6+` has its framework spike, measured
-> rather than argued. `P7+`, `P8` and `P9` are untouched.
+> **Where this actually is, 2026-08-26 (evening).** The table is effort, not progress, and
+> reading it as progress has been wrong for some days.
+>
+> `P1+` through `P3+` are built and both their gates are met — G2 in full, and **G1 over
+> the 12 574 frames that were recorded**, which is the honest form: five situations were
+> never in the corpus and still are not. `TASKS`, `DISCUSSION`, comms sabotage, doors and
+> cameras need four people in a real round, and freeplay provably cannot reach them —
+> the Electron reader takes all five *inside* `if (state === GameState.TASKS)`.
+> `test/recordings/README.md` records the measurement.
+>
+> `P4+` is **built**, and that is the sentence this note has been unable to write. The
+> client joins the lobby the reader reports, offers to newcomers, routes signals through
+> `signal_route`, carries Opus over the mesh, and opens a microphone and a speaker at both
+> ends — capture, encode, send, order, decode, place by `voice_params`, mix, play.
+>
+> Two things are outside that loop and are named rather than implied: there is **no echo
+> canceller** (`acl_audio::apm` wants the playback stream as its reference, which is a
+> real-time data structure rather than a mutex) and **no resampling** (a device that offers
+> only 44.1 kHz is reported as unusable rather than quietly played at the wrong speed).
+>
+> What has never been done is the thing no test here can do: two people, two machines,
+> hearing each other.
+>
+> `P5+` is **built**. The overlay window draws — that was the last piece, and it took a
+> sprite protocol to get there.
+>
+> `P6+` is **built**: all six items. Shell and window state, main view, settings (screen
+> and file), lobby browser end to end, overlay view with its seven positions and the
+> meeting table, and the GPU fallback chain — which lost a rung to measurement.
+>
+> `P7+` is built bar its ceremonies: the settings migration, the signed update path, the
+> hand-built NSIS installer, the release workflow. It cannot *complete* without a release
+> key, which is a ceremony performed offline, and without shipping an ordinary 1.0.x
+> release through the new installer — §4.9's own instruction.
+>
+> `P8`'s mechanism is built: `latest.yml`, the bridge installer that renames rather than
+> deletes, the switch-off message. What is left of it is not code — three staged releases,
+> a fleet that has to move, and G4 rehearsed on real 1.0.2 installs.
+>
+> `P9` is **blocked rather than unbuilt**, and deliberately: everything in it is gated on
+> the 1.x switch-off, and doing it early would break the 1.x clients still in lobbies. It
+> is the one phase whose precondition is other people's machines.
 >
 > The weeks are unchanged and are not a record of what anything cost.
 > [04-implementation-plan.md](04-implementation-plan.md) §4.11 carries the same statement
