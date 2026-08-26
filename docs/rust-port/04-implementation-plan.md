@@ -2077,6 +2077,18 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
    with Linux on 2026-08-25.
 2. No `.blockmap` asset for the bridge, or the updater attempts a differential
    download against a file that is not there.
+
+   > **Built 2026-08-26, items 1 and 2.** `acl_updater::legacy_feed` writes `latest.yml`
+   > and `there_is_no_blockmap` is the test — `electron-builder` names one by default, so
+   > the omission has to be deliberate and stay deliberate.
+   >
+   > **Two things in that file are easy to get wrong**, and both now have tests. The digest
+   > is **base64**, while `acl_updater::manifest` carries the same SHA-512 as hex —
+   > `electron-updater` decodes base64 and compares bytes, so a hex digest there is one
+   > that never matches and every client refuses the update quietly. And **both** the
+   > `files` list and the top-level `path`/`sha512` pair are written, because the installed
+   > fleet spans `electron-updater` versions: older ones read the pair, newer ones read the
+   > list, and writing one of the two is choosing which half of the fleet updates.
 3. Staged rollout as sequential tagged releases — 1.1.0, 1.1.1, 1.1.2, a week
    apart, cohort baked in at build time. `stagingPercentage` is not available and
    this is settled rather than weighed: it lives in `latest.yml`, `latest.yml` is
@@ -2090,6 +2102,22 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
 4. The first bridge installer **renames rather than deletes** the Electron
    install and its config, and 2.x ships a documented way back. Only after the
    bridge has sat at full rollout for a cycle does it begin deleting.
+
+   > **Built 2026-08-26, with one departure that is stated rather than done quietly.**
+   > `installer/bridge.nsi` moves the Electron files into `1.x-backup` beside them, and its
+   > install section contains no `Delete` and no `RMDir` at all — there is a test for that.
+   > The uninstaller leaves the backup, because somebody uninstalling 2.x may be doing
+   > exactly that in order to go back.
+   >
+   > **It does not touch the config**, and item 4 says "the Electron install *and* its
+   > config". Since §4.9 item 4 the two versions keep separate settings directories and
+   > `acl_core::paths::import` reads 1.x's forward on first run. Renaming 1.x's config
+   > would therefore break the import it exists to enable: 2.x would start on defaults with
+   > the settings sitting under a name nothing looks for. Leaving it untouched is strictly
+   > more conservative than renaming it and serves the same purpose.
+   >
+   > It also opens no window at all, where the plain installer opens one on a first
+   > install. Every machine that runs the bridge runs it because its updater decided to.
 5. The **migration is complete before the switch-off**, and "complete" is a
    number agreed in advance and read off the per-version join counts below, not a
    feeling about how long it has been. Until that number is met, 1.1.x keeps
@@ -2101,6 +2129,22 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
    not updated must be told why it stopped working, in the app, in its own
    language — the 37 locale directories are already there. This is small work and
    it is the difference between a sunset and an outage.
+
+   > **The client half built 2026-08-26 — and it is small work with an ordering
+   > constraint that is not.** `src/common/protocolRetirement.ts` maps the server's
+   > sentinel to `game.error_retired`, and `Voice.tsx` translates it where the error is
+   > *rendered* rather than where it arrives, so it follows the language setting rather
+   > than capturing `t` in an effect.
+   >
+   > **A client can only translate a string it already has.** This has to reach the fleet in
+   > an ordinary 1.x release, and that release has to reach people, *before* the server
+   > starts sending it. Ship the two together and every user sees the raw sentinel:
+   > technically a message, practically an outage with a serial number.
+   >
+   > So the sentinel is also a readable English sentence — "this version is no longer
+   > supported, please update" — and there is a test asserting it stays one. If the ordering
+   > is got wrong anyway, what a user sees is still something they can act on. The server
+   > half is the other repository's.
 
 **Rollback** is re-marking the 1.0.2 release as *Latest*: un-updated clients
 revert within one check interval without touching a frozen asset. It is

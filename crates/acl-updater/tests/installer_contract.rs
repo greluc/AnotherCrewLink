@@ -41,9 +41,25 @@ fn instructions() -> String {
 }
 
 fn script() -> String {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../installer/anothercrewlink.nsi");
+    named("anothercrewlink.nsi")
+}
+
+/// One of the installer scripts, by name.
+fn named(file: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../installer")
+        .join(file);
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// One of them with its comments removed, for the checks that must not match prose.
+fn instructions_of(file: &str) -> String {
+    let mut kept = String::new();
+    for line in named(file).lines() {
+        kept.push_str(line.split(';').next().unwrap_or_default());
+        kept.push('\n');
+    }
+    kept
 }
 
 /// `--updated` is electron-builder's flag and the fleet's updater always passes it. A
@@ -214,4 +230,115 @@ fn the_running_client_is_closed_first() {
         closed < first_file && helper < first_file,
         "files are written before the running client is closed"
     );
+}
+
+/// The bridge installer, which is the one artefact a large number of machines execute
+/// without anybody choosing to.
+mod bridge {
+    use super::instructions_of;
+
+    fn bridge() -> String {
+        instructions_of("bridge.nsi")
+    }
+
+    /// It renames rather than deletes. §4.12 item 4, and it is the whole difference between
+    /// a migration somebody can walk back and one nobody can.
+    #[test]
+    fn the_electron_installation_is_renamed_and_not_deleted() {
+        let bridge = bridge();
+        assert!(
+            bridge.contains("Rename \"$INSTDIR\\AnotherCrewLink.exe\""),
+            "the Electron executable is not moved aside"
+        );
+        assert!(
+            bridge.contains("Rename \"$INSTDIR\\resources\""),
+            "the Electron resources are not moved aside"
+        );
+        let install = bridge
+            .split("Section \"Install\"")
+            .nth(1)
+            .and_then(|section| section.split("SectionEnd").next())
+            .expect("an install section");
+        assert!(
+            !install.contains("Delete "),
+            "the bridge deletes something in its install section"
+        );
+        assert!(
+            !install.contains("RMDir"),
+            "the bridge removes a directory in its install section"
+        );
+    }
+
+    /// It does not touch 1.x's settings. Since the two versions keep separate directories,
+    /// `acl_core::paths::import` reads 1.x's `config.json` forward on first run -- and
+    /// renaming it would break the import it exists to enable, leaving 2.x on defaults with
+    /// the settings sitting under a name nothing looks for.
+    #[test]
+    fn the_old_settings_are_left_exactly_where_the_importer_looks() {
+        let bridge = bridge();
+        assert!(
+            !bridge.contains("$APPDATA"),
+            "the bridge reaches into %APPDATA%, where both versions keep their settings"
+        );
+    }
+
+    /// It never opens a window. Every machine runs this because its updater decided to, not
+    /// because somebody asked -- a window appearing would be a program the user did not open
+    /// turning up while they were doing something else.
+    #[test]
+    fn the_bridge_opens_no_window_at_all() {
+        let bridge = bridge();
+        assert!(
+            !bridge.contains("Exec '\"$INSTDIR"),
+            "the bridge starts the client, on a machine nobody asked"
+        );
+    }
+
+    /// The same three arguments as the plain installer, because the fleet's updater sends
+    /// them and will not be persuaded otherwise.
+    #[test]
+    fn it_honours_the_same_contract_as_the_plain_installer() {
+        let bridge = bridge();
+        assert!(bridge.contains("--updated"), "no --updated");
+        assert!(bridge.contains("${GetOptions}"), "--updated is not parsed");
+        assert!(
+            !bridge.contains("StrCpy $INSTDIR"),
+            "something overwrites $INSTDIR, which /D= had already set"
+        );
+        assert!(
+            bridge.contains("RequestExecutionLevel user"),
+            "the bridge asks for elevation, on every machine at once"
+        );
+        assert!(
+            !bridge.contains("HKLM"),
+            "the bridge writes machine-wide state"
+        );
+    }
+
+    /// It kills the Electron client by its own name as well as ours. On most of these
+    /// machines the running process is `AnotherCrewLink.exe`, and it is the one whose
+    /// updater started this installer.
+    #[test]
+    fn the_electron_client_is_closed_by_its_own_name() {
+        let bridge = bridge();
+        assert!(
+            bridge.contains("taskkill /IM AnotherCrewLink.exe"),
+            "the Electron client is left running while its files are moved"
+        );
+    }
+
+    /// The uninstaller leaves the backup. Somebody uninstalling 2.x may be doing exactly
+    /// that in order to go back to 1.x.
+    #[test]
+    fn uninstalling_leaves_the_way_back() {
+        let bridge = bridge();
+        let uninstall = bridge
+            .split("Section \"Uninstall\"")
+            .nth(1)
+            .expect("an uninstall section");
+        assert!(
+            !uninstall.contains("1.x-backup"),
+            "the uninstaller removes the way back to 1.x"
+        );
+    }
 }

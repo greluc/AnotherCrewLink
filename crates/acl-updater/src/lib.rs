@@ -23,5 +23,6 @@
 
 pub mod fetch;
 pub mod install;
+pub mod legacy_feed;
 pub mod manifest;
 pub mod policy;

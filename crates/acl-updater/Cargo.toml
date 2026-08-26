@@ -35,6 +35,9 @@ sha2 = "0.10"
 # Version ordering, including the pre-release rule a rollback check depends on: `2.0.0-rc.1`
 # is older than `2.0.0`, and hand-rolled dotted-number comparison gets that wrong.
 semver = "1.0"
+# `latest.yml` carries its digest as base64, which is the one thing about that file most
+# likely to be filled in with hex by somebody copying it from the manifest beside it.
+base64 = "0.22"
 serde_json.workspace = true
 thiserror.workspace = true
 # The same client the offsets store and the hat store use, with the same certificate
@@ -53,6 +56,10 @@ windows-sys = { version = "0.61", features = [
 # Signing, so the tests verify a real signature made a moment ago rather than a recorded
 # one -- and so no private key is committed anywhere.
 minisign = "0.9.1"
+# Reading back what `legacy_feed` writes by hand, so the test checks the document rather
+# than the string. A serialiser in the shipped path would be a dependency whose job is to
+# emit six lines, in the highest-blast-radius file the project has.
+serde_yaml = "0.9"
 
 [lints]
 workspace = true
