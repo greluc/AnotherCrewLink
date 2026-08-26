@@ -1410,6 +1410,45 @@ against the same game.
 > the same mechanism, so its absence confirms the Windows path is the in-memory one
 > rather than a file a second implementation could take.
 
+> **Answered 2026-08-26, by the measurement this asked for.** The client was started and
+> its windows and named objects enumerated. It holds a message-only window of class
+> `Chrome_MessageWindow` whose **window text is the user-data directory**:
+>
+> ```text
+> MSG  class=[Chrome_MessageWindow]  text=[C:\Users\lucas\AppData\Roaming\AnotherCrewLink]
+> mutex Local\AnotherCrewLink                                        does not exist
+> ```
+>
+> That is Chromium's `ProcessSingleton`, and it is the only thing a running 1.x holds that
+> a different implementation can find. Three properties of the lookup were measured rather
+> than assumed, each of them a way to write this and have it silently never match: the text
+> carries no trailing separator, the comparison is case-insensitive, and the same process
+> holds a second window of that class with empty text — so the class alone is not the lock,
+> class and text together are.
+>
+> Built as `acl-core::single_instance`. It refuses to start when that window exists, and
+> takes two names of its own: one derived from the user-data directory, so two 2.x
+> installations that keep their files apart may both run; and one fixed, so that the coarse
+> case has a name 1.x could also spell. The specific one is claimed first — the other order
+> refuses just as correctly and then tells the user a 1.x is running when it is a 2.x.
+>
+> **One direction remains open, and it is the harder one.** A 1.x *started while a 2.x is
+> already running* still starts: 1.x looks for that window and nothing else. Two ways to
+> close it, neither free.
+>
+> 1. **Add a name to 1.x in a patch release.** Electron has no named-mutex API, so in pure
+>    Node this is a pid file in the user-data directory, checked with `process.kill(pid, 0)`.
+>    Cheap, and it only ever protects installations that took the patch — which is the
+>    smaller half of the fleet on the day 2.0 ships and never becomes all of it.
+> 2. **Register the same window from 2.x** and answer Chromium's `WM_COPYDATA` handshake.
+>    This needs no 1.x change and therefore covers every install in the field, including
+>    the ones that will never update. It is also reverse-engineered behaviour that does not
+>    fail safe: a newcomer that times out on the handshake concludes the lock is stale and
+>    takes it anyway.
+>
+> Option 2 is testable on this machine — register the window from a probe, launch 1.x, see
+> whether it exits — and that experiment is what should decide it, not this paragraph.
+
 ## 4.8 Phase 6 — GUI (11.5 weeks)
 
 **Why 11.5 and not 10:** net of dropping the localisation conversion (−1.0), the

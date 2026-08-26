@@ -14,3 +14,4 @@ pub mod logging;
 pub mod overlay;
 pub mod paths;
 pub mod shortcuts;
+pub mod single_instance;

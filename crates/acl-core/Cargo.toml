@@ -12,6 +12,18 @@ publish = false
 acl-ipc.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# The single-instance lock, and nothing else yet: one window lookup and one named mutex.
+# The same 0.61 `acl-game` reads process memory with, so the workspace resolves one copy.
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	# CreateMutexW takes a SECURITY_ATTRIBUTES pointer, so its declaration is behind this
+	# feature even though the pointer passed is always null.
+	"Win32_Security",
+	"Win32_System_Threading",
+	"Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 # `product_name_still_matches_package_json` reads the Electron manifest, because the
 # directory 1.x writes into is `productName` and a rename there is silent here.
