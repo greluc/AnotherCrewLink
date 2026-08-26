@@ -28,6 +28,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "acl-client"
+version = "0.0.0"
+dependencies = [
+ "acl-core",
+ "acl-game",
+ "acl-ui",
+ "eframe",
+ "egui",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "acl-core"
 version = "0.0.0"
 dependencies = [
