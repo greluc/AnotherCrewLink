@@ -233,11 +233,395 @@ fn dim(colour: (u8, u8, u8)) -> (u8, u8, u8) {
     (colour.0 / 3, colour.1 / 3, colour.2 / 3)
 }
 
+/// Reads a PNG into a bitmap, premultiplied.
+///
+/// The hat artwork is 8-bit RGBA — `ratHat.png` is 270×428, colour type 6 — but this asks
+/// the decoder to normalise anyway, because the collection is 983 files and one of them
+/// being a palette or 16-bit would otherwise be a panic on somebody's machine rather than
+/// a hat that looks slightly wrong here.
+///
+/// **Premultiplied on the way in**, like everything else in this module: the layered window
+/// requires it, and converting once at the edge is the only way to keep the invariant the
+/// blending relies on. See the module documentation.
+///
+/// `None` for anything that is not a PNG this decoder can read, which costs one cosmetic
+/// layer. The alternative — refusing to draw the avatar — is worse for a file served over
+/// a CDN.
+#[must_use]
+pub fn decode_png(bytes: &[u8]) -> Option<Bitmap> {
+    // `Cursor`, because `png` 0.18 wants `BufRead + Seek` and a slice is neither.
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    // Both are no-ops for the 8-bit RGBA the collection ships, and both are what keeps a
+    // stray palette or 16-bit file from arriving in a layout this does not expect.
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut raw = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut raw).ok()?;
+    let width = i32::try_from(info.width).ok()?;
+    let height = i32::try_from(info.height).ok()?;
+
+    let channels = match info.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Grayscale => 1,
+        // Indexed is gone after `normalize_to_color8`; if it somehow is not, the pixel
+        // layout is not what the loop below assumes.
+        png::ColorType::Indexed => return None,
+    };
+
+    let mut bitmap = Bitmap::blank(width, height);
+    for (at, pixel) in raw.chunks_exact(channels).enumerate() {
+        // `chunks_exact` guarantees the length, but the lint does not read that far and
+        // an index that "cannot" be out of range is exactly the kind that turns out to be.
+        let channel_at = |index: usize| pixel.get(index).copied().unwrap_or(0);
+        let (red, green, blue, alpha) = match channels {
+            4 => (channel_at(0), channel_at(1), channel_at(2), channel_at(3)),
+            3 => (channel_at(0), channel_at(1), channel_at(2), 255),
+            2 => (channel_at(0), channel_at(0), channel_at(0), channel_at(1)),
+            _ => (channel_at(0), channel_at(0), channel_at(0), 255),
+        };
+        let Some(slot) = bitmap.pixels.get_mut(at * 4..at * 4 + 4) else {
+            break;
+        };
+        // Straight alpha in the file, premultiplied here.
+        // Blue, green, red, alpha -- the order `UpdateLayeredWindow` wants, which is what
+        // every other producer in this module writes.
+        slot.copy_from_slice(&[
+            premultiply(blue, alpha),
+            premultiply(green, alpha),
+            premultiply(red, alpha),
+            alpha,
+        ]);
+    }
+    Some(bitmap)
+}
+
+/// One channel, scaled by its own alpha.
+///
+/// Rounded rather than truncated. Truncating biases every channel down by up to one level,
+/// which over five composited layers is a visible darkening — and it can push a channel
+/// below its alpha's rounding, which is the one thing premultiplied colour must never do.
+fn premultiply(channel: u8, alpha: u8) -> u8 {
+    let scaled = u32::from(channel) * u32::from(alpha) + 127;
+    // The exact rounding of `x * a / 255`, without the division twice.
+    u8::try_from((scaled + scaled / 255) / 256).unwrap_or(alpha)
+}
+
+impl Bitmap {
+    /// Draws another bitmap over this one, scaled into a rectangle.
+    ///
+    /// Source-over in premultiplied space, which is one multiply per channel:
+    /// `dst = src + dst * (1 - src_alpha)`. That is the whole reason the rest of this
+    /// module keeps colour premultiplied — the straight-alpha form needs a divide and
+    /// gets the halo wrong at every partly transparent edge.
+    ///
+    /// **The filter is an area average**, not nearest. A hat is 270×428 and lands in a
+    /// box of about forty pixels on the overlay; taking one sample out of a fifty-pixel
+    /// square gives a different hat depending on which pixel it lands on, which shows up
+    /// as sparkle when the sprite moves. Averaging the square costs the same order of
+    /// work and is stable. Where the destination is *larger* than the source the square
+    /// covers less than one pixel and this degenerates to nearest, which is what an
+    /// upscaled sprite has to look like anyway.
+    ///
+    /// Anything outside this bitmap is clipped rather than wrapped or refused.
+    pub fn composite(&mut self, source: &Bitmap, at: (i32, i32), size: (i32, i32)) {
+        let (width, height) = size;
+        if width <= 0 || height <= 0 || source.width <= 0 || source.height <= 0 {
+            return;
+        }
+        for row in 0..height {
+            for column in 0..width {
+                let (x, y) = (at.0 + column, at.1 + row);
+                if x < 0 || y < 0 || x >= self.width || y >= self.height {
+                    continue;
+                }
+                let sample = source.area((column, row), (width, height));
+                self.over(x, y, sample);
+            }
+        }
+    }
+
+    /// The average of the source pixels one destination pixel covers.
+    ///
+    /// Premultiplied colour is what makes this a plain average: straight alpha would need
+    /// the colours weighted by their alphas before averaging, and forgetting that is the
+    /// classic dark fringe around a resized sprite.
+    fn area(&self, destination: (i32, i32), size: (i32, i32)) -> [u32; 4] {
+        let span = |at: i32, out_of: i32, source: i32| -> (i32, i32) {
+            let start = at * source / out_of;
+            let end = ((at + 1) * source).div_euclid(out_of).max(start + 1);
+            (start, end.min(source))
+        };
+        let (left, right) = span(destination.0, size.0, self.width);
+        let (top, bottom) = span(destination.1, size.1, self.height);
+
+        let mut total = [0_u32; 4];
+        let mut count = 0_u32;
+        for y in top..bottom {
+            for x in left..right {
+                let Some(pixel) = self.at(x, y) else {
+                    continue;
+                };
+                for (sum, channel) in total.iter_mut().zip(pixel) {
+                    *sum += u32::from(channel);
+                }
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return [0; 4];
+        }
+        for sum in &mut total {
+            *sum = (*sum + count / 2) / count;
+        }
+        total
+    }
+
+    /// Source-over, in premultiplied space.
+    fn over(&mut self, x: i32, y: i32, source: [u32; 4]) {
+        let Ok(at) = usize::try_from((y * self.width + x) * 4) else {
+            return;
+        };
+        let Some(slot) = self.pixels.get_mut(at..at + 4) else {
+            return;
+        };
+        let inverse = 255 - source[3].min(255);
+        for (channel, value) in slot.iter_mut().zip(source) {
+            let kept = (u32::from(*channel) * inverse + 127) / 255;
+            *channel = u8::try_from((value + kept).min(255)).unwrap_or(255);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Bitmap, Crewmate, crewmate};
+    use super::{Bitmap, Crewmate, crewmate, decode_png};
+
+    /// The real artwork, decoded. A hat invented for a test only proves the decoder agrees
+    /// with itself; these are two of the 983 files players actually download.
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test/fixtures/hats")
+                .join(name),
+        )
+        .expect("the vendored artwork")
+    }
+
+    #[test]
+    fn a_real_hat_decodes_at_its_own_size() {
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        assert_eq!((hat.width, hat.height), (270, 428));
+        assert_eq!(hat.pixels.len(), 270 * 428 * 4);
+    }
+
+    /// And it comes out premultiplied, like everything else here. The layered window
+    /// requires it and does not check; straight alpha is a bright fringe on every
+    /// antialiased edge, which on a hat is its whole outline.
+    #[test]
+    fn a_decoded_hat_is_premultiplied() {
+        for name in ["ratHat.png", "grandpaHat.png"] {
+            let hat = decode_png(&fixture(name)).expect("a PNG");
+            for (at, pixel) in hat.pixels.as_chunks::<4>().0.iter().enumerate() {
+                assert!(
+                    pixel[0] <= pixel[3] && pixel[1] <= pixel[3] && pixel[2] <= pixel[3],
+                    "{name} pixel {at} is {pixel:?}, which exceeds its alpha"
+                );
+            }
+        }
+    }
+
+    /// A hat has transparent corners and opaque middle -- which is what says the alpha
+    /// channel survived rather than being filled in with 255.
+    #[test]
+    fn a_decoded_hat_has_a_transparent_edge_and_an_opaque_middle() {
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        assert_eq!(hat.at(0, 0).map(|pixel| pixel[3]), Some(0), "the corner");
+        let opaque = hat
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] == 255)
+            .count();
+        assert!(opaque > 1000, "only {opaque} opaque pixels");
+    }
+
+    /// Anything that is not a PNG costs one cosmetic layer rather than the avatar.
+    #[test]
+    fn something_that_is_not_a_png_is_not_a_panic() {
+        assert!(decode_png(&[]).is_none());
+        assert!(decode_png(b"not a png at all").is_none());
+        let mut truncated = fixture("ratHat.png");
+        truncated.truncate(64);
+        assert!(decode_png(&truncated).is_none());
+    }
+
+    /// Compositing an opaque square replaces what is under it, and a fully transparent one
+    /// changes nothing. The two ends of the blend.
+    #[test]
+    fn the_two_ends_of_the_blend_do_what_they_say() {
+        let mut canvas = Bitmap::blank(8, 8);
+        canvas.circle((4.0, 4.0), 4.0, (255, 0, 0));
+
+        let mut opaque = Bitmap::blank(2, 2);
+        for pixel in opaque.pixels.as_chunks_mut::<4>().0 {
+            pixel.copy_from_slice(&[0, 255, 0, 255]);
+        }
+        let before = canvas.at(4, 4);
+        canvas.composite(&opaque, (3, 3), (2, 2));
+        assert_ne!(canvas.at(4, 4), before, "an opaque square drew nothing");
+        assert_eq!(canvas.at(4, 4).map(|pixel| pixel[3]), Some(255));
+
+        let clear = Bitmap::blank(2, 2);
+        let unchanged = canvas.clone();
+        canvas.composite(&clear, (3, 3), (2, 2));
+        assert_eq!(
+            canvas.pixels, unchanged.pixels,
+            "a clear square drew something"
+        );
+    }
+
+    /// The result is still premultiplied, which is the invariant every later blit depends
+    /// on -- and the one a blend written in straight alpha quietly breaks.
+    #[test]
+    fn compositing_keeps_the_result_premultiplied() {
+        let mut canvas = crewmate(
+            64,
+            Crewmate {
+                body: (0xC5, 0x11, 0x11),
+                shadow: (0x7A, 0x08, 0x38),
+                talking: true,
+                alive: true,
+            },
+        );
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        canvas.composite(&hat, (8, -10), (48, 40));
+        for (at, pixel) in canvas.pixels.as_chunks::<4>().0.iter().enumerate() {
+            assert!(
+                pixel[0] <= pixel[3] && pixel[1] <= pixel[3] && pixel[2] <= pixel[3],
+                "pixel {at} is {pixel:?}, which exceeds its alpha"
+            );
+        }
+    }
+
+    /// A hat drawn partly off the edge is clipped, not wrapped and not refused. Every hat
+    /// is drawn partly off: the collection's default top is -78%.
+    ///
+    /// An opaque square rather than the real artwork, because the artwork's own margins
+    /// are transparent -- see `the_artwork_has_transparent_margins` -- and a test that
+    /// depended on which part of a hat happens to have ink in it would be testing the
+    /// hat.
+    #[test]
+    fn a_sprite_hanging_off_the_edge_is_clipped() {
+        let mut opaque = Bitmap::blank(8, 8);
+        for pixel in opaque.pixels.as_chunks_mut::<4>().0 {
+            pixel.copy_from_slice(&[255, 255, 255, 255]);
+        }
+        let mut canvas = Bitmap::blank(32, 32);
+        canvas.composite(&opaque, (-20, -20), (40, 40));
+        canvas.composite(&opaque, (28, 28), (40, 40));
+        assert_eq!(canvas.pixels.len(), 32 * 32 * 4, "the canvas was resized");
+        assert_eq!(canvas.at(0, 0).map(|pixel| pixel[3]), Some(255), "top left");
+        assert_eq!(
+            canvas.at(31, 31).map(|pixel| pixel[3]),
+            Some(255),
+            "bottom right"
+        );
+
+        // And the real artwork over the same edges, which must also not panic.
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        canvas.composite(&hat, (-260, -400), (270, 428));
+        canvas.composite(&hat, (30, 30), (270, 428));
+        assert_eq!(canvas.pixels.len(), 32 * 32 * 4);
+    }
+
+    /// The artwork is a fixed canvas with the hat somewhere inside it, and the margins are
+    /// empty: `ratHat.png` is 270x428 with nothing at all in its top quarter or its bottom
+    /// quarter.
+    ///
+    /// That is why the collection's defaults are what they are -- `top: -78%`, `width:
+    /// 130%` -- and it is why nothing here may crop artwork to its content as an
+    /// optimisation. The empty margin is load-bearing: it is what the percentages are
+    /// measured against, so trimming it moves every hat.
+    #[test]
+    fn the_artwork_has_transparent_margins() {
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        let ink_in = |from: i32, to: i32| {
+            (from..to)
+                .flat_map(|y| (0..hat.width).map(move |x| (x, y)))
+                .filter(|(x, y)| hat.at(*x, *y).is_some_and(|pixel| pixel[3] > 0))
+                .count()
+        };
+        assert_eq!(ink_in(0, hat.height / 4), 0, "the top quarter is empty");
+        assert_eq!(
+            ink_in(hat.height * 3 / 4, hat.height),
+            0,
+            "the bottom quarter is empty"
+        );
+        assert!(
+            ink_in(hat.height / 4, hat.height * 3 / 4) > 1000,
+            "and the middle is not"
+        );
+    }
+
+    /// Scaling averages rather than sampling. A hat is 270 pixels wide and lands in about
+    /// forty; one sample out of a fifty-pixel square gives a different hat depending on
+    /// which pixel it hits, which shows up as sparkle when the sprite moves.
+    #[test]
+    fn downscaling_averages_instead_of_sampling() {
+        // A source that is half opaque white and half transparent, in alternating columns.
+        // Any single sample gives 0 or 255; the average is in between.
+        let mut striped = Bitmap::blank(16, 1);
+        for (at, pixel) in striped.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if at % 2 == 0 {
+                pixel.copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+        let mut canvas = Bitmap::blank(2, 1);
+        canvas.composite(&striped, (0, 0), (2, 1));
+        let alpha = canvas.at(0, 0).map(|pixel| pixel[3]).expect("a pixel");
+        assert!(
+            (100..=155).contains(&alpha),
+            "expected roughly half, got {alpha}"
+        );
+    }
+
+    /// Every destination pixel takes at least one source pixel, so an upscale draws
+    /// something everywhere rather than leaving gaps between samples.
+    #[test]
+    fn upscaling_leaves_no_gaps() {
+        let mut source = Bitmap::blank(2, 2);
+        for pixel in source.pixels.as_chunks_mut::<4>().0 {
+            pixel.copy_from_slice(&[255, 255, 255, 255]);
+        }
+        let mut canvas = Bitmap::blank(9, 9);
+        canvas.composite(&source, (0, 0), (9, 9));
+        for y in 0..9 {
+            for x in 0..9 {
+                assert_eq!(
+                    canvas.at(x, y).map(|pixel| pixel[3]),
+                    Some(255),
+                    "gap at {x},{y}"
+                );
+            }
+        }
+    }
+
+    /// A zero-sized or empty source draws nothing instead of dividing by zero.
+    #[test]
+    fn nothing_sized_draws_nothing() {
+        let hat = decode_png(&fixture("ratHat.png")).expect("a PNG");
+        let mut canvas = Bitmap::blank(8, 8);
+        let before = canvas.clone();
+        canvas.composite(&hat, (0, 0), (0, 8));
+        canvas.composite(&hat, (0, 0), (8, -1));
+        canvas.composite(&Bitmap::blank(0, 0), (0, 0), (8, 8));
+        assert_eq!(canvas.pixels, before.pixels);
+    }
 
     const RED: (u8, u8, u8) = (0xC5, 0x11, 0x11);
     const DARK: (u8, u8, u8) = (0x7A, 0x08, 0x38);
