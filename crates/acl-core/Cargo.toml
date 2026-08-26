@@ -17,6 +17,9 @@ thiserror.workspace = true
 # The same 0.61 `acl-game` reads process memory with, so the workspace resolves one copy.
 windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
+	# ClientToScreen, which maps the game's client origin into screen coordinates. It is
+	# declared under GDI rather than under windowing, which is where it would be looked for.
+	"Win32_Graphics_Gdi",
 	# CreateMutexW takes a SECURITY_ATTRIBUTES pointer, so its declaration is behind this
 	# feature even though the pointer passed is always null.
 	"Win32_Security",

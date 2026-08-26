@@ -56,6 +56,56 @@ pub enum Attachment {
     NotFound,
 }
 
+/// Where the game is drawing, in screen coordinates.
+///
+/// The *client* area and not the window: the overlay covers what the game renders, not its
+/// title bar, borders or shadow. `get_content_bounds` in `windows.c` computes it the same
+/// way, and the reason is visible the moment it is wrong -- an overlay aligned to the
+/// window rect is offset by the title bar height, so every name is drawn slightly above
+/// the player it belongs to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bounds {
+    /// Screen x of the client area's top-left corner.
+    pub x: i32,
+    /// Screen y of the client area's top-left corner.
+    pub y: i32,
+    /// How wide it is.
+    pub width: i32,
+    /// How tall it is.
+    pub height: i32,
+}
+
+impl Bounds {
+    /// Builds the bounds from what the two Win32 calls actually return.
+    ///
+    /// `GetClientRect` always reports `left = top = 0`, so its `right` and `bottom` are
+    /// the width and the height rather than coordinates. `windows.c` relies on that
+    /// silently -- `bounds->width = rect.right` -- and it is the kind of line that looks
+    /// like a bug until you know, and becomes one the moment somebody "fixes" it by
+    /// subtracting `left`.
+    ///
+    /// The position comes from `ClientToScreen` on that same origin, because the client
+    /// rect is in client coordinates and the overlay has to be placed in screen ones.
+    #[must_use]
+    pub const fn from_client_rect(right: i32, bottom: i32, screen_x: i32, screen_y: i32) -> Self {
+        Self {
+            x: screen_x,
+            y: screen_y,
+            width: right,
+            height: bottom,
+        }
+    }
+
+    /// Whether there is anything to draw on.
+    ///
+    /// A minimised window reports a zero-sized client area rather than disappearing, and
+    /// an overlay sized to it is a window of no pixels that still takes a swapchain.
+    #[must_use]
+    pub const fn is_drawable(self) -> bool {
+        self.width > 0 && self.height > 0
+    }
+}
+
 impl Attachment {
     /// Whether the overlay can attach right now.
     #[must_use]
@@ -94,15 +144,18 @@ impl Attachment {
 #[cfg(windows)]
 mod platform {
     use super::Attachment;
+    use super::Bounds;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_SUCCESS, GetLastError, HWND, LPARAM, SetLastError, WPARAM,
+        ERROR_ACCESS_DENIED, ERROR_SUCCESS, GetLastError, HWND, LPARAM, POINT, RECT, SetLastError,
+        WPARAM,
     };
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsHungAppWindow, IsWindowVisible, PostMessageW,
-        RegisterWindowMessageW,
+        EnumWindows, GetClientRect, GetWindowThreadProcessId, IsHungAppWindow, IsWindowVisible,
+        PostMessageW, RegisterWindowMessageW,
     };
 
     /// The message posted at the window to see whether the post is refused.
@@ -167,6 +220,40 @@ mod platform {
         }
     }
 
+    /// Where a window is drawing, in screen coordinates.
+    fn bounds_of(window: HWND) -> Option<Bounds> {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        // SAFETY: a valid window handle and a live local for the answer.
+        if unsafe { GetClientRect(window, &raw mut rect) } == 0 {
+            return None;
+        }
+        let mut origin = POINT {
+            x: rect.left,
+            y: rect.top,
+        };
+        // SAFETY: the same handle, and a live local that the call maps in place.
+        if unsafe { ClientToScreen(window, &raw mut origin) } == 0 {
+            return None;
+        }
+        Some(Bounds::from_client_rect(
+            rect.right,
+            rect.bottom,
+            origin.x,
+            origin.y,
+        ))
+    }
+
+    /// Where the game is drawing, if it is.
+    #[must_use]
+    pub fn content_bounds(process_id: u32) -> Option<Bounds> {
+        bounds_of(find_window(process_id)?)
+    }
+
     /// Whether the overlay could attach to the game right now.
     #[must_use]
     pub fn attachment(process_id: u32) -> Attachment {
@@ -199,10 +286,38 @@ mod platform {
             Attachment::Available
         }
     }
+    #[cfg(test)]
+    mod platform_tests {
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+
+        /// The one window that is certainly there.
+        ///
+        /// A console test binary has no window of its own, so this is the only way to
+        /// exercise the two calls against something real rather than against a mock of
+        /// them. The desktop window is the whole screen, which is also an assertion worth
+        /// making: bounds that came back as zero would pass a "did it return something"
+        /// test and fail every overlay.
+        #[test]
+        fn the_desktop_window_has_the_size_of_a_screen() {
+            // SAFETY: a documented call with no arguments that cannot fail.
+            let desktop = unsafe { GetDesktopWindow() };
+            let bounds = super::bounds_of(desktop).expect("the desktop window has bounds");
+            assert!(
+                bounds.is_drawable(),
+                "the desktop reported {bounds:?}, which nothing can be drawn on"
+            );
+            assert!(
+                bounds.width >= 640 && bounds.height >= 480,
+                "the desktop reported {bounds:?}, which is smaller than any real screen"
+            );
+        }
+    }
 }
 
 #[cfg(windows)]
-pub use platform::{attachment, find_window};
+pub use platform::{attachment, content_bounds, find_window};
 
 #[cfg(test)]
 mod tests {
