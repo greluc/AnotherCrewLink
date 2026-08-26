@@ -39,6 +39,7 @@ dependencies = [
  "eframe",
  "egui",
  "serde_json",
+ "tokio",
  "ureq",
  "windows-sys 0.61.2",
 ]

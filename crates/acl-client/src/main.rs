@@ -19,6 +19,7 @@
 //! performance number already on record is the one this runs on.
 
 mod hat_store;
+mod net;
 mod reader;
 mod settings_page;
 
@@ -301,6 +302,8 @@ enum Screen {
     Main,
     /// The settings.
     Settings,
+    /// The public lobbies.
+    Lobbies,
 }
 
 /// One player of the reader's state, as the roster wants to see them.
@@ -346,6 +349,8 @@ struct Client {
     hats: hat_store::Loader,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
+    /// The signalling session, on a thread of its own.
+    link: net::Link,
     /// Which page is showing.
     page: Screen,
     /// The strings, in whichever language the settings name.
@@ -370,6 +375,7 @@ impl Client {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
+            link: net::Link::start(),
             page: Screen::Main,
             catalogue,
             // A reader that will not start is not a reason to refuse to open: the window is
@@ -534,6 +540,90 @@ impl Client {
         }
     }
 
+    /// Draws the public lobby browser.
+    ///
+    /// Opening the page is what connects. A session held open for a window nobody is
+    /// looking at is a socket the server has to keep, a heartbeat to answer and a
+    /// reconnect to attempt, for nothing; the voice pipeline will want one for longer and
+    /// will say so when it exists.
+    fn show_lobbies(&mut self, ui: &mut egui::Ui) {
+        let catalogue = self.catalogue.as_ref();
+        let translate = move |key: &str| {
+            catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+
+        match self.link.state().clone() {
+            net::State::Idle => {
+                // The server the settings name, which is 1.x's `serverURL` -- the same key
+                // in the same file, so a player who changed it keeps their change.
+                let url = self.settings.config().text_at("serverURL");
+                ui.label(format!("Connecting to {url}…"));
+                self.link.connect(&url);
+                self.link.watch_lobbies(true);
+                return;
+            }
+            net::State::Connecting => {
+                ui.spinner();
+                return;
+            }
+            net::State::Failed(why) => {
+                ui.colored_label(egui::Color32::from_rgb(230, 140, 90), why);
+                if ui.button("Try again").clicked() {
+                    // Back to idle, which is what makes the arm above connect again.
+                    self.link.disconnect();
+                }
+                return;
+            }
+            net::State::Connected(_) => {}
+        }
+
+        let listings: Vec<acl_ui::views::lobby_browser::Listing<'_>> = self
+            .link
+            .lobbies()
+            .map(|lobby| acl_ui::views::lobby_browser::Listing {
+                id: i64::try_from(lobby.id).unwrap_or(i64::MAX),
+                title: &lobby.title,
+                host: &lobby.host,
+                mods: &lobby.mods,
+                language: &lobby.language,
+                row: acl_ui::lobby_list::LobbyRow {
+                    // Zero is the waiting state on both sides: `GameState::Lobby` here, and
+                    // `GAME_STATE_LOBBY` in the server, which is also what it checks before
+                    // handing out a code.
+                    waiting: lobby.game_state == 0,
+                    players: u32::try_from(lobby.current_players).unwrap_or(0),
+                    capacity: u32::try_from(lobby.max_players).unwrap_or(0),
+                },
+            })
+            .collect();
+
+        let answer = self.link.answer().map(ToOwned::to_owned);
+        let browser = acl_ui::views::lobby_browser::Browser {
+            t: &translate,
+            // The mod this client is running. Nothing detects it yet -- that is
+            // `acl_types::mods::detect` over the game's plugin directory, which belongs with
+            // the reader -- so every lobby is compared against the base game, which is what
+            // an unmodded player has and what most lobbies advertise.
+            mods: acl_types::mods::Mod::None.id(),
+            language_name: &|tag| acl_i18n::name_of(tag).unwrap_or(tag).to_owned(),
+            answer: answer.as_deref(),
+        };
+
+        match acl_ui::views::lobby_browser::draw(ui, &listings, &browser) {
+            Some(acl_ui::views::lobby_browser::Action::Join(id)) => {
+                self.link.join_lobby(u64::try_from(id).unwrap_or(0));
+            }
+            Some(acl_ui::views::lobby_browser::Action::Close) => {
+                // Closing stops the updates as well as hiding them: a session left watching
+                // receives every change to every public lobby for as long as it is
+                // connected.
+                self.link.watch_lobbies(false);
+                self.page = Screen::Main;
+            }
+            None => {}
+        }
+    }
+
     /// Puts each crewmate's cosmetics on their sprite.
     ///
     /// A hat that has not been fetched yet is simply not drawn: `Loader::image` asks for it
@@ -678,13 +768,18 @@ impl Client {
                     // here", which is where you already were.
                     let (glyph, hint) = match page {
                         Screen::Main => ("⚙", "Settings"),
-                        Screen::Settings => ("⏴", "Back"),
+                        Screen::Settings | Screen::Lobbies => ("⏴", "Back"),
                     };
                     if ui.button(glyph).on_hover_text(hint).clicked() {
                         *page = match page {
                             Screen::Main => Screen::Settings,
-                            Screen::Settings => Screen::Main,
+                            Screen::Settings | Screen::Lobbies => Screen::Main,
                         };
+                    }
+                    if *page == Screen::Main
+                        && ui.button("🌐").on_hover_text("Public lobbies").clicked()
+                    {
+                        *page = Screen::Lobbies;
                     }
                 });
             });
@@ -698,6 +793,7 @@ impl eframe::App for Client {
             reader.pump();
         }
         self.hats.pump();
+        self.link.pump();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
         // debounces instead, because it is reacting to move and resize events; this is
@@ -766,9 +862,16 @@ impl eframe::App for Client {
             ui.add_space(TITLE_BAR);
             ui.separator();
 
-            if self.page == Screen::Settings {
-                self.show_settings(ui);
-                return;
+            match self.page {
+                Screen::Settings => {
+                    self.show_settings(ui);
+                    return;
+                }
+                Screen::Lobbies => {
+                    self.show_lobbies(ui);
+                    return;
+                }
+                Screen::Main => {}
             }
 
             let Some(reader) = self.reader.as_ref() else {

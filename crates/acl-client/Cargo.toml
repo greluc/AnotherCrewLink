@@ -36,6 +36,10 @@ acl-types.workspace = true
 # The same client the offsets store uses, with the same certificate handling. A second HTTP
 # crate would be a second TLS configuration to get right.
 ureq = { workspace = true, optional = true }
+# The session is async and this window is not, so the runtime lives on a thread of its own.
+# `rt` and `time` only: a current-thread runtime driving one socket needs no work-stealing
+# scheduler, and the timeout on the poll is the only timer.
+tokio = { workspace = true, features = ["rt", "time"] }
 # `wgpu`, as §3.3 chose and §4.8 item 6 settled on 2026-08-26. It was `glow` until then,
 # because the fallback chain is what the choice turns on and the chain was not built yet:
 # `force_fallback_adapter` and adapter selection are wgpu's, and glow has no equivalent —
