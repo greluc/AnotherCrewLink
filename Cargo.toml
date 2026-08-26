@@ -44,6 +44,7 @@ indexing_slicing = "warn"
 # `allow-wildcard-paths = false`, which is the setting that would otherwise let an
 # unversioned path dependency through unnoticed.
 acl-types = { path = "crates/acl-types", version = "0.0.0" }
+acl-i18n = { path = "crates/acl-i18n", version = "0.0.0" }
 acl-audio = { path = "crates/acl-audio", version = "0.0.0" }
 acl-ipc = { path = "crates/acl-ipc", version = "0.0.0" }
 kurbo = "0.13.1"

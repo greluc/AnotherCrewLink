@@ -15,7 +15,10 @@
 //! of them, rather than trusting that this file was transcribed correctly.
 
 /// One default, in whichever of the three shapes the schema uses.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Copy` because every variant already is one: [`crate::settings_screen`] holds these
+/// inside `const` tables and passes them by value.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Default_ {
     /// A `boolean` in the schema.
     Bool(bool),

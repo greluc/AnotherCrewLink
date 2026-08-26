@@ -10,4 +10,6 @@
 //! function is a decision nobody can check, which is the mistake `sortLobbies` was.
 
 pub mod colour;
+pub mod lobby_browser;
 pub mod main;
+pub mod settings;
