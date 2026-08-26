@@ -351,6 +351,12 @@ struct Client {
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
     link: net::Link,
+    /// Which mod is installed beside the game, and the process it was found for.
+    ///
+    /// Remembered per process id, because detecting walks a directory: doing that on every
+    /// frame would be a `readdir` five times a second for an answer that changes when the
+    /// player restarts the game. A new process id is a new answer.
+    mods: Option<(u32, acl_game::mods::Mod)>,
     /// Which page is showing.
     page: Screen,
     /// The strings, in whichever language the settings name.
@@ -376,6 +382,7 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             settings,
             link: net::Link::start(),
+            mods: None,
             page: Screen::Main,
             catalogue,
             // A reader that will not start is not a reason to refuse to open: the window is
@@ -540,6 +547,43 @@ impl Client {
         }
     }
 
+    /// Which mod is installed beside the running game.
+    ///
+    /// [`acl_game::mods::detect_mod`] is the port of `getInstalledMods` and has been in the
+    /// tree since the reader was written; what was missing was the executable's path to
+    /// hand it. The answer is what a lobby's `mods` field is compared against, so a wrong
+    /// one shows as a join button that refuses for a reason the player cannot act on.
+    ///
+    /// [`acl_game::mods::Mod::None`] when the game is not running, which is also the right
+    /// answer for a browser opened from the menu: an unmodded client is what most lobbies
+    /// advertise.
+    #[cfg(windows)]
+    fn installed_mod(&mut self) -> acl_game::mods::Mod {
+        let Some(pid) = acl_game::windows::find_process("Among Us.exe") else {
+            // Forgotten rather than kept: the next game to start may have a different mod,
+            // and a stale answer is worse than no answer because nothing looks wrong.
+            self.mods = None;
+            return acl_game::mods::Mod::None;
+        };
+        if let Some((known, which)) = self.mods
+            && known == pid
+        {
+            return which;
+        }
+        let which = acl_game::windows::executable_path(pid)
+            .map_or(acl_game::mods::Mod::None, |path| {
+                acl_game::mods::detect_mod(&path)
+            });
+        self.mods = Some((pid, which));
+        which
+    }
+
+    /// Off Windows there is no process to look beside.
+    #[cfg(not(windows))]
+    fn installed_mod(&mut self) -> acl_game::mods::Mod {
+        acl_game::mods::Mod::None
+    }
+
     /// Draws the public lobby browser.
     ///
     /// Opening the page is what connects. A session held open for a window nobody is
@@ -547,6 +591,8 @@ impl Client {
     /// reconnect to attempt, for nothing; the voice pipeline will want one for longer and
     /// will say so when it exists.
     fn show_lobbies(&mut self, ui: &mut egui::Ui) {
+        // Before the catalogue is borrowed below, because detecting takes `&mut self`.
+        let installed = self.installed_mod();
         let catalogue = self.catalogue.as_ref();
         let translate = move |key: &str| {
             catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
@@ -600,11 +646,7 @@ impl Client {
         let answer = self.link.answer().map(ToOwned::to_owned);
         let browser = acl_ui::views::lobby_browser::Browser {
             t: &translate,
-            // The mod this client is running. Nothing detects it yet -- that is
-            // `acl_types::mods::detect` over the game's plugin directory, which belongs with
-            // the reader -- so every lobby is compared against the base game, which is what
-            // an unmodded player has and what most lobbies advertise.
-            mods: acl_types::mods::Mod::None.id(),
+            mods: installed.id(),
             language_name: &|tag| acl_i18n::name_of(tag).unwrap_or(tag).to_owned(),
             answer: answer.as_deref(),
         };
