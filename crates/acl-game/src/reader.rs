@@ -41,7 +41,41 @@ pub struct ReadContext {
     pub loaded_mod: Mod,
     /// Which server the game is on. Read rarely and carried between frames.
     pub current_server: String,
+    /// How many more frames the menu may be held for.
+    ///
+    /// `GameReader.menuUpdateTimer`, and it starts at 20 there. See the hold in
+    /// [`read_state`] for what it is holding against.
+    pub menu_update_timer: i32,
+    /// The player table this reader last accepted as new.
+    ///
+    /// `GameReader.lastPlayerPtr`, starting at zero. Part of the same hold: an unchanged
+    /// table is the signal that the game has not rebuilt its player list yet.
+    pub last_player_ptr: u64,
 }
+
+impl ReadContext {
+    /// A context for the first frame.
+    ///
+    /// The two hold fields start where `GameReader.ts` starts them, which is not at their
+    /// defaults: the timer begins full, so the very first transition out of a menu gets
+    /// the whole allowance.
+    #[must_use]
+    pub fn new(module_base: u64, loaded_mod: Mod) -> Self {
+        Self {
+            module_base,
+            previous: None,
+            loaded_mod,
+            current_server: String::new(),
+            menu_update_timer: MENU_HOLD_FRAMES,
+            last_player_ptr: 0,
+        }
+    }
+}
+
+/// How long the reader may keep reporting a menu after the game says lobby.
+///
+/// `GameReader.menuUpdateTimer`'s reset value.
+pub const MENU_HOLD_FRAMES: i32 = 20;
 
 /// Reads one frame.
 ///
@@ -57,7 +91,7 @@ pub struct ReadContext {
 pub fn read_state(
     memory: &dyn ProcessMemory,
     offsets: &Offsets,
-    context: &ReadContext,
+    context: &mut ReadContext,
 ) -> Result<AmongUsState, ReadError> {
     let base = context.module_base;
 
@@ -119,6 +153,10 @@ pub fn read_state(
 
     let mut players = Vec::new();
     let mut local_player: Option<Player> = None;
+    // Outside the block, because the menu hold below compares it against the previous
+    // frame's. `GameReader.ts` reads it unconditionally for the same reason; here the
+    // reads are inside a guard, so the value has to be hoisted rather than the reads.
+    let mut all_players = 0u64;
     // Whether the block below ran at all. Two fields keep a starting value rather than a
     // read value when it does not, and the two are different numbers.
     let mut read_players = false;
@@ -129,7 +167,7 @@ pub fn read_state(
         // and pushes no players.
         let all_players_ptr =
             follow(memory, base, top_level_chain(offsets, "allPlayersPtr")).unwrap_or(0);
-        let all_players = follow(
+        all_players = follow(
             memory,
             all_players_ptr,
             top_level_chain(offsets, "allPlayers"),
@@ -229,12 +267,51 @@ pub fn read_state(
         .as_ref()
         .map_or(f32::NAN, |state| state.light_radius);
 
+    let old_game_state = context
+        .previous
+        .as_ref()
+        .map_or(GameState::Unknown, |state| state.game_state);
+
+    // Keep reporting the menu for a few frames after the game says lobby.
+    //
+    // Leaving the menu into a lobby is not one event in memory. The client reports the
+    // new state before it has rebuilt the player table, so for a handful of frames the
+    // table is either the previous one -- same pointer -- or a new one the local player
+    // is not in yet. Announcing a lobby then announces a lobby full of the last game's
+    // players, or one with nobody in it.
+    //
+    // So `GameReader.ts` holds the menu until the table actually changes, for at most
+    // twenty frames so that a game which never rebuilds it is not held forever. Found by
+    // the corpus: without this the two readers disagreed on `gameState`, `lobbyCode` and
+    // `oldGameState` across every menu-to-lobby transition in a recording, which is
+    // sixteen frames of a client showing the wrong thing rather than a rounding argument.
+    let game_state = if old_game_state == GameState::Menu
+        && game_state == GameState::Lobby
+        && context.menu_update_timer > 0
+        && (context.last_player_ptr == all_players || !players.iter().any(|player| player.is_local))
+    {
+        context.menu_update_timer -= 1;
+        GameState::Menu
+    } else {
+        context.menu_update_timer = MENU_HOLD_FRAMES;
+        context.last_player_ptr = all_players;
+        game_state
+    };
+
     // A local game has no code to decode -- `lobby_code_int` is the sentinel 32 -- so the
     // Electron reader shows the host's name hash instead, and players read it to each
     // other. Reproduced rather than skipped: without it the two readers disagree on
     // `lobbyCode` for every LAN game, which is precisely the sort of divergence gate G1
     // exists to catch.
-    let lobby_code = lobby_code_for(&players, host_id, is_local_game, game_code);
+    //
+    // Held menus take the literal, whatever the code decoded to: `lobbyCode = state !==
+    // MENU ? gameCode || 'MENU' : 'MENU'`, and by this point `state` may have been
+    // overridden above.
+    let lobby_code = if game_state == GameState::Menu {
+        "MENU".to_owned()
+    } else {
+        lobby_code_for(&players, host_id, is_local_game, game_code)
+    };
 
     // `gameState: lobbyCode === 'MENU' ? GameState.MENU : state`. The Electron reader
     // overrides the state it read when there is no code to show, and a reader that does
@@ -264,10 +341,7 @@ pub fn read_state(
 
     Ok(AmongUsState {
         game_state,
-        old_game_state: context
-            .previous
-            .as_ref()
-            .map_or(GameState::Unknown, |state| state.game_state),
+        old_game_state,
         lobby_code_int,
         lobby_code,
         players,
@@ -443,7 +517,12 @@ fn read_player(
     record: u64,
     local_client_id: u32,
 ) -> Option<Player> {
-    let object_ptr = struct_pointer(memory, record, offsets, "objectPtr")?;
+    // Zero rather than a bail-out. The Electron reader's `parsePlayer` gives up only when
+    // it has no struct definition at all; a record whose object pointer is zero still
+    // becomes a player, with every read through that pointer failing and the player coming
+    // out bugged. Dropping it here loses a player the other reader keeps, which is one
+    // frame of the corpus and would be a missing voice in a lobby being torn down.
+    let object_ptr = struct_pointer(memory, record, offsets, "objectPtr").unwrap_or(0);
     let task_ptr = struct_pointer(memory, record, offsets, "taskPtr").unwrap_or(0);
     let outfits_ptr = struct_pointer(memory, record, offsets, "outfitsPtr").unwrap_or(0);
     let role_ptr = struct_pointer(memory, record, offsets, "rolePtr").unwrap_or(0);
@@ -451,9 +530,10 @@ fn read_player(
     // The in-game player id, which meetings and votes are keyed by. Carried as zero for
     // every player until 2026-08-24.
     let id = struct_value(memory, record, offsets, "id").unwrap_or(0);
-    let client_id = read_u32_at(memory, object_ptr, first_player_offset(offsets, "clientId"))?;
+    let client_id = read_u32_at(memory, object_ptr, first_player_offset(offsets, "clientId"));
     let disconnected = struct_value(memory, record, offsets, "disconnected").unwrap_or(0) != 0;
-    let is_local = client_id == local_client_id && !disconnected;
+    // `clientId === LocalclientId`, where an unread id is `undefined` and matches nothing.
+    let is_local = client_id == Some(local_client_id) && !disconnected;
 
     // The local player's position lives in a different field from everyone else's: theirs
     // is authoritative, the others are interpolated from the network.
@@ -465,16 +545,11 @@ fn read_player(
     // Two steps in most bundles and four in some, so taking only the first lands on a
     // pointer rather than on the coordinate it points at. Positions are what proximity
     // chat is, which makes this the most expensive place in the reader to get wrong.
-    let x = position(read_f32_chain(
-        memory,
-        object_ptr,
-        player_chain(offsets, x_field),
-    ));
-    let y = position(read_f32_chain(
-        memory,
-        object_ptr,
-        player_chain(offsets, y_field),
-    ));
+    // Kept as `Option`s rather than collapsed: a read that failed is one of the four
+    // conditions that make a player bugged, and `position` cannot tell the caller which
+    // of its answers came from nothing.
+    let read_x = read_f32_chain(memory, object_ptr, player_chain(offsets, x_field));
+    let read_y = read_f32_chain(memory, object_ptr, player_chain(offsets, y_field));
 
     let current_outfit = read_u32_at(
         memory,
@@ -482,8 +557,8 @@ fn read_player(
         first_player_offset(offsets, "currentOutfit"),
     )
     .unwrap_or(0);
-    let is_dummy =
-        read_u8_at(memory, object_ptr, first_player_offset(offsets, "isDummy")).unwrap_or(0) != 0;
+    let is_dummy = read_u8_at(memory, object_ptr, first_player_offset(offsets, "isDummy"))
+        .map(|byte| byte != 0);
     let in_vent =
         read_u8_at(memory, object_ptr, first_player_offset(offsets, "inVent")).unwrap_or(0) != 0;
 
@@ -513,6 +588,30 @@ fn read_player(
 
     let role_team = read_u32_at(memory, role_ptr, first_player_offset(offsets, "roleTeam"));
 
+    // A player the reader could not make sense of, parked off the map.
+    //
+    // `GameReader.ts` sets both coordinates to 9999 and raises this flag, and 9999 is not
+    // a coordinate any map reaches -- so proximity puts them silently out of everyone's
+    // range instead of at the origin, which is inside Cafeteria on the Skeld. Found by
+    // the corpus: the Rust reader had the flag hard-coded false and reported the fallback
+    // 999 instead, which is also off the map but is not the same number, and the gate
+    // compares numbers.
+    //
+    // Two of the Electron reader's four conditions. The other two are both about the
+    // colour -- `color < 0 || color > playercolors.length` -- and neither can be asked
+    // here yet. The upper bound needs the colour table this reader does not read:
+    // `readPlayerColors` in `GameReader.ts`, which also supplies the rainbow-colour
+    // substitution that is missing for the same reason. The lower bound needs nothing but
+    // a signed colour, and `color_id` is carried unsigned, so a negative colour arrives as
+    // a very large one -- which is to say it turns into the upper-bound case, and the two
+    // are owed together or not at all. No recording in the corpus produces either.
+    let bugged = read_x.is_none() || read_y.is_none() || disconnected;
+    let (x, y) = if bugged {
+        (9999.0, 9999.0)
+    } else {
+        (position(read_x), position(read_y))
+    };
+
     Some(Player {
         ptr: record,
         id: u8::try_from(id).unwrap_or(u8::MAX),
@@ -539,7 +638,7 @@ fn read_player(
         object_ptr,
         is_local,
         shifted_color: outfit.shifted_color,
-        bugged: false,
+        bugged,
         x,
         y,
         in_vent,
@@ -632,7 +731,7 @@ fn lobby_code_for(
     let code = if is_local_game {
         players
             .iter()
-            .find(|player| player.client_id == host_id)
+            .find(|player| player.client_id == Some(host_id))
             // JavaScript's `%` takes the sign of the dividend, and so does Rust's, so a
             // negative hash gives a negative code on both sides.
             .map_or(game_code, |host| (host.name_hash % 99_999).to_string())
@@ -654,7 +753,7 @@ mod tests {
 
     fn player(client_id: u32, name: &str) -> Player {
         Player {
-            client_id,
+            client_id: Some(client_id),
             name: name.to_owned(),
             name_hash: crate::state::hash_name(name),
             ..Player::default()
@@ -717,12 +816,7 @@ mod tests {
     }
 
     fn context() -> ReadContext {
-        ReadContext {
-            module_base: 0x1000_0000,
-            previous: None,
-            loaded_mod: Mod::None,
-            current_server: String::new(),
-        }
+        ReadContext::new(0x1000_0000, Mod::None)
     }
 
     #[test]
@@ -734,7 +828,7 @@ mod tests {
         // frame where the game is starting, closing or between rounds — thousands of them
         // in a real session, and gate G1 counted every one.
         let empty = SparseProcess::new(false);
-        let state = read_state(&empty, &offsets(), &context()).expect("a frame, not an error");
+        let state = read_state(&empty, &offsets(), &mut context()).expect("a frame, not an error");
         assert_eq!(state.game_state, GameState::Menu);
         assert_eq!(state.lobby_code, "MENU");
         assert!(state.players.is_empty());
@@ -771,7 +865,7 @@ mod tests {
                 let process = SparseProcess::from_arbitrary(&bytes, is_64);
                 // The only requirement is that it returns. A panic here is the bug this
                 // exists to find.
-                let _ = read_state(&process, &offsets, &context());
+                let _ = read_state(&process, &offsets, &mut context());
                 let _ = round;
             }
         }
@@ -785,7 +879,7 @@ mod tests {
         // with a pointer that goes nowhere.
         let offsets = offsets();
         let process = SparseProcess::new(false).with_pointer(0x1000_0000, 0x1000_0000);
-        let state = read_state(&process, &offsets, &context()).expect("a frame, not an error");
+        let state = read_state(&process, &offsets, &mut context()).expect("a frame, not an error");
         assert_eq!(state.game_state, GameState::Menu);
         assert!(state.players.is_empty());
     }
@@ -828,7 +922,7 @@ mod tests {
             3u32.to_le_bytes(),
         );
 
-        let state = read_state(&process, &offsets, &context()).expect("a frame");
+        let state = read_state(&process, &offsets, &mut context()).expect("a frame");
         assert_eq!(state.game_state, GameState::Menu);
         // In the menu the Electron reader reports the literal "MENU" rather than an
         // empty string, and the state field is compared exactly.

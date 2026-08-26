@@ -110,8 +110,14 @@ pub struct Player {
     pub ptr: u64,
     /// The in-game player id.
     pub id: u8,
-    /// The network client id.
-    pub client_id: u32,
+    /// The network client id, when there is one.
+    ///
+    /// Optional because the Electron reader's is. It reads this through `objectPtr`, and a
+    /// record whose object pointer is zero -- which happens for a frame or two while the
+    /// game is tearing a lobby down -- yields `undefined`, a key `JSON.stringify` then
+    /// omits. A `u32` here would have to invent a number for that, and gate G1 compares
+    /// the two structures field for field.
+    pub client_id: Option<u32>,
     /// The name, with rich-text tags stripped.
     pub name: String,
     /// A hash of the name, for the overlay. Signed, because `hashCode` ends in `| 0`.
@@ -151,8 +157,13 @@ pub struct Player {
     pub y: f64,
     /// Whether they are in a vent.
     pub in_vent: bool,
-    /// Whether they are a practice-mode dummy.
-    pub is_dummy: bool,
+    /// Whether they are a practice-mode dummy, when that could be read.
+    ///
+    /// Optional for the same reason as [`Player::client_id`]: the Electron reader assigns
+    /// this read straight through, with no coercion, so a record whose object pointer is
+    /// zero carries `undefined` here. `inVent` beside it is read the same way and is not
+    /// optional, because that one is compared with `> 0` and `undefined > 0` is false.
+    pub is_dummy: Option<bool>,
 }
 
 /// One frame of the game.

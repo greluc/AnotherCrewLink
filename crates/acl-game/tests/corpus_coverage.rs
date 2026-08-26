@@ -224,7 +224,7 @@ fn the_corpus_covers_what_it_is_claimed_to_and_reports_what_it_does_not() {
     // Only what is true today. A recording removed, or replaced by a weaker one, fails
     // here — which is the regression this test can actually catch. What is missing is the
     // work, and asserting it would leave a red suite standing for months.
-    assert!(coverage.frames > 4000, "{} frames", coverage.frames);
+    assert!(coverage.frames > 12_000, "{} frames", coverage.frames);
     assert!(
         coverage.game_states.contains("LOBBY") && coverage.game_states.contains("MENU"),
         "the corpus no longer reaches both LOBBY and MENU: {:?}",
@@ -235,6 +235,35 @@ fn the_corpus_covers_what_it_is_claimed_to_and_reports_what_it_does_not() {
         "no frame has anybody in a vent; freeplay used to cover this"
     );
     assert!(!coverage.maps.is_empty(), "no frame carried a map");
+    // Every map, and by number rather than by count: a corpus that reached five maps
+    // because Fungle was replaced by Submerged would pass a count and would have lost the
+    // one thing this asserts, which is that the four non-Skeld branches of the reader are
+    // exercised at all.
+    //
+    // Recorded from an online lobby's settings and not from freeplay, which cannot do it:
+    // the reader takes the map from the game options, and freeplay does not write its map
+    // there. Choosing a map in the menu leaves the field on whatever the last lobby set,
+    // so a whole freeplay session on Polus arrives labelled Skeld.
+    for (map, name) in [
+        (0, "The Skeld"),
+        (1, "Mira HQ"),
+        (2, "Polus"),
+        (4, "Airship"),
+        (5, "Fungle"),
+    ] {
+        assert!(
+            coverage.maps.contains(&map),
+            "no frame is on {name} ({map}); the corpus reaches {:?}",
+            coverage.maps
+        );
+    }
+    for (name, seen) in [
+        ("an impostor", coverage.anybody_an_impostor),
+        ("somebody dead", coverage.anybody_dead),
+        ("a light radius that changes", coverage.light_radius_varied),
+    ] {
+        assert!(seen, "the corpus no longer covers {name}");
+    }
 }
 
 #[test]
