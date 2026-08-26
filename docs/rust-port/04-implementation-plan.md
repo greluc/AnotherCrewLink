@@ -1809,11 +1809,25 @@ us.
    > availability rather than preference: `minisign-verify` 0.2.5 (MIT, zero
    > dependencies) and `self-replace` 1.5.0.
    >
-   > `crates/acl-updater` holds the half that is all decision and no side effect: the
-   > manifest and its signature, and the policy that says whether to install what it
-   > offers. Neither downloads anything, runs anything, or touches a file, which is why
-   > both are tested rather than argued about. The downloading and the installing are the
-   > other half and are not written.
+   > `crates/acl-updater` is a library and a binary. `manifest` and `policy` are all
+   > decision and no side effect -- neither downloads anything, runs anything, or touches a
+   > file, which is why both are tested rather than argued about. `fetch` and `install` are
+   > the half with side effects, and are thin because everything they decide they decide by
+   > asking the first two.
+   >
+   > **The order is the design**: manifest, signature, policy, artefact, digest, and only
+   > then a byte written anywhere. The artefact is not even *fetched* until the policy has
+   > said yes -- a client that downloaded eighty megabytes and then discovered it was a
+   > downgrade would have spent somebody's data allowance proving a point.
+   >
+   > A separate binary, and separate is the point: it replaces the client's files, so it
+   > must not be one of them. A client updating itself in place holds open the handles the
+   > installer needs to write.
+   >
+   > The arguments it passes are the ones the installed 1.x fleet's updater uses, and a
+   > test asserts the installer script still reads them -- one contract, exercised by both
+   > the 2.x self-update and P8's bridge, instead of two of which one is exercised once a
+   > year.
    >
    > **It fails closed, and it is closed.** `PUBLIC_KEYS` is empty: no release key
    > exists, generating one is a ceremony the maintainer performs offline, and a
