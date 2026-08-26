@@ -92,6 +92,17 @@ pub const SCAN_ORDER: [Mod; 6] = [
     Mod::Other,
 ];
 
+/// The mod an advertised lobby names, if it is one this build knows.
+///
+/// The server passes the id straight through from whichever client advertised the lobby,
+/// so an unknown one is not an error: it is a lobby running something newer, or something
+/// this fork has not got. The caller shows the raw id in that case, which is what the
+/// Electron browser does.
+#[must_use]
+pub fn from_id(id: &str) -> Option<Mod> {
+    SCAN_ORDER.into_iter().find(|known| known.id() == id)
+}
+
 /// Which mod a plugin filename belongs to, if any.
 ///
 /// A substring test rather than a prefix test, matching `file.includes(...)` in the
@@ -112,6 +123,17 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::*;
+
+    /// Every id round-trips, which is what makes `from_id` safe to use on a value that
+    /// came off the wire: the ids are the wire format.
+    #[test]
+    fn every_id_is_found_by_the_id_it_reports() {
+        for known in SCAN_ORDER {
+            assert_eq!(from_id(known.id()), Some(known), "{}", known.id());
+        }
+        assert_eq!(from_id("SOMETHING_NEWER"), None);
+        assert_eq!(from_id(""), None);
+    }
 
     /// The one that matters. `TownOfUsMira.dll` contains `TownOfUs` as well, so a scan
     /// that reached the shorter marker first would report every Mira lobby as Town of Us
