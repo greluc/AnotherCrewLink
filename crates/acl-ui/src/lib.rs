@@ -1,7 +1,7 @@
 //! Phase 6's views, and the decisions behind them.
 //!
 //! `docs/rust-port/03-target-architecture.md` puts the egui views here: main, settings,
-//! lobby browser, overlay. None of them exists yet.
+//! lobby browser, overlay. All four exist.
 //!
 //! What is here is the part of a view that is not a view — the ordering, the filtering,
 //! the formatting a screen needs before it can draw anything. It lives in its own modules
