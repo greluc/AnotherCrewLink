@@ -2006,11 +2006,23 @@ from the client even after our own 1.x support ends.
 > met. The weeks are untouched: they are what the phases were estimated at, not a record
 > of what they cost, and nothing here re-prices them.
 >
-> "Partly built" for P5+ is the honest word rather than a hedge. What exists is the
-> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check and the
-> named pipe the two processes speak over. What does not is the overlay window, the
-> elevation path, autostart, and the `acl-helper` binary that would hold the first two.
-> §4.7 carries the detail.
+> "Partly built" for P5+ was the honest word for a while. It is no longer needed: the
+> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check, the named
+> pipe, the elevated helper and its launcher, the UIPI check, the window follower, and the
+> overlay window's drawing all exist. Autostart was struck rather than built; §4.7 carries
+> that.
+>
+> **Corrected again 2026-08-26 (evening).** P5+ and P6+ both read "planned" or "partly
+> built" after they were finished, which is the same mistake this note was written to fix.
+> P6+'s six items are all built, and the one that was expected to need reader work — the
+> meeting overlay — turned out to be arithmetic over the window's shape plus one boolean
+> the reader already had.
+>
+> What P4+ has gained, twice over. It first held a signalling session for the lobby browser
+> and nothing else; it now drives the peer mesh from it — joining the lobby the reader
+> reports, offering to newcomers, routing signals, and reporting which peers are reachable,
+> with two clients meeting through a real server to prove it. No audio moves yet, so "mesh
+> wired, audio not" is the honest form.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation
