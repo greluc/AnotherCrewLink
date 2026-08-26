@@ -34,10 +34,13 @@ dependencies = [
  "acl-game",
  "acl-ipc",
  "acl-net",
+ "async-trait",
  "postcard",
+ "rtc",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "webrtc",
  "windows-sys 0.61.2",
 ]
 

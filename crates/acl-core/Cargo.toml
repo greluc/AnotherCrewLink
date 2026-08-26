@@ -20,6 +20,17 @@ acl-game = { path = "../acl-game", version = "0.0.0", default-features = false }
 acl-ipc.workspace = true
 # The signalling half. `session` is the driver §4.6 item 3 leaves to this crate.
 acl-net = { path = "../acl-net", version = "0.0.0" }
+# The peer connections `peers` owns. Same pin as `acl-net`, which is where the reason is.
+# The `webrtc` event handler trait is declared with `#[async_trait]`, so implementing one
+# needs the same macro. Version matched to `acl-net`, which implements the same trait.
+async-trait = "0.1"
+tokio = { workspace = true, features = ["sync"] }
+webrtc.workspace = true
+# `webrtc` re-exports selectively, and the codec types a local track is built from are not
+# among them -- the crate's own documentation imports them from `rtc` directly. It is
+# already in the tree beneath `webrtc`; this only makes the edge direct, so nothing new
+# enters the dependency graph. Pinned to the same version for the same reason `webrtc` is.
+rtc = "=0.20.3"
 serde_json.workspace = true
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 thiserror.workspace = true

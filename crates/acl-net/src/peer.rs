@@ -45,6 +45,23 @@ impl Generation {
     pub const fn next(self) -> Self {
         Self(self.0.wrapping_add(1))
     }
+
+    /// The number inside, for a caller that has to store it somewhere this type cannot go.
+    ///
+    /// One caller: `acl-core::peers` keeps the current generation in an `AtomicU64`,
+    /// because the `webrtc` crate's handler cannot be detached and a handler holding a
+    /// *copy* of the generation compares it against itself and is eternally current. The
+    /// value has to be shared, and an atomic cannot hold this type.
+    #[must_use]
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    /// Back from that number.
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 /// Why a connection ended, when it did.

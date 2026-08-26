@@ -18,6 +18,8 @@ pub mod link;
 pub mod logging;
 pub mod overlay;
 pub mod paths;
+pub mod peers;
 pub mod session;
 pub mod shortcuts;
+pub mod signalling;
 pub mod single_instance;
