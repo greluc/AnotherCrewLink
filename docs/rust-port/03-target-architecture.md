@@ -573,8 +573,7 @@ string that ever needs formatting, so nobody reopens the question by reflex.
 
 The renderer is a chain, not a choice. (A Linux rung that defaulted to software was
 struck on 2026-08-25 along with the Electron client's unconditional arm.) Windows
-tries wgpu on DX12,
-then wgpu with `force_fallback_adapter` (WARP), then a CPU rasteriser. There is
+tries wgpu on DX12, then wgpu on WARP. There is
 no glow rung: glow needs GL 3.3 / ES 3.0, and a Windows machine without a vendor
 driver offers software GL 1.1, so the rung would fail in exactly the RDP and
 bare-VM cases it would exist for. The existing `hardware_acceleration` setting

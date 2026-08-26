@@ -1,0 +1,25 @@
+[package]
+name = "gpu-probe"
+description = "§4.8 item 6: which renderer rungs a real Windows machine actually offers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# The decision this probe supplies evidence for. The probe reports what the machine has;
+# `renderer::choose` decides what to do with it, and is tested without a GPU.
+acl-ui = { path = "../../crates/acl-ui", version = "0.0.0" }
+# Direct, and the only place in the workspace that is. Everywhere else wgpu arrives
+# through `eframe`, which is where it belongs; this probe has to enumerate adapters
+# *before* a window exists, which is not something eframe exposes.
+wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
+# Enumeration is a future for the sake of WebGPU. On DX12 it is ready when it is returned,
+# and this is the smallest thing that will wait for it -- already in the tree beneath wgpu,
+# so it costs nothing new.
+pollster = "1.0.1"
+
+[lints]
+workspace = true

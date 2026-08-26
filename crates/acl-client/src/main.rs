@@ -111,10 +111,20 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    // §4.8 item 6. The setting is 1.x's own `hardware_acceleration`, read straight out of
+    // the file it already writes rather than from a key invented here: a renamed key reads
+    // as absent, and an absent key gives acceleration back to every player who turned it
+    // off -- on the machines least able to run it.
+    let accelerated = std::fs::read_to_string(paths.config_file()).map_or(true, |text| {
+        acl_ui::config::Config::read(&text).bool_at(acl_ui::renderer::HARDWARE_ACCELERATION_KEY)
+    });
+
     eframe::run_native(
         "anothercrewlink",
         eframe::NativeOptions {
             viewport,
+            renderer: eframe::Renderer::Wgpu,
+            wgpu_options: renderer_options(acl_ui::renderer::chain(accelerated)),
             ..Default::default()
         },
         Box::new(move |_| Ok(Box::new(Client::new(file)))),
@@ -125,6 +135,71 @@ fn main() -> eframe::Result<()> {
 ///
 /// Both, because §4.10 has the 2.0 build read what 1.x wrote — and somebody upgrading from
 /// further back than that has only `window-state.json`.
+/// The wgpu setup, with the fallback chain as its adapter selector.
+///
+/// eframe asks for one adapter and the chain names two, so the walk happens inside the
+/// selector rather than around `run_native`: by the time enumeration has happened the
+/// answer is a list, and picking from a list is not a reason to tear a window down and
+/// build another.
+///
+/// **DX12 only.** It is the backend §4.8 names, it is what WARP is reached through, and it
+/// is the one Windows guarantees. Leaving Vulkan enabled would let wgpu pick a vendor
+/// Vulkan driver on some machines and DX12 on others, which turns one renderer into two
+/// and makes a bug report about "the software renderer" ambiguous.
+fn renderer_options(
+    rungs: Vec<acl_ui::renderer::Renderer>,
+) -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, wgpu};
+
+    let mut setup = match WgpuConfiguration::default().wgpu_setup {
+        WgpuSetup::CreateNew(setup) => setup,
+        // eframe's default is `CreateNew`. An `Existing` here would mean a device was
+        // handed to us, and there is nothing to select between.
+        existing @ WgpuSetup::Existing(_) => {
+            return WgpuConfiguration {
+                wgpu_setup: existing,
+                ..WgpuConfiguration::default()
+            };
+        }
+    };
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, _surface| {
+        let kinds: Vec<acl_ui::renderer::Adapter> = adapters
+            .iter()
+            .map(|adapter| match adapter.get_info().device_type {
+                wgpu::DeviceType::Cpu => acl_ui::renderer::Adapter::Cpu,
+                // `VirtualGpu` is a passed-through device in a virtual machine and `Other`
+                // is a driver that did not say. Neither is WARP, so both are hardware as
+                // far as the choice goes.
+                _ => acl_ui::renderer::Adapter::Gpu,
+            })
+            .collect();
+        rungs
+            .iter()
+            .find_map(|rung| acl_ui::renderer::choose(*rung, &kinds))
+            .and_then(|at| adapters.get(at).cloned())
+            .inspect(|adapter| {
+                // Once, at start-up. Which rung the client ended up on is the first thing
+                // worth knowing about a report of a slow window, and it is not otherwise
+                // visible from inside the running client.
+                let info = adapter.get_info();
+                eprintln!(
+                    "AnotherCrewLink: rendering on {:?} \"{}\" ({:?})",
+                    info.device_type, info.name, info.backend
+                );
+            })
+            .ok_or_else(|| {
+                // Reached only if DX12 enumerated nothing at all, WARP included -- which
+                // means the graphics stack itself is missing rather than the card.
+                format!("no Direct3D 12 adapter among {}", adapters.len())
+            })
+    }));
+    WgpuConfiguration {
+        wgpu_setup: WgpuSetup::CreateNew(setup),
+        ..WgpuConfiguration::default()
+    }
+}
+
 fn read_state(file: &PathBuf) -> Option<WindowState> {
     if let Ok(text) = std::fs::read_to_string(file)
         && let Ok(stored) = serde_json::from_str::<Stored>(&text)
