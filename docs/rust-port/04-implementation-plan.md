@@ -1889,9 +1889,9 @@ from the client even after our own 1.x support ends.
 | P1+ Foundations | 5.0 | built | no |
 | P2+ Game reader | 6.0 | built, G1 met | with P3+ |
 | P3+ Audio engine | 10.0 | built, G2 met | critical path |
-| P4+ Transport | 10.5 | decisions built, transport not wired | critical path |
-| P5+ Platform | 6.0 | partly built | with P4+ |
-| P6+ GUI | 11.5 | planned | after P5+ |
+| P4+ Transport | 10.5 | decisions built; signalling wired, voice not | critical path |
+| P5+ Platform | 6.0 | built | with P4+ |
+| P6+ GUI | 11.5 | built | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
 | P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
 | **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
@@ -1903,11 +1903,21 @@ from the client even after our own 1.x support ends.
 > met. The weeks are untouched: they are what the phases were estimated at, not a record
 > of what they cost, and nothing here re-prices them.
 >
-> "Partly built" for P5+ is the honest word rather than a hedge. What exists is the
-> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check and the
-> named pipe the two processes speak over. What does not is the overlay window, the
-> elevation path, autostart, and the `acl-helper` binary that would hold the first two.
-> §4.7 carries the detail.
+> "Partly built" for P5+ was the honest word for a while. It is no longer needed: the
+> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check, the named
+> pipe, the elevated helper and its launcher, the UIPI check, the window follower, and the
+> overlay window's drawing all exist. Autostart was struck rather than built; §4.7 carries
+> that.
+>
+> **Corrected again 2026-08-26 (evening).** P5+ and P6+ both read "planned" or "partly
+> built" after they were finished, which is the same mistake this note was written to fix.
+> P6+'s six items are all built, and the one that was expected to need reader work — the
+> meeting overlay — turned out to be arithmetic over the window's shape plus one boolean
+> the reader already had.
+>
+> What P4+ has gained is narrower than it sounds: the client holds a signalling session,
+> and it holds it for the lobby browser. No peer connection is made and no audio moves.
+> "Signalling wired, voice not" is the whole of it.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation

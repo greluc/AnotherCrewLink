@@ -130,14 +130,27 @@ P8  Bridge and sunset            4.0   G4 — and a 2.0 release prerequisite
 P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 ```
 
-> **Where this actually is, 2026-08-26.** The table is effort, not progress, and reading it
-> as progress has been wrong for some days. `P1+` through `P3+` are built and both their
-> gates are met — G1 over 12 574 recorded frames, G2 in full. `P4+`'s decisions are built
-> and its transport is not wired. `P5+` is most of the way: the single-instance lock, the
-> push-to-talk poll, exclusive-fullscreen detection, the named pipe, the elevated helper
-> itself, its launcher, the UIPI check, the window follower and the driver that owns them
-> all exist; the overlay window's drawing does not. `P6+` has its framework spike, measured
-> rather than argued. `P7+`, `P8` and `P9` are untouched.
+> **Where this actually is, 2026-08-26 (evening).** The table is effort, not progress, and
+> reading it as progress has been wrong for some days.
+>
+> `P1+` through `P3+` are built and both their gates are met — G2 in full, and **G1 over
+> the 12 574 frames that were recorded**, which is the honest form: five situations were
+> never in the corpus and still are not. `TASKS`, `DISCUSSION`, comms sabotage, doors and
+> cameras need four people in a real round, and freeplay provably cannot reach them —
+> the Electron reader takes all five *inside* `if (state === GameState.TASKS)`.
+> `test/recordings/README.md` records the measurement.
+>
+> `P4+`'s decisions are built. Its signalling session is now wired into the client, but
+> only for the lobby browser: the peer mesh and the voice path are not.
+>
+> `P5+` is **built**. The overlay window draws — that was the last piece, and it took a
+> sprite protocol to get there.
+>
+> `P6+` is **built**: all six items. Shell and window state, main view, settings (screen
+> and file), lobby browser end to end, overlay view with its seven positions and the
+> meeting table, and the GPU fallback chain — which lost a rung to measurement.
+>
+> `P7+`, `P8` and `P9` are untouched.
 >
 > The weeks are unchanged and are not a record of what anything cost.
 > [04-implementation-plan.md](04-implementation-plan.md) §4.11 carries the same statement
