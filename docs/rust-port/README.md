@@ -140,8 +140,11 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > the Electron reader takes all five *inside* `if (state === GameState.TASKS)`.
 > `test/recordings/README.md` records the measurement.
 >
-> `P4+`'s decisions are built. Its signalling session is now wired into the client, but
-> only for the lobby browser: the peer mesh and the voice path are not.
+> `P4+`'s decisions are built, and its **mesh** is wired: the client joins the lobby the
+> reader reports, offers to newcomers, routes signals through `signal_route`, and reports
+> which peers are reachable — proved by two clients meeting through a real server. What is
+> missing is the audio itself: capture, encode, decode, playback. "Mesh wired, audio not"
+> is the whole of it, and the audio is the part §2 has always called the project.
 >
 > `P5+` is **built**. The overlay window draws — that was the last piece, and it took a
 > sprite protocol to get there.
