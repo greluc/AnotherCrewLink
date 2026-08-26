@@ -24,6 +24,8 @@ use std::path::PathBuf;
 
 use acl_core::paths::{Environment, Paths};
 use acl_core::single_instance;
+use acl_ui::roster::{Roster, Voice, main_view};
+use acl_ui::views::main::Portrait;
 use acl_ui::window_state::{Rect, Stored, WindowState, restore, worth_saving};
 use eframe::egui;
 
@@ -162,6 +164,40 @@ fn displays() -> Vec<Rect> {
 #[cfg(not(windows))]
 fn displays() -> Vec<Rect> {
     Vec::new()
+}
+
+/// One player of the reader's state, as the roster wants to see them.
+///
+/// A wrapper rather than an implementation on `acl_game::Player`, because the trait belongs
+/// to `acl-ui` and the type to `acl-game`, and neither should have to know about the other
+/// to satisfy it.
+struct Seat<'a>(&'a acl_game::Player);
+
+impl Roster for Seat<'_> {
+    fn id(&self) -> u8 {
+        self.0.id
+    }
+    fn client_id(&self) -> i64 {
+        // Absent when the reader could not read it, which is what `Player::client_id` is an
+        // `Option` for. A player with no client id matches no voice stream, and -1 is an id
+        // the server never issues.
+        self.0.client_id.map_or(-1, i64::from)
+    }
+    fn is_local(&self) -> bool {
+        self.0.is_local
+    }
+    fn disconnected(&self) -> bool {
+        self.0.disconnected
+    }
+    fn in_vent(&self) -> bool {
+        self.0.in_vent
+    }
+    fn bugged(&self) -> bool {
+        self.0.bugged
+    }
+    fn is_dead(&self) -> bool {
+        self.0.is_dead
+    }
 }
 
 struct Client {
@@ -305,25 +341,41 @@ impl eframe::App for Client {
             });
 
             ui.separator();
-            match reader.latest() {
-                Some(state) => {
-                    ui.label(format!("Lobby: {}", state.lobby_code));
-                    ui.label(format!("State: {:?}", state.game_state));
-                    ui.label(format!("Map: {}", state.map));
-                    ui.separator();
-                    for player in &state.players {
-                        ui.label(format!(
-                            "{}{}{}",
-                            player.name,
-                            if player.is_local { " (you)" } else { "" },
-                            if player.is_dead { " — dead" } else { "" }
-                        ));
-                    }
-                }
-                None => {
-                    ui.label("No frame yet. Start the reader with Among Us running.");
-                }
-            }
+            let Some(state) = reader.latest() else {
+                ui.label("No frame yet. Start the reader with Among Us running.");
+                return;
+            };
+
+            ui.label(format!("{} — {:?}", state.lobby_code, state.game_state));
+            ui.add_space(4.0);
+
+            // The roster decides who is shown; this only draws them. Nothing here knows
+            // anything about audio yet, so the voice layer is answered with the truth as
+            // it stands: nobody is talking, nobody has been heard to die, and every player
+            // the game reports is treated as reachable but silent.
+            let voice = Voice {
+                talking: &|_| false,
+                dead: &|_| false,
+                connected: &|_| true,
+                audible: &|_| false,
+                local_talking: false,
+                local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+                impostor_radio: None,
+                local_is_impostor: false,
+            };
+            let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
+            let portraits: Vec<Portrait<'_>> = main_view(&seats, &voice)
+                .iter()
+                .filter_map(|entry| {
+                    let player = state.players.get(entry.at)?;
+                    Some(Portrait {
+                        name: &player.name,
+                        color_id: i32::try_from(player.color_id).unwrap_or(-1),
+                        state: *entry,
+                    })
+                })
+                .collect();
+            acl_ui::views::main::draw(ui, &portraits);
         });
     }
 }

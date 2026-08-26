@@ -9,6 +9,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The palette and the colliders. `acl-types` has no GUI dependency and must not gain one,
+# which is why the hex strings are parsed on this side.
+acl-types.workspace = true
+# Only `views` uses it. Everything else here decides something and is testable without a
+# window, which is the split §4.8 asks this crate to keep.
+egui = "0.36.1"
 # `window_state` is read from and written to `windows.json`, which 1.x also writes.
 serde.workspace = true
 # The older `window-state.json` is read as a loose document: it predates this client and
