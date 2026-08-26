@@ -50,10 +50,12 @@ dependencies = [
 name = "acl-core"
 version = "0.0.0"
 dependencies = [
+ "acl-audio",
  "acl-game",
  "acl-ipc",
  "acl-net",
  "async-trait",
+ "bytes",
  "postcard",
  "rtc",
  "serde_json",

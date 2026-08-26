@@ -53,7 +53,7 @@ async fn deliver(outbound: Vec<Outbound>, to: &mut PeerSet, from: &str) -> Vec<O
 ///
 /// Panics on `Failed`, because on loopback that is a defect rather than a network.
 async fn exchange(from: &mut PeerSet, from_id: &str, to: &mut PeerSet) -> bool {
-    let (outbound, events) = from.drain();
+    let (outbound, events, _audio) = from.drain();
     deliver(outbound, to, from_id).await;
     let mut connected = false;
     for PeerEvent::StateChanged { state, .. } in events {
@@ -186,4 +186,89 @@ async fn closing_forgets_the_peer() {
     set.close(SECOND).await;
     assert!(!set.holds(SECOND));
     assert!(set.is_empty());
+}
+
+/// Audio crosses.
+///
+/// The connection tests above prove two sets can reach `Connected`; this proves the thing
+/// that matters afterwards. An Opus packet written on one side comes out of the other's
+/// `drain`, tagged with who sent it and with the sequence and timestamp a jitter buffer
+/// orders by.
+///
+/// It is a real Opus packet from `acl_audio::codec::Encoder` rather than an invented
+/// payload, because the track is negotiated as Opus and a packetizer that receives
+/// something else is a packetizer whose behaviour nobody has looked at.
+#[tokio::test]
+async fn an_opus_packet_written_on_one_side_arrives_at_the_other() {
+    let mut first = PeerSet::new(configuration());
+    let mut second = PeerSet::new(configuration());
+
+    let offer = first.offer("second").await.expect("an offer");
+    let answer = deliver(vec![offer], &mut second, "first").await;
+    deliver(answer, &mut first, "second").await;
+
+    let mut connected = false;
+    for _ in 0..200 {
+        let one = exchange(&mut first, "first", &mut second).await;
+        let two = exchange(&mut second, "second", &mut first).await;
+        if one || two {
+            connected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(connected, "the two never connected");
+
+    // Twenty milliseconds of silence, encoded. Silence rather than a tone because what is
+    // being checked is the carriage, and a tone would invite the reader to think the
+    // decode is being checked too -- it is not, and it happens in `acl-audio`.
+    //
+    // `FRAME_SAMPLES` is 960, not 1920: the encoder is mono. The track advertises two
+    // channels because RFC 7587 says an Opus rtpmap always does, whatever the stream
+    // actually carries -- which reads like a mismatch and is not one.
+    let mut encoder = acl_audio::codec::Encoder::new().expect("an encoder");
+    let frame = vec![0.0_f32; acl_audio::codec::FRAME_SAMPLES];
+    let mut packet = Vec::new();
+    let written = encoder.encode(&frame, &mut packet).expect("an Opus packet");
+    assert!(written > 0, "the encoder produced nothing");
+
+    let sent = first
+        .send_audio("second", &packet, std::time::Duration::from_millis(20))
+        .await
+        .expect("the track took it");
+    assert!(sent, "there was no connection to send on");
+
+    let mut arrived = Vec::new();
+    for _ in 0..200 {
+        let (_, _, audio) = second.drain();
+        arrived.extend(audio);
+        if !arrived.is_empty() {
+            break;
+        }
+        // Both sides keep being drained: RTCP and candidates still flow, and a set nobody
+        // drains is a set whose queue grows instead of its connection working.
+        let _ = exchange(&mut first, "first", &mut second).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let first_packet = arrived.first().expect("no audio arrived");
+    assert_eq!(first_packet.peer, "first", "it came from the wrong peer");
+    assert_eq!(
+        first_packet.payload, packet,
+        "the payload changed on the way"
+    );
+}
+
+/// Sending to somebody who is not there is not an error.
+///
+/// A player who has left is a player the mixer has not stopped calling about yet, and one
+/// frame in flight past a disconnection is the ordinary case rather than a fault.
+#[tokio::test]
+async fn sending_to_a_peer_that_is_not_there_says_so_quietly() {
+    let set = PeerSet::new(configuration());
+    let accepted = set
+        .send_audio("nobody", &[1, 2, 3], std::time::Duration::from_millis(20))
+        .await
+        .expect("not an error");
+    assert!(!accepted);
 }
