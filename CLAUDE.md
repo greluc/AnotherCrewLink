@@ -111,9 +111,15 @@ the warning below it.
 `leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`, `join_lobby`,
 `lobbybrowser`, `disconnect`.
 
-**Server to client**, which is just as much of the contract: `join`, `left`,
-`signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`, `VAD`,
-`lobbybrowser`, `new_lobbies`, `update_lobby`, `remove_lobby`.
+**Server to client**, which is just as much of the contract, and there are eleven:
+`join`, `left`, `signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`,
+`VAD`, `new_lobbies`, `update_lobby`, `remove_lobby`.
+
+> **Corrected 2026-08-26.** This list had `lobbybrowser` in it, and the server never
+> emits it — `const BROWSER_ROOM: &str = "lobbybrowser"` is a *room name*, and the only
+> handler for that string is the one a client calls. Found by
+> `every_event_the_server_sends_is_acted_on` in `acl_core::session`, which failed on an
+> event that cannot arrive.
 
 Both lists are read out of `src/socket.rs` in the server repository, which is the
 only place that knows all of them.
