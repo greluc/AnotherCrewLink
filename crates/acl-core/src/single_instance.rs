@@ -70,7 +70,7 @@ pub enum Occupant {
     /// An Electron client keyed on this same user-data directory.
     ///
     /// Strictly, any Chromium application whose profile is that directory — the class is
-    /// Chromium's. Nothing else puts a profile in `%APPDATA%\AnotherCrewLink`, so in
+    /// Chromium's. Nothing else puts a profile in 1.x's `%APPDATA%\AnotherCrewLink`, so in
     /// practice this is 1.x, and treating a stranger there as a reason not to start is the
     /// conservative answer anyway.
     ElectronClient,
@@ -234,11 +234,16 @@ mod platform {
     ///
     /// The [`Occupant`] already holding it. Every arm is an ordinary outcome that ends in
     /// a message and an exit, not a failure to report.
-    pub fn claim(user_data: &Path) -> Result<Guard, Occupant> {
+    pub fn claim(user_data: &Path, legacy_user_data: Option<&Path>) -> Result<Guard, Occupant> {
         // The Electron window first, and before anything is created. It is the case a user
         // actually hits — a 1.x they forgot was running — and checking it first means the
         // refusal path leaves no object behind for the next launch to trip over.
-        if electron_client_running(user_data) {
+        //
+        // **Asked about 1.x's directory, not this one.** The window's title *is* the
+        // profile path, so probing with 2.x's directory finds nothing however many 1.x
+        // clients are running — which is what would have happened when the two versions
+        // stopped sharing a directory, silently, with two readers on one game.
+        if legacy_user_data.is_some_and(electron_client_running) {
             return Err(Occupant::ElectronClient);
         }
         // Then this installation's own name — the specific answer, taken before the coarse
@@ -334,17 +339,17 @@ mod tests {
 
         let directory = std::env::temp_dir().join("acl-single-instance-test");
 
-        let held = claim(&directory).expect("nothing owns a temporary directory");
+        let held = claim(&directory, None).expect("nothing owns a temporary directory");
         // The specific answer, not the coarse one. Getting `OtherInstallation` here would
         // mean the shared name is being claimed first, and a second 2.x would be told a
         // 1.x is running.
-        assert_eq!(claim(&directory).err(), Some(Occupant::SelfSame));
+        assert_eq!(claim(&directory, None).err(), Some(Occupant::SelfSame));
 
         drop(held);
         // Both names, not just the derived one: a guard that released the specific name
         // and kept the shared one would let one client through and then refuse every
         // client afterwards, including itself.
-        claim(&directory).expect("dropping the guard releases every name it took");
+        claim(&directory, None).expect("dropping the guard releases every name it took");
     }
 
     /// The positive half of the window lookup, against a 1.x that is actually running.

@@ -89,8 +89,20 @@ fn main() -> eframe::Result<()> {
     // Before anything else takes a resource. Two clients against one game means two
     // keyboard hooks, two memory readers and two overlays -- see `single_instance`, which
     // also explains why the check is a window rather than the mutex §4.7 first named.
+    // 1.x's settings, brought forward on the first run and never written back. Before the
+    // window, because the settings decide which renderer it opens with and which language
+    // it opens in.
+    let carried = acl_core::paths::import::settings_forward(
+        &paths.config_file(),
+        paths.legacy_config_file().as_deref(),
+    );
+    if carried == acl_core::paths::import::Outcome::Failed {
+        // Not a reason to refuse to start: a first run with defaults is a working client.
+        eprintln!("AnotherCrewLink: 1.x's settings could not be read; starting with defaults");
+    }
+
     #[cfg(windows)]
-    let _instance = match single_instance::claim(paths.user_data()) {
+    let _instance = match single_instance::claim(paths.user_data(), paths.legacy_user_data()) {
         Ok(guard) => guard,
         Err(occupant) => {
             eprintln!("AnotherCrewLink: {}", occupant.message());

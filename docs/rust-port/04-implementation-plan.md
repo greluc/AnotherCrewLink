@@ -1792,6 +1792,26 @@ us.
    run and write it forward. Test with real files from 1.x installs. The importer
    reads once and **never writes back** — during the beta a user runs both
    clients, and neither may silently rewrite the other's settings.
+
+   > **Built 2026-08-26.** 2.x's directory is `%APPDATA%\ACL`; 1.x keeps
+   > `%APPDATA%\AnotherCrewLink`. A sibling rather than a child, because 1.x's
+   > uninstaller removes its own tree and a nested 2.x would lose every setting to a
+   > tidy-up. No space in the name, because it is about to appear in an NSIS script.
+   >
+   > **Until this was built the two clients shared one file**, and this one was writing
+   > to it: `serde_json::Map` is a `BTreeMap`, so its first save alphabetised a document
+   > 1.x owns, and 1.x would have rewritten it back on its next save. Item 4 is what
+   > caught it.
+   >
+   > The import copies the *text*, byte for byte, rather than a parsed document — a key
+   > this build has never heard of survives, and the key order is 1.x's. It is refused
+   > only if the file is not a JSON object at all, because a copied half-written file
+   > would leave this client with a `config.json` it treats as "already here" forever.
+   >
+   > One consequence had to be followed: the running-1.x check probes for a Chromium
+   > message window whose title *is* the profile path, so it now asks about 1.x's
+   > directory. Probing with 2.x's would have found nothing however many 1.x clients were
+   > running — two readers on one game, silently.
 5. CI: the four existing workflows ported, actions still pinned to commit SHAs,
    `cargo-audit`/`cargo-deny` replacing `npm audit`, `cargo-about` producing the
    attribution file GPL distribution wants, CodeQL still covering the repository.
