@@ -9,8 +9,14 @@
 //! for one. Both are things a port gets subtly wrong and nobody notices until a player
 //! answers a dialog with No and then cannot speak.
 
+pub mod fullscreen;
+pub mod game_window;
 pub mod helper;
+pub mod keys;
+pub mod launch;
+pub mod link;
 pub mod logging;
 pub mod overlay;
 pub mod paths;
 pub mod shortcuts;
+pub mod single_instance;

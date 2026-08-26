@@ -756,6 +756,31 @@ fixtures.
 > only prove the two implementations share an author's assumptions, which is the
 > one thing this gate is not for.
 
+> **Extended 2026-08-26.** A fourth session took the corpus from 4653 frames to **12574**
+> and the gate broke on 23 of them, which is what a corpus is for: a branch neither reader
+> reaches compares equal on both sides, so the only way to find a divergence is to reach
+> it. Four fixes, all in the Rust reader — the menu hold that keeps reporting a menu until
+> the game has rebuilt its player table, the 9999 sentinel for a player the reader cannot
+> make sense of, a player dropped for having a null object pointer, and two fields that
+> are `undefined` on the Electron side and therefore cannot be a `u32` and a `bool` here.
+>
+> Two things it reached that were not expected to be reachable without a round, and both
+> only because they were tried:
+>
+> * **32-bit in a game.** Pointer width changes the player-array, door-list and dictionary
+>   strides, and every in-game recording before this was 64-bit.
+> * **Every map.** From an online lobby's *settings*, which is the only route: the reader
+>   takes the map from the game options, and freeplay does not write its map there. A whole
+>   freeplay session on Polus arrives labelled `THE_SKELD` — the reader is not wrong, the
+>   field really does say Skeld. `maxPlayers` is the same object and the same route, and
+>   three abandoned lobbies at 15, 10 and 8 is what gave it three values.
+>
+> **And one thing that is now known to be impossible rather than merely awkward.** The
+> paragraph above says freeplay cannot reach the `TASKS` branch. It is stronger than that:
+> comms, doors and cameras are all read *inside* `if (state === GameState.TASKS)`, so
+> sabotaging in freeplay changes nothing in a recording, because nothing looks. Issue #10
+> cannot be closed by a more determined solo session; it needs four players.
+
 > **Gate G1 — parity of the reader.**
 > For every recorded frame, the Rust reader's `AmongUsState` must equal the
 > Electron reader's, field for field, with float positions within 1e-6.
@@ -1304,6 +1329,59 @@ will otherwise reintroduce them:
 
 ## 4.7 Phase 5 — Platform layer (6 weeks)
 
+> **Status, 2026-08-26. Four of the platform calls exist; the two processes do not.**
+>
+> This phase's shape was "the decision logic stands and is tested; the platform calls are
+> missing entirely", and four of them were one call each.
+>
+> | Built | Where |
+> | --- | --- |
+> | Single-instance lock | `acl-core::single_instance` — measured against a running 1.x rather than guessed; see the note further down |
+> | Push-to-talk poll | `acl-core::keys` — `GetAsyncKeyState`'s high bit, turning a level into edges |
+> | Exclusive-fullscreen detection | `acl-core::fullscreen` — the bit `overlay::availability` always took and nobody produced |
+> | The pipe between the two halves | `acl-ipc::pipe` — the helper is the server, because a pipe server can impersonate its client |
+> | The elevated process | `acl-helper` — reads the game, sends frames, and exits when the core does |
+> | Starting it, elevated or not | `acl-core::launch` — unelevated first, UAC second, and a declined prompt is an ordinary state |
+> | The UIPI access check | `acl-core::game_window` — ported from `windows.c`, quirk included: a hung window refuses the probe with the same error an integrity mismatch gives |
+> | Following the game's window | `acl-core::game_window::Follow` — polled, not hooked, for the reason below |
+> | The driver that owns all of it | `acl-core::link` — §4.6 says this belongs here, and it is what keeps `HelperState` true |
+>
+> **Not built.** The overlay window itself — the layered, click-through, always-on-top
+> window, and the pre-rasterised sprites it receives instead of decoding images.
+> `experiments/overlay-probe` established that eframe can produce such a window on Windows
+> (`layered=true transparent=true topmost=true`, `exstyle=0x000c0138`), and
+> `experiments/gui-spike` has since measured what drawing into one costs, so what is left
+> is the drawing itself and the sprite channel.
+>
+> **This section says "port `windows.c` directly rather than re-deriving it", and one part
+> of it is deliberately not ported.** That file follows the game with
+> `SetWinEventHook` on `EVENT_OBJECT_LOCATIONCHANGE`, `EVENT_OBJECT_DESTROY` and
+> `EVENT_SYSTEM_FOREGROUND`, which is right for its consumer: JavaScript, which a poll
+> would cross into sixty times a second. This consumer is a render loop that is already
+> awake, so the hook buys nothing and costs a message loop on a dedicated thread — an
+> out-of-context hook only delivers to a thread that pumps — plus that thread's affinity.
+>
+> And the hook is not reliable on its own. `windows.c` re-checks `GetForegroundWindow()`
+> after every focus event, with a comment saying the hook fires for windows that did not
+> actually get focus: the workaround for the hook is the poll. `Follow` therefore polls,
+> which is the same reasoning this section already applied to the keyboard, for the same
+> reason — a direct call cannot be silently unhooked.
+>
+> **And one item struck rather than deferred.** This section lists autostart. The Electron
+> client has none — no `setLoginItemSettings`, no run key, nothing in `ISettings` — so there
+> is nothing to port and no shipped behaviour to match. It is a new feature, and it should
+> be decided as one rather than arrive as a line in a platform checklist.
+>
+> One thing the built items have in common is worth recording. Every one of them was
+> decided by a measurement on a real machine, and four of those measurements contradicted
+> something believed beforehand: the single-instance name was not the mutex this document
+> named; the display state under a running game is `QUNS_BUSY` rather than the
+> D3D-exclusive value the overlay logic keys on; `WaitNamedPipeW` does not wait for a pipe
+> that does not exist yet, which is the only case it was called for; and a duplicated pipe
+> handle deadlocks, because it refers to the same synchronous file object. Three of the
+> four looked correct and passed a first message before failing. The platform layer is
+> where a port stops being a translation.
+
 **Why 6 and not 3:** the client becomes two processes, and the overlay moves into
 the elevated one.
 
@@ -1410,7 +1488,77 @@ against the same game.
 > the same mechanism, so its absence confirms the Windows path is the in-memory one
 > rather than a file a second implementation could take.
 
+> **Answered 2026-08-26, by the measurement this asked for.** The client was started and
+> its windows and named objects enumerated. It holds a message-only window of class
+> `Chrome_MessageWindow` whose **window text is the user-data directory**:
+>
+> ```text
+> MSG  class=[Chrome_MessageWindow]  text=[C:\Users\lucas\AppData\Roaming\AnotherCrewLink]
+> mutex Local\AnotherCrewLink                                        does not exist
+> ```
+>
+> That is Chromium's `ProcessSingleton`, and it is the only thing a running 1.x holds that
+> a different implementation can find. Three properties of the lookup were measured rather
+> than assumed, each of them a way to write this and have it silently never match: the text
+> carries no trailing separator, the comparison is case-insensitive, and the same process
+> holds a second window of that class with empty text — so the class alone is not the lock,
+> class and text together are.
+>
+> Built as `acl-core::single_instance`. It refuses to start when that window exists, and
+> takes two names of its own: one derived from the user-data directory, so two 2.x
+> installations that keep their files apart may both run; and one fixed, so that the coarse
+> case has a name 1.x could also spell. The specific one is claimed first — the other order
+> refuses just as correctly and then tells the user a 1.x is running when it is a 2.x.
+>
+> **One direction remains open, and it is the harder one.** A 1.x *started while a 2.x is
+> already running* still starts: 1.x looks for that window and nothing else. Two ways to
+> close it, neither free.
+>
+> 1. **Add a name to 1.x in a patch release.** Electron has no named-mutex API, so in pure
+>    Node this is a pid file in the user-data directory, checked with `process.kill(pid, 0)`.
+>    Cheap, and it only ever protects installations that took the patch — which is the
+>    smaller half of the fleet on the day 2.0 ships and never becomes all of it.
+> 2. **Register the same window from 2.x** and answer Chromium's `WM_COPYDATA` handshake.
+>    This needs no 1.x change and therefore covers every install in the field, including
+>    the ones that will never update. It is also reverse-engineered behaviour that does not
+>    fail safe: a newcomer that times out on the handshake concludes the lock is stale and
+>    takes it anyway.
+>
+> Option 2 is testable on this machine — register the window from a probe, launch 1.x, see
+> whether it exits — and that experiment is what should decide it, not this paragraph.
+
 ## 4.8 Phase 6 — GUI (11.5 weeks)
+
+> **Item 1's spike is built and measured, 2026-08-26.** `experiments/gui-spike`, held to
+> the bar this section sets rather than to three text controls: a lobby-browser table of
+> sixty-four rows with sortable columns, and twelve avatars composited from four layers
+> each, animating, every frame. The table's default order goes through
+> `acl_ui::lobby_list::sort` — the shipped rule, on the shipped type — so the spike
+> exercises the model rather than a copy of it.
+>
+> ```text
+> RESULT frames=590 rows=64 avatars=12
+>        work_median_ms=0.25 work_p95_ms=0.28 work_worst_ms=0.52
+>        interval_median_ms=16.67 interval_p95_ms=17.87 interval_worst_ms=44.42
+> ```
+>
+> **A quarter of a millisecond to build a frame**, against a 16.7 ms budget: about 1.5% of
+> it, with the table and the avatars both at more than the sizes the real screens need.
+> On this evidence the framework question is not close, and the decision point this
+> section puts at the end of the main-view milestone has nothing to overturn it with
+> unless something later is far more expensive than these two.
+>
+> **Two numbers rather than one, and the first version had only the wrong one.** It
+> reported the frame-to-frame interval — 16.66 ms — which is the display's refresh rate
+> and not a cost. Read on its own it says egui takes 16 ms a frame; what it actually
+> measures is vsync. The interval is still reported, because it is what says whether
+> anything was dropped, but the work figure is the one with headroom in it.
+>
+> Two caveats, recorded rather than buried. This is the `glow` rung, chosen so the number
+> is comparable with `overlay-probe`'s; the wgpu rung of the fallback chain below is a
+> separate measurement. And the worst interval is a hitch of 44 ms against a worst *work*
+> of 0.52 ms, so whatever caused it was not the drawing — on a desktop with other things
+> running, that is the expected shape and not a finding.
 
 **Why 11.5 and not 10:** net of dropping the localisation conversion (−1.0), the
 phase gains a framework spike, the GPU fallback chain and the performance
@@ -1647,17 +1795,28 @@ from the client even after our own 1.x support ends.
 | H3 1.x/Node envelope and OBS | 2.5 | committed | alongside P0+–P1+ |
 | P0+ Server | 4.0 | committed | independent |
 | **Committed subtotal** | **11.5** | | ends at the decision point |
-| P1+ Foundations | 5.0 | planned | no |
-| P2+ Game reader | 6.0 | planned | with P3+ |
-| P3+ Audio engine | 10.0 | planned | critical path |
-| P4+ Transport | 10.5 | planned | critical path |
-| P5+ Platform | 6.0 | planned | with P4+ |
+| P1+ Foundations | 5.0 | built | no |
+| P2+ Game reader | 6.0 | built, G1 met | with P3+ |
+| P3+ Audio engine | 10.0 | built, G2 met | critical path |
+| P4+ Transport | 10.5 | decisions built, transport not wired | critical path |
+| P5+ Platform | 6.0 | partly built | with P4+ |
 | P6+ GUI | 11.5 | planned | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
 | P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
 | **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
 | **Two developers** | not half | | P3+ and P4+ are both on the critical path, and P7+ waits on both |
 | P9 Post-1.x cleanup | 3.0 | planned | outside the 2.0 budget |
+
+> **Status column corrected 2026-08-26.** Every phase above read "planned" long after
+> it stopped being true — P1+ through P3+ are written, and the two gates they carry are
+> met. The weeks are untouched: they are what the phases were estimated at, not a record
+> of what they cost, and nothing here re-prices them.
+>
+> "Partly built" for P5+ is the honest word rather than a hedge. What exists is the
+> single-instance lock, the push-to-talk poll, the exclusive-fullscreen check and the
+> named pipe the two processes speak over. What does not is the overlay window, the
+> elevation path, autostart, and the `acl-helper` binary that would hold the first two.
+> §4.7 carries the detail.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation

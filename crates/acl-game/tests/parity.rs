@@ -357,6 +357,12 @@ fn the_rust_reader_agrees_with_the_electron_one() {
         let mut carried: Option<Offsets> = None;
         // Threaded from frame to frame, the way the reader sees it when it runs.
         let mut previous: Option<AmongUsState> = None;
+        // One context for the whole file, because the reader carries state across frames
+        // and a fresh one per frame would start the menu hold over every time -- which is
+        // the same as not having it. Per file rather than per run: each recording is its
+        // own session, and a hold left over from the end of one is not a fact about the
+        // start of the next.
+        let mut context = ReadContext::new(0, Mod::None);
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let frame: RecordedFrame = serde_json::from_str(line)
                 .unwrap_or_else(|error| panic!("{} has a bad frame: {error}", path.display()));
@@ -393,24 +399,21 @@ fn the_rust_reader_agrees_with_the_electron_one() {
                     .expect("resolving offsets against a replayed process")
                     .offsets
             };
-            let context = ReadContext {
-                module_base: module.base,
-                // The frame before it, as this reader produced it. Two fields are defined
-                // against it — `oldGameState` and `lightRadiusChanged` — and passing None
-                // every time made both differ on every frame after the first, which read
-                // as a reader bug and was a harness one.
-                previous: previous.clone(),
-                loaded_mod: Mod::None,
-                current_server: frame
-                    .state
-                    .get("currentServer")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            };
+            context.module_base = module.base;
+            // The frame before it, as this reader produced it. Two fields are defined
+            // against it — `oldGameState` and `lightRadiusChanged` — and passing None
+            // every time made both differ on every frame after the first, which read as a
+            // reader bug and was a harness one.
+            context.previous = previous.clone();
+            context.current_server = frame
+                .state
+                .get("currentServer")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
 
             frames += 1;
-            let state = match read_state(&process, &resolved, &context) {
+            let state = match read_state(&process, &resolved, &mut context) {
                 Ok(state) => state,
                 Err(error) => {
                     mismatched += 1;

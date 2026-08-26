@@ -345,6 +345,13 @@ P8  Bridge & sunset ──► G4          —  →  4.0
 P9  Post-1.x cleanup                —  →  3.0   (outside the 2.0 budget)
 ```
 
+> **"Planned, not funded" is about money, not about progress — 2026-08-26.** Several of the
+> phases below that line are built: `P1+`–`P3+` with both their gates met, most of `P5+`,
+> and `P6+`'s framework spike. The re-pricing above is a record of what the estimates
+> became and is unchanged by any of it.
+> [README.md](README.md) and [04-implementation-plan.md](04-implementation-plan.md) §4.11
+> carry the detail.
+
 **Only `H1`–`H3` and `P0+` are committed work.** The full port is planned in the order above and priced below, but the decision to continue past the Rust server is taken **after `P0+` ships**, on what building it actually cost, not now on this document. That is not a hedge added to the plan — it is the plan's own logic applied one phase earlier than `G2`: the server is the cheapest phase that produces a real Rust artefact under real load, and the hardening track is worth doing whether or not anything follows it, because it runs on the Electron client and the Node server and protects the fleet that will never see 2.x.
 
 **Total to 2.0: ~74 developer-weeks**, against the existing plan's 37 and against the 77 this document priced before the decisions of 2026-08-24. Those decisions took 3.0 weeks out and none of it was scope: `H2` −1.0 with the offsets key ceremony, second signer and minisign-format parsing gone (§2.1); `H3` −0.5 with the log-then-enforce staging, the flag and the counter watch gone (§2.3); `P7+` −1.5 with Authenticode, the CA application and the `publisherName` work gone (§2.2). Two developers do not halve what is left: `P3` is no longer the sole critical path — `P4` now rivals it.
@@ -592,12 +599,13 @@ Each is answerable yes or no. Ten were put to the maintainer and answered on 202
 Recorded so they are not read as settled:
 
 - **`webrtc` versus `str0m`.** Neither can demonstrate Chromium interop in CI. Only the `P4+` spike answers it, and its result must be written into `07-dependencies-toolchain.md` with the date and the evidence, whichever way it goes.
-- **egui versus iced for this UI.** Only the `P6+` spike answers it, and only if the spike includes the lobby table and a composited avatar.
+- ~~**egui versus iced for this UI.**~~ **Answered 2026-08-26 by the spike this entry demanded.** `experiments/gui-spike` draws a sixty-four-row lobby table with sortable columns and twelve four-layer avatars animating, and builds a frame in **0.25 ms** against a 16.7 ms budget. egui, and not narrowly. Two details worth carrying forward: it needed no `egui_extras` — `egui::Grid` is enough at this size and this feature set, and the table widget stays the answer only if the browser ever wants virtualised rows or resizable columns — and the default ordering runs through `acl_ui::lobby_list::sort`, so what was measured is the shipped rule rather than a stand-in for it.
 - **`neteq` 0.9.1's Opus FEC recovery.** Its documented surface says nothing about it. `G2` criterion 5 answers it.
 - **`cpal::DeviceId` stability across a re-plug to a different USB port on Windows.** Documented as stable "where possible"; the platform's own endpoint renaming says it is not possible for that event. Hence tier three.
 - ~~**SignPath eligibility.**~~ Moot since 2026-08-24: there is no Authenticode signing, so nobody applies and nothing turns on the answer.
 - **Whether `elevate.exe` ships in the resources of a real installed 1.0.2.** Must be checked against an actual install, not against the repository.
-- **The idle CPU, RSS, startup and overlay frame-cost figures in §2.4.** Explicitly estimated. Do not quote the order-of-magnitude claim publicly until the `P6+` baseline exists, and take it as a matrix (Windows/GPU, Windows/software, Linux/software) because `index.ts:38-40` already makes those three the shipping reality.
+- **The idle CPU, RSS and startup figures in §2.4.** Explicitly estimated. Do not quote the order-of-magnitude claim publicly until the `P6+` baseline exists. The matrix is now two columns rather than three — Windows with a GPU and Windows without — since Linux went on 2026-08-25.
+  > **The frame-cost half is measured, 2026-08-26**, and only that half. `experiments/gui-spike` reports 0.25 ms median and 0.28 ms p95 to build a frame with more on screen than either real view needs. That is the `glow` rung on a machine with a GPU: one cell of the matrix, and the one likely to look best. The software rung and the memory and start-up figures are still estimates, and the public claim still waits on them.
 - ~~**Whether the `signal` rejection counter will ever reach the 0.1% floor.**~~ Moot since 2026-08-24: there is no floor and no flag. The underlying observation stands and is now a *reason* rather than a risk — 1.x updates through electron-updater with no forced upgrade, so a rule that waits on the fleet waits forever, which is why the rules ship on.
 - **How many 1.x clients lose the OBS overlay and the mobile relay at the `H3` server release, and for how long.** Knowable only afterwards, from per-version join counts. The decision was taken without it.
 - **Time from an upstream offsets commit to a published bundle.** Only the `G0` drill against a real Among Us update answers it. Dropping the signature should shorten it materially; that expectation is not evidence.

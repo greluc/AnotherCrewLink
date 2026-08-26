@@ -13,6 +13,8 @@
 //! update check then cannot stall the runtime the voice path shares.
 
 use std::path::{Path, PathBuf};
+// Only the retry policy uses it, and that is behind the HTTP client.
+#[cfg(feature = "http")]
 use std::time::Duration;
 
 use crate::offsets::{BundleContext, Lookup, Offsets, Rejected};
@@ -27,10 +29,13 @@ pub const PRIMARY_MIRROR: &str =
 pub const FALLBACK_MIRROR: &str = "https://cdn.jsdelivr.net/gh/greluc/AnotherCrewlink-Offsets@main";
 
 /// How long one request may take before it is abandoned.
+#[cfg(feature = "http")]
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many times both hosts are tried.
+#[cfg(feature = "http")]
 const ROUNDS: u32 = 3;
 /// How long to wait between rounds, multiplied by the round number.
+#[cfg(feature = "http")]
 const RETRY_DELAY: Duration = Duration::from_millis(1500);
 
 /// The floor, compiled in. See `assets/README.md`.

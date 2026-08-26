@@ -31,9 +31,12 @@ dependencies = [
 name = "acl-core"
 version = "0.0.0"
 dependencies = [
+ "acl-game",
  "acl-ipc",
+ "postcard",
  "serde_json",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -47,6 +50,19 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "ureq",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "acl-helper"
+version = "0.0.0"
+dependencies = [
+ "acl-core",
+ "acl-game",
+ "acl-ipc",
+ "postcard",
+ "serde_json",
+ "thiserror 2.0.20",
  "windows-sys 0.61.2",
 ]
 
@@ -65,6 +81,7 @@ dependencies = [
  "postcard",
  "serde",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1715,6 +1732,15 @@ dependencies = [
  "ff",
  "rand_core 0.6.4",
  "subtle",
+]
+
+[[package]]
+name = "gui-spike"
+version = "0.0.0"
+dependencies = [
+ "acl-ui",
+ "eframe",
+ "egui",
 ]
 
 [[package]]

@@ -118,9 +118,15 @@ pub const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Which way round it is decides what to tell the user, because the fix differs: the
 /// installer replaced one binary and failed on the other, and knowing which one is the
 /// difference between "reinstall" and "your antivirus quarantined the helper".
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// An error in all but name until 2026-08-26, when `link` needed to return one. The two
+// messages say which binary is stale, because that is the whole reason the two directions
+// are separate variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum VersionMismatch {
     /// The helper speaks an older protocol than this core.
+    #[error(
+        "the helper speaks protocol {helper} and this client speaks {core}: the helper was          not replaced when the client was, which usually means an installer that could not          overwrite it"
+    )]
     HelperOlder {
         /// What the helper said.
         helper: u32,
@@ -128,6 +134,9 @@ pub enum VersionMismatch {
         core: u32,
     },
     /// The helper speaks a newer one.
+    #[error(
+        "the helper speaks protocol {helper} and this client speaks {core}: the client is          the stale half, so it is the one to reinstall"
+    )]
     HelperNewer {
         /// What the helper said.
         helper: u32,

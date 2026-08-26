@@ -49,14 +49,66 @@ impl<S> StreamTransport<S> {
         self.buffer.len()
     }
 
+    /// The stream itself, for a caller that has to ask it something the transport cannot.
+    ///
+    /// One caller: the helper peeks at the pipe to see whether the core has said anything,
+    /// because it cannot afford to block on a read. Borrowed rather than exposed as a
+    /// field, so the buffer stays this type's business.
+    #[must_use]
+    pub const fn stream(&self) -> &S {
+        &self.stream
+    }
+
     /// Gives the stream back.
     pub fn into_inner(self) -> S {
         self.stream
     }
 }
 
+/// A stream that can say whether reading it would block.
+///
+/// Only named so that [`StreamTransport::try_recv`] can exist. Without it, a caller that
+/// must not block has to ask the stream itself and then remember that the transport has a
+/// buffer of its own — which two callers did, and both got it wrong the same way.
+pub trait Peek {
+    /// How many bytes are waiting in the stream, without taking any.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the platform says. A closed stream reports one.
+    fn available(&self) -> std::io::Result<usize>;
+}
+
 /// The most the buffer may hold: one whole frame and its prefix, and nothing beyond.
 const BUFFER_LIMIT: usize = LENGTH_PREFIX + MAX_FRAME;
+
+impl<S: Read + Write + Peek> StreamTransport<S> {
+    /// The next message, if one can be had without waiting for the peer to start writing.
+    ///
+    /// **This exists because the obvious version of it is wrong**, and was wrong in two
+    /// places at once. A loop that peeks at the *stream* and stops when it reports zero
+    /// misses everything already sitting in this type's own buffer — and a single read
+    /// routinely pulls in more than one frame, so the second message of a pair is left
+    /// there and never decoded. The symptom was a helper that greeted the core, took its
+    /// offsets, and then never read the game: the `StartReading` that followed the offsets
+    /// in the same read was in the buffer, and the pipe said there was nothing to do.
+    ///
+    /// So the buffer is consulted first and the stream second.
+    ///
+    /// It can still block, in one bounded case: a partial frame is buffered and the rest is
+    /// in flight. Both ends write a whole frame with one `write_all` and flush it, so that
+    /// wait ends when the peer's write does.
+    ///
+    /// # Errors
+    ///
+    /// [`FrameError`] as [`Transport::recv`], plus whatever the peek said.
+    pub fn try_recv<T: for<'de> Deserialize<'de>>(&mut self) -> Result<Option<T>, FrameError> {
+        if self.buffer.is_empty() && self.stream.available()? == 0 {
+            return Ok(None);
+        }
+        self.recv()
+    }
+}
 
 impl<S: Read + Write> Transport for StreamTransport<S> {
     fn send<T: Serialize>(&mut self, message: &T) -> Result<(), FrameError> {
