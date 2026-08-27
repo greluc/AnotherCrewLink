@@ -178,6 +178,58 @@ fn default_for(key: &str) -> Option<Default_> {
         .map(|(_, value)| value)
 }
 
+/// Everything that happens to a gain after the proximity rules have decided it.
+///
+/// `Voice.tsx` lines 1584-1595, in that order and for that reason: three multipliers that
+/// `calculateVoiceAudio` deliberately does not know about, because they are the listener's
+/// preferences rather than the game's rules.
+///
+/// `None` means silence — the peer is not placed at all, which is cheaper than mixing
+/// nothing and is what the original's `gain = 0` amounts to.
+///
+/// # The order is not decoration
+///
+/// Mute wins over the per-player volume, because a muted player with a volume above one
+/// would otherwise come back. `crewVolumeAsGhost` is applied before `masterVolume` because
+/// the master is the last word on everything; swapping them changes nothing while both are
+/// at their defaults and changes the result the moment either is not.
+///
+/// `crewVolumeAsGhost` is the listener's, and applies only when **they** are dead and the
+/// speaker is not: it is how loud the living crew is to a ghost. `ghostVolumeAsImpostor` is
+/// a different setting entirely and belongs to the rules, where `voice_params` already has
+/// it.
+#[must_use]
+pub fn after_the_rules(config: &Config, listener: Listener, gain: f32) -> Option<f32> {
+    let gain = per_player_gain(config, listener.speaker_name_hash, gain)?;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "percentages from the settings file, which the schema bounds at 100"
+    )]
+    let scaled = {
+        let ghost = if listener.is_dead && !listener.speaker_is_dead {
+            config.number_at("crewVolumeAsGhost") / 100.0
+        } else {
+            1.0
+        };
+        gain * (ghost * (config.number_at("masterVolume") / 100.0)) as f32
+    };
+    (scaled > 0.0).then_some(scaled)
+}
+
+/// Who is listening to whom, for the three multipliers above.
+///
+/// Named fields because two of the three are booleans about *different people*, and
+/// `after_the_rules(config, true, false, gain)` is a call nobody can read.
+#[derive(Clone, Copy, Debug)]
+pub struct Listener {
+    /// The speaker's name hash, which their volume and mute are stored under.
+    pub speaker_name_hash: i32,
+    /// Whether the person listening is dead.
+    pub is_dead: bool,
+    /// Whether the person being listened to is dead.
+    pub speaker_is_dead: bool,
+}
+
 /// One player's own volume and mute, applied to a gain.
 ///
 /// `None` means they are muted and nothing should be placed for them at all — a peer left
@@ -212,6 +264,90 @@ pub fn per_player_gain(config: &Config, name_hash: i32, gain: f32) -> Option<f32
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// The master volume reaches the gain at all, which it did not until 2026-08-27.
+    ///
+    /// It and `crewVolumeAsGhost` were named in a comment explaining why `voice_params`
+    /// does not take them, and applied nowhere. Both are settings with sliders in the
+    /// window, and both did nothing.
+    #[test]
+    fn the_master_volume_is_applied() {
+        let mut config = Config::default();
+        config.set("masterVolume", json!(50.0));
+        let listener = super::Listener {
+            speaker_name_hash: 1,
+            is_dead: false,
+            speaker_is_dead: false,
+        };
+        assert_eq!(super::after_the_rules(&config, listener, 1.0), Some(0.5));
+    }
+
+    /// A ghost hears the living crew at their own setting, and only then.
+    #[test]
+    fn a_ghost_hears_the_living_at_their_own_volume() {
+        let mut config = Config::default();
+        config.set("crewVolumeAsGhost", json!(20.0));
+
+        let ghost_hearing_living = super::Listener {
+            speaker_name_hash: 1,
+            is_dead: true,
+            speaker_is_dead: false,
+        };
+        assert_eq!(
+            super::after_the_rules(&config, ghost_hearing_living, 1.0),
+            Some(0.2)
+        );
+
+        // Two ghosts hear each other normally: this is about the living being quieter to
+        // the dead, not about the dead being quiet.
+        let ghost_hearing_ghost = super::Listener {
+            speaker_is_dead: true,
+            ..ghost_hearing_living
+        };
+        assert_eq!(
+            super::after_the_rules(&config, ghost_hearing_ghost, 1.0),
+            Some(1.0)
+        );
+
+        // And the living hear each other normally.
+        let living = super::Listener {
+            is_dead: false,
+            ..ghost_hearing_living
+        };
+        assert_eq!(super::after_the_rules(&config, living, 1.0), Some(1.0));
+    }
+
+    /// The master volume at zero is silence, not a gain of zero.
+    ///
+    /// A peer left out of the map is a peer the mixer does not mix, which is what the
+    /// original's `gain = 0` amounts to and is cheaper than mixing nothing.
+    #[test]
+    fn a_master_volume_of_zero_places_nobody() {
+        let mut config = Config::default();
+        config.set("masterVolume", json!(0.0));
+        let listener = super::Listener {
+            speaker_name_hash: 1,
+            is_dead: false,
+            speaker_is_dead: false,
+        };
+        assert_eq!(super::after_the_rules(&config, listener, 1.0), None);
+    }
+
+    /// All three multiply, in `Voice.tsx`'s order.
+    #[test]
+    fn the_three_multipliers_compose() {
+        let mut config = Config::default();
+        config.set("playerConfigMap.7", json!({"volume": 0.5}));
+        config.set("crewVolumeAsGhost", json!(50.0));
+        config.set("masterVolume", json!(50.0));
+        let listener = super::Listener {
+            speaker_name_hash: 7,
+            is_dead: true,
+            speaker_is_dead: false,
+        };
+        // 1.0 * 0.5 * 0.5 * 0.5
+        assert_eq!(super::after_the_rules(&config, listener, 1.0), Some(0.125));
+    }
 
     /// A player nobody touched sounds exactly as the rules left them.
     #[test]

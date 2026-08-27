@@ -1152,22 +1152,26 @@ impl Client {
             // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
             // the rule and the reason it is keyed on the name hash are in
             // `acl_ui::config::per_player_gain`, which is tested without a game.
-            let Some(gain) = acl_ui::config::per_player_gain(
+            let Some(gain) = acl_ui::config::after_the_rules(
                 self.settings.config(),
-                player.name_hash,
+                acl_ui::config::Listener {
+                    speaker_name_hash: player.name_hash,
+                    is_dead: me.is_dead,
+                    speaker_is_dead: player.is_dead,
+                },
                 params.gain,
             ) else {
-                // Muted, so nothing is placed for them at all -- cheaper than mixing
-                // silence, and the same thing `gain <= 0` does below.
+                // Muted, silenced by the master volume, or turned all the way down.
+                // Nothing is placed for them at all: the Electron original leaves the graph
+                // alone in that case, and a peer left out of the map is a peer the mixer
+                // does not mix -- cheaper than mixing silence.
+                //
+                // `after_the_rules` returns `None` for every gain at or below zero, so
+                // there is no second check after this one. There was until 2026-08-27, and
+                // it could not fire.
                 continue;
             };
 
-            if gain <= 0.0 {
-                // Silent, and `placed` false means the panner was not given a position
-                // either -- the Electron original leaves the graph alone in that case, and
-                // a peer left out of the map is a peer the mixer does not mix.
-                continue;
-            }
             placements.insert(
                 socket.to_owned(),
                 audio::Placement {
