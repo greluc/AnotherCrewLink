@@ -1085,6 +1085,125 @@ mod tests {
         );
     }
 
+    /// A tone sent by one client, and heard by the other.
+    ///
+    /// Everything else in this file proves a *connection*: that the two found each other,
+    /// that the offer was answered, that the peer is reported as connected. None of it
+    /// proves audio, and a connected peer nobody can hear is the bug this port is most
+    /// likely to ship — every piece works, the whole says nothing.
+    ///
+    /// So this one carries a 440 Hz tone the whole way: encoded by the real encoder, sent
+    /// over the real track through a real server, taken off the wire by the receiving side,
+    /// and decoded. Then it asks the only question that matters, which is not "did bytes
+    /// arrive" but "is what came out the sound that went in" -- a Goertzel filter at 440 Hz
+    /// against one at 1 kHz. Bytes arriving is satisfied by noise.
+    ///
+    /// What it still is not: two machines, and two people. It is one process, over
+    /// loopback, with no NAT and no relay and no sound card. It rules out the silent
+    /// failure; it does not stand in for a round.
+    #[test]
+    #[ignore = "needs a server: set ACL_SERVER_BIN"]
+    fn a_tone_sent_by_one_is_heard_by_the_other() {
+        use acl_audio::codec::{Decoder, Encoder, FRAME_SAMPLES};
+
+        const PORT: u16 = 19_763;
+        const TONE_HZ: f32 = 440.0;
+        let Some(_server) = serving(PORT) else {
+            eprintln!("skipping: set ACL_SERVER_BIN to the server binary");
+            return;
+        };
+        let base = format!("http://127.0.0.1:{PORT}");
+
+        let mut speaker = Link::start();
+        let mut listener = Link::start();
+        speaker.connect(&base);
+        listener.connect(&base);
+        let both_up = wait(&mut [&mut speaker, &mut listener], |links| {
+            links
+                .iter()
+                .all(|link| matches!(link.state(), State::Connected(_)))
+        });
+        assert!(both_up, "one of the sessions never connected");
+
+        speaker.join("HEARD", 1, 11, true);
+        listener.join("HEARD", 2, 22, false);
+        let met = wait(&mut [&mut speaker, &mut listener], |links| {
+            links[0].hears(22) || links[1].hears(11)
+        });
+        assert!(met, "no peer connection, so nothing to listen for");
+
+        let mut opus = Encoder::new().expect("an encoder");
+        let mut phase = 0.0_f32;
+        let mut heard: Vec<f32> = Vec::new();
+        let mut decoder = Decoder::new().expect("a decoder");
+        let mut frame = vec![0.0_f32; FRAME_SAMPLES];
+
+        // Sent repeatedly rather than once. A single packet during the moments after ICE
+        // settles is a packet that can legitimately be dropped, and a test that failed for
+        // that reason would be a test nobody trusts.
+        for _ in 0..400 {
+            let mut samples = Vec::with_capacity(FRAME_SAMPLES);
+            for _ in 0..FRAME_SAMPLES {
+                samples.push((phase * std::f32::consts::TAU).sin() * 0.5);
+                phase = (phase + TONE_HZ / 48_000.0).fract();
+            }
+            let mut packet = Vec::new();
+            if opus.encode(&samples, &mut packet).is_ok() {
+                speaker.send_audio(packet);
+            }
+
+            speaker.pump();
+            listener.pump();
+            for arrived in listener.take_arrived() {
+                if let Ok(written) = decoder.decode(&arrived.payload, &mut frame) {
+                    heard.extend_from_slice(&frame[..written]);
+                }
+            }
+            if heard.len() >= FRAME_SAMPLES * 20 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(
+            heard.len() >= FRAME_SAMPLES * 5,
+            "only {} samples came through; the track carries nothing",
+            heard.len()
+        );
+        // Opus needs a moment to converge, and the first frames out of a decoder that has
+        // just started are not what the encoder was given. Judged on what follows them.
+        let settled = &heard[FRAME_SAMPLES * 2..];
+        let signal = goertzel(settled, TONE_HZ);
+        let elsewhere = goertzel(settled, 1_000.0);
+        assert!(
+            signal > elsewhere * 8.0,
+            "what arrived is not the tone that was sent: {TONE_HZ} Hz at {signal:.4},              1 kHz at {elsewhere:.4}"
+        );
+    }
+
+    /// How much of one frequency is in a signal.
+    ///
+    /// Goertzel rather than an FFT because one bin is all this needs, and a dependency for
+    /// a test assertion is a dependency in the release.
+    fn goertzel(samples: &[f32], hz: f32) -> f32 {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a sample count, in the thousands"
+        )]
+        let count = samples.len() as f32;
+        let k = (hz / 48_000.0) * std::f32::consts::TAU;
+        let coefficient = 2.0 * k.cos();
+        let (mut previous, mut older) = (0.0_f32, 0.0_f32);
+        for sample in samples {
+            let current = sample + coefficient * previous - older;
+            older = previous;
+            previous = current;
+        }
+        // Magnitude, normalised by length so the threshold does not depend on how many
+        // frames happened to arrive before the loop stopped.
+        (previous * previous + older * older - coefficient * previous * older).sqrt() / count
+    }
+
     /// Drives some links until something is true of them, or long enough to say it is not.
     ///
     /// Both have to be pumped throughout: each holds a session whose heartbeat is answered
