@@ -1829,6 +1829,19 @@ us.
    > the 2.x self-update and P8's bridge, instead of two of which one is exercised once a
    > year.
    >
+   > **The installer is built and run on every push, 2026-08-26.** It used to be compiled
+   > only by the release job, on a tag, with `installer_contract.rs` reading it as text in
+   > between. `rust.yml`'s `installer` job now compiles both scripts and runs what they
+   > produce: a silent install with the command line 1.x's updater spawns, a check that the
+   > binaries and the locale tree landed, and a silent uninstall.
+   >
+   > It earned its place in three runs. It found a message string NSIS would not parse, and
+   > `VIProductVersion` aborting on a prerelease version — which the release workflow accepts,
+   > because it triggers on `v2.*` and §4.12's staged rollout is exactly what gets tagged
+   > `v2.0.0-rc.1`. That one would have stopped the first staging release for a reason
+   > nothing in the repository mentioned. Neither was visible to the text check: every word
+   > it looks for was present, in a script `makensis` refused.
+   >
    > **The ceremony is a command, 2026-08-26.** `acl-release keys | write | sign`, behind
    > a non-default feature and a `required-features` binary so a plain `cargo build`
    > produces no signing tool at all -- the client verifies, and a client that could sign

@@ -8,20 +8,24 @@ knows how to run.
 makensis -DVERSION=2.0.0 -DSOURCE_DIR=../target/release installer/anothercrewlink.nsi
 ```
 
-`makensis` is not on the Rust CI runners and is not installed by any job here. The release
-workflow installs it for one step; nothing else needs it.
-
 ## What is checked automatically, and what is not
 
-`crates/acl-updater/tests/installer_contract.rs` reads this script as text and fails if it
-stops claiming any of the four things that would strand the fleet: `--updated`, `/S`, `/D=`,
-and the artefact's name. It also checks that the directory name agrees with
-`acl_core::paths::APP_DIRECTORY`, because the installer decides where the program goes and
-the client decides where its settings go.
+Two things, which answer different questions.
 
-**That is a check on the source, not on the installer.** It cannot run `makensis` and it
-cannot run the result. Before a release that matters, the following has to be done by a
-person, on a machine, once:
+`crates/acl-updater/tests/installer_contract.rs` reads this script as text and fails if it
+stops claiming any of the things that would strand the fleet: `--updated`, `/S`, `/D=`, the
+artefact's name, and — since 2026-08-26 — the architecture guard and the numeric version.
+It also checks that the directory name agrees with `acl_core::paths::APP_DIRECTORY`, because
+the installer decides where the program goes and the client decides where its settings go.
+
+`rust.yml`'s `installer` job compiles both scripts with `makensis` on every push and then
+**runs** what it produced: a silent install with the exact command line 1.x's updater
+spawns, a check that the binaries and the locale tree landed, and a silent uninstall. It
+found two real defects in its first three runs — a message string NSIS would not parse, and
+`VIProductVersion` aborting on a prerelease tag, which would have stopped the first staging
+release. Neither was visible to a text check, because every word it looks for was present.
+
+**Neither is a person using it.** Before a release that matters, once, on a machine:
 
 1. Install into a fresh user profile. The window opens, the settings page opens, and
    `%APPDATA%\ACL` appears.
@@ -29,6 +33,14 @@ person, on a machine, once:
    in Add/Remove Programs changes, and `%APPDATA%\ACL\config.json` still has whatever was
    set in step 1.
 3. Uninstall. `%LOCALAPPDATA%\Programs\ACL` is gone and `%APPDATA%\ACL` is not.
+
+### If you run the installer from Git Bash
+
+Write `//S`, not `/S`. Git Bash rewrites an argument that looks like a POSIX path into a
+Windows one before the program sees it, so `/S` arrives as a path, the installer is not
+silent, and it opens a window and waits. `/D=` and `_?=` survive as they are, because an
+argument containing `=` is left alone — which is why the files land in the right place and
+the whole thing looks like a script that got to the end and hung. This cost five CI runs.
 
 §4.9's own instruction is stronger than any of this and is the real test: *"Prove the new
 NSIS script by shipping an **ordinary 1.0.x release** with it, so its CLI contract is tested

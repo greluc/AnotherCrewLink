@@ -149,7 +149,7 @@ fn the_install_needs_no_elevation() {
 /// A prerelease version still compiles.
 ///
 /// `VIProductVersion` takes four numbers and aborts on anything else — `makensis` says
-/// "invalid VIProductVersion format" and stops. The release workflow triggers on `v2.*`,
+/// "invalid `VIProductVersion` format" and stops. The release workflow triggers on `v2.*`,
 /// which matches `v2.0.0-rc.1`, and §4.12's staged rollout is the thing that would be
 /// tagged that way. So the scripts take the numeric part themselves rather than trusting
 /// the caller to have stripped it.
