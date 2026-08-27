@@ -394,11 +394,86 @@ impl Bitmap {
     }
 }
 
+/// A bitmap as egui wants it.
+///
+/// `Bitmap` holds **premultiplied** RGBA — `decode_png` premultiplies on the way in, because
+/// `UpdateLayeredWindow` wants it that way and the overlay was the first consumer. `Color32`
+/// is premultiplied too, so this is a copy and not a conversion, and there is no alpha maths
+/// here to get wrong.
+///
+/// It lives beside the bitmap rather than in the client because both views want it: the
+/// overlay hands its pixels to Win32 and the main window hands the same pixels to egui.
+#[must_use]
+pub fn to_image(bitmap: &Bitmap) -> egui::ColorImage {
+    let size = [
+        usize::try_from(bitmap.width).unwrap_or(0),
+        usize::try_from(bitmap.height).unwrap_or(0),
+    ];
+    let mut pixels = Vec::with_capacity(size[0].saturating_mul(size[1]));
+    let (whole, _) = bitmap.pixels.as_chunks::<4>();
+    for [red, green, blue, alpha] in whole {
+        pixels.push(egui::Color32::from_rgba_premultiplied(
+            *red, *green, *blue, *alpha,
+        ));
+    }
+    // Trusting `width * height * 4` would panic inside egui on a bitmap that disagreed with
+    // itself; this cannot, and a short image is visibly wrong rather than fatal.
+    pixels.resize(size[0].saturating_mul(size[1]), egui::Color32::TRANSPARENT);
+    egui::ColorImage {
+        size,
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a bitmap's pixel dimensions, which are in the hundreds"
+        )]
+        source_size: egui::Vec2::new(size[0] as f32, size[1] as f32),
+        pixels,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::{Bitmap, Crewmate, crewmate, decode_png};
+
+    /// The pixels arrive unchanged, and premultiplied stays premultiplied.
+    ///
+    /// Both sides of this use premultiplied alpha, so the copy is the whole of it. A
+    /// conversion here would be a bug that shows as a halo round every hat.
+    #[test]
+    fn an_image_carries_the_same_pixels() {
+        let mut bitmap = super::Bitmap::blank(2, 1);
+        bitmap.pixels[0..4].copy_from_slice(&[10, 20, 30, 40]);
+        bitmap.pixels[4..8].copy_from_slice(&[0, 0, 0, 0]);
+
+        let image = super::to_image(&bitmap);
+        assert_eq!(image.size, [2, 1]);
+        assert_eq!(
+            image.pixels[0],
+            egui::Color32::from_rgba_premultiplied(10, 20, 30, 40)
+        );
+        assert_eq!(image.pixels[1], egui::Color32::TRANSPARENT);
+    }
+
+    /// A bitmap that disagrees with itself is short, not fatal.
+    ///
+    /// egui panics on a pixel count that does not match the size it was given, and this is
+    /// the one place a mismatch could reach it. Padding makes such an image visibly wrong
+    /// instead of taking the window down.
+    #[test]
+    fn a_short_bitmap_does_not_take_egui_down() {
+        let bitmap = super::Bitmap {
+            width: 4,
+            height: 4,
+            pixels: vec![0; 8],
+        };
+        let image = super::to_image(&bitmap);
+        assert_eq!(
+            image.pixels.len(),
+            16,
+            "egui would panic on any other count"
+        );
+    }
 
     /// The real artwork, decoded. A hat invented for a test only proves the decoder agrees
     /// with itself; these are two of the 983 files players actually download.

@@ -71,6 +71,141 @@ fn union(
 /// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
 /// physical size, and scaling by the window would make the overlay twice as large on the
 /// larger monitor for no reason anybody asked for.
+/// What a dressed crewmate looks like, as everything that changes the picture.
+///
+/// The cache key. Colour and the three cosmetics and nothing else: whether a player is
+/// speaking or dead is drawn *over* the sprite by the view, so two players in the same
+/// outfit share one texture however differently they are behaving.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Appearance {
+    colour: i32,
+    hat: String,
+    skin: String,
+    visor: String,
+}
+
+/// The dressed crewmates the main window is showing, as GPU textures.
+///
+/// # Why a cache and not a build per frame
+///
+/// Building one is a composite of up to five layers into a bitmap and an upload. At sixty
+/// frames a second for fifteen players that is the most expensive thing in the window, to
+/// produce the same picture every time.
+///
+/// # Why it cannot grow
+///
+/// Everything not asked for during a frame is dropped at the end of it. A lobby holds
+/// fifteen players, so the live set is small and bounded — but a session spans many lobbies
+/// and many outfits, and a map that only ever inserted would hold a texture for everybody
+/// the user has played with today.
+#[derive(Default)]
+struct Portraits {
+    held: std::collections::BTreeMap<Appearance, egui::TextureHandle>,
+    /// What this frame asked for. Cleared at the start of each frame rather than allocated
+    /// per frame.
+    seen: std::collections::BTreeSet<Appearance>,
+}
+
+impl Portraits {
+    /// The texture for one player, building it if the artwork is there.
+    ///
+    /// `None` while the cosmetics are still being fetched, which the view draws as shapes —
+    /// deliberately, and not as a placeholder: artwork can fail to arrive at all, and a
+    /// window that showed nothing then would look broken for a reason nobody can see.
+    fn of(
+        &mut self,
+        context: &egui::Context,
+        hats: &mut hat_store::Loader,
+        appearance: Appearance,
+    ) -> Option<egui::TextureId> {
+        self.seen.insert(appearance.clone());
+        if let Some(held) = self.held.get(&appearance) {
+            return Some(held.id());
+        }
+
+        let pieces = acl_ui::worn::pieces(
+            hats.collection(),
+            acl_ui::worn::Worn {
+                hat: &appearance.hat,
+                skin: &appearance.skin,
+                visor: &appearance.visor,
+            },
+            acl_types::cosmetics::HAT_COLLECTION_URL,
+            acl_ui::hats::BASE,
+        );
+        // Nothing to composite. The view's own drawing is better than a texture of the same
+        // shapes: it is one draw call rather than an upload, and it recolours for free.
+        if pieces.len() == 1 {
+            return None;
+        }
+        // Every layer, or none. A half-dressed crewmate cached now would stay half-dressed
+        // until the outfit changed, because nothing here revisits a texture it already has.
+        if pieces
+            .iter()
+            .filter_map(|piece| piece.url.as_deref())
+            .any(|url| hats.image(url).is_none())
+        {
+            return None;
+        }
+
+        let (body, shadow) = acl_ui::views::colour::crew(appearance.colour);
+        let mut canvas = acl_ui::sprite::Bitmap::blank(PORTRAIT_SPRITE, PORTRAIT_SPRITE);
+        for piece in &pieces {
+            let Some(url) = piece.url.as_deref() else {
+                // The body. Plain: no speaking ring and no fading, because the view draws
+                // both of those over whatever body it has and would otherwise draw them
+                // twice.
+                let base = acl_ui::sprite::crewmate(
+                    PORTRAIT_SPRITE,
+                    acl_ui::sprite::Crewmate {
+                        body: (body.r(), body.g(), body.b()),
+                        shadow: (shadow.r(), shadow.g(), shadow.b()),
+                        talking: false,
+                        alive: true,
+                    },
+                );
+                canvas.composite(&base, (0, 0), (PORTRAIT_SPRITE, PORTRAIT_SPRITE));
+                continue;
+            };
+            let Some(artwork) = hats.image(url) else {
+                continue;
+            };
+            let artwork = artwork.clone();
+            let (at, size) = acl_ui::worn::placement(
+                piece.geometry,
+                PORTRAIT_SPRITE,
+                (artwork.width, artwork.height),
+            );
+            canvas.composite(&artwork, at, size);
+        }
+
+        let handle = context.load_texture(
+            format!("portrait-{}-{}", appearance.colour, appearance.hat),
+            acl_ui::sprite::to_image(&canvas),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = handle.id();
+        self.held.insert(appearance, handle);
+        Some(id)
+    }
+
+    /// Drops everything this frame did not ask for.
+    ///
+    /// Dropping the handle is what frees the texture: egui keeps it alive exactly as long as
+    /// somebody holds one.
+    fn sweep(&mut self) {
+        self.held.retain(|key, _| self.seen.contains(key));
+        self.seen.clear();
+    }
+}
+
+/// How large a main-window crewmate is rasterised.
+///
+/// Larger than the 52 points it is drawn at, so it survives a high-DPI display without
+/// looking soft. Not larger still: it is composited on the CPU and uploaded, and the cost of
+/// both is the square of this.
+const PORTRAIT_SPRITE: i32 = 128;
+
 /// The three cosmetic ids a player is wearing.
 ///
 /// Named fields rather than a tuple of three `String`s: they are the same type, and nothing
@@ -441,6 +576,8 @@ struct Client {
     last_seen: Option<WindowState>,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
+    /// The dressed crewmates the main window is showing. See [`Portraits`].
+    portraits: Portraits,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -487,6 +624,7 @@ impl Client {
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
+            portraits: Portraits::default(),
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -1227,6 +1365,49 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Builds this frame's crewmate textures, keyed by the player's index in the state.
+    ///
+    /// Every player the game reports rather than only the ones the roster shows: a lobby
+    /// holds fifteen, the cache makes the second frame free, and deciding who is visible is
+    /// the view's job rather than this one's.
+    ///
+    /// Returns ids and not handles, because the view paints and does not own. What owns them
+    /// is [`Portraits`], which drops at the end of this call everything the call did not ask
+    /// for -- so a session that visits many lobbies does not accumulate a texture per outfit
+    /// it has ever seen.
+    fn dress_portraits(
+        &mut self,
+        context: &egui::Context,
+    ) -> std::collections::BTreeMap<usize, egui::TextureId> {
+        let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest().cloned())
+        else {
+            // No frame, so nothing to dress -- and nothing to keep, either. A reader that
+            // stopped should not leave the last lobby's textures resident.
+            self.portraits.sweep();
+            return std::collections::BTreeMap::new();
+        };
+
+        let mut dressed = std::collections::BTreeMap::new();
+        for (at, player) in state.players.iter().enumerate() {
+            let appearance = Appearance {
+                colour: i32::try_from(player.color_id).unwrap_or(-1),
+                hat: player.hat_id.clone(),
+                skin: player.skin_id.clone(),
+                visor: player.visor_id.clone(),
+            };
+            if let Some(id) = self.portraits.of(context, &mut self.hats, appearance) {
+                dressed.insert(at, id);
+            }
+        }
+        self.portraits.sweep();
+        dressed
+    }
+}
+
 impl eframe::App for Client {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(reader) = self.reader.as_mut() {
@@ -1300,6 +1481,10 @@ impl eframe::App for Client {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Before the panel, not inside it. The closure below holds `self.reader` borrowed
+        // for its whole body, and building artwork needs `&mut` on the loader and the cache
+        // -- so this happens first and the closure reads the answer.
+        let dressed = self.dress_portraits(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
             Self::title_bar(ui, &ctx, &mut page);
@@ -1405,6 +1590,9 @@ impl eframe::App for Client {
                         name: &player.name,
                         color_id: i32::try_from(player.color_id).unwrap_or(-1),
                         state: *entry,
+                        // `None` while the cosmetics are still arriving, which the view
+                        // draws as shapes rather than as nothing.
+                        art: dressed.get(&entry.at).copied(),
                     })
                 })
                 .collect();
