@@ -15,7 +15,9 @@
 use egui::{ComboBox, Slider, Ui};
 use serde_json::{Value, json};
 
-use crate::settings_screen::{Control, Kind, SECTIONS, Scope, availability, shown, stored};
+use crate::settings_screen::{
+    Control, Kind, SECTIONS, Scope, availability, gate_is_its_own_control, shown, stored,
+};
 
 /// What the player did.
 #[derive(Clone, Debug, PartialEq)]
@@ -134,21 +136,45 @@ pub fn draw(ui: &mut Ui, values: &dyn Values, context: &Context<'_>) -> Vec<Chan
                 context.host_may_change,
                 context.in_menu_or_lobby,
             );
+            // The gating checkbox, *before* the control and carrying its label -- so it
+            // reads "[x] Microphone volume" over the slider it enables.
+            //
+            // Two things about where it is drawn. It is outside the `add_enabled_ui` below,
+            // because a gate inside the thing it gates is one you can switch off and never
+            // switch back on. And it is skipped when the gate is a control in its own
+            // right: `enableOverlay` has its own labelled row, and drawing it again for
+            // each of the three controls it gates is what put three unlabelled checkboxes
+            // in the overlay section.
+            let own_gate = control
+                .gate
+                .filter(|gate| !gate_is_its_own_control(gate))
+                .map(|gate| {
+                    gate_checkbox(
+                        ui,
+                        gate,
+                        section.scope,
+                        gate_is_on,
+                        &control.label.map(context.t).unwrap_or_default(),
+                        &mut changes,
+                    );
+                });
             let response = ui
                 .scope(|ui| {
                     ui.add_enabled_ui(state.enabled, |ui| {
-                        one(ui, control, section.scope, values, context, &mut changes);
+                        one(
+                            ui,
+                            control,
+                            section.scope,
+                            values,
+                            context,
+                            &mut changes,
+                            own_gate.is_some(),
+                        );
                     });
                 })
                 .response;
             if let Some(reason) = state.reason {
                 response.on_hover_text((context.t)(reason));
-            }
-            // The gating checkbox, after the control it enables rather than before it: it
-            // is a property of that control, and reading "microphone volume [ ]" is what
-            // says so.
-            if let Some(gate) = control.gate {
-                gate_checkbox(ui, gate, section.scope, gate_is_on, &mut changes);
             }
         }
         ui.separator();
@@ -156,16 +182,17 @@ pub fn draw(ui: &mut Ui, values: &dyn Values, context: &Context<'_>) -> Vec<Chan
     changes
 }
 
-/// The checkbox that enables a gated control.
+/// The checkbox that enables a gated control, labelled with what it enables.
 fn gate_checkbox(
     ui: &mut Ui,
     gate: &'static str,
     scope: Scope,
     is_on: bool,
+    label: &str,
     changes: &mut Vec<Change>,
 ) {
     let mut on = is_on;
-    if ui.checkbox(&mut on, "").changed() {
+    if ui.checkbox(&mut on, label).changed() {
         changes.push(Change::Set {
             key: gate,
             scope,
@@ -183,8 +210,15 @@ fn one(
     values: &dyn Values,
     context: &Context<'_>,
     changes: &mut Vec<Change>,
+    labelled_by_its_gate: bool,
 ) {
-    let label = control.label.map(context.t).unwrap_or_default();
+    // Empty when the gating checkbox above already carries it, which is the whole reason
+    // that checkbox is worth drawing: the label says what the switch is for.
+    let label = if labelled_by_its_gate {
+        String::new()
+    } else {
+        control.label.map(context.t).unwrap_or_default()
+    };
     let set = |value: Value| Change::Set {
         key: control.key,
         scope,

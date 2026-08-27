@@ -46,6 +46,133 @@ use acl_core::peers::Incoming;
 
 /// How loud a peer is, and where.
 ///
+/// The capture settings that are fixed when the microphone is opened.
+///
+/// Fixed, because that is what they are on the shipped client: `echoCancellation`,
+/// `noiseSuppression` and `vadEnabled` are `getUserMedia` constraints there, given once and
+/// changed by reopening the stream. `Settings.tsx` puts all three in the list that raises
+/// its "unsaved" count, which is how it asks for the reconnect that applies them.
+///
+/// Here the reload button reopens the audio, which is the same bargain.
+#[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per setting, for the reason `settings_screen` gives about its own:               packing them would hide which switch on the page each one is"
+)]
+pub(crate) struct Capture {
+    /// Whether the echo canceller runs.
+    pub(crate) echo_cancellation: bool,
+    /// Whether the noise suppressor runs.
+    pub(crate) noise_suppression: bool,
+    /// Whether the voice detector runs at all.
+    ///
+    /// With it off nothing is reported to the lobby and the microphone is governed by the
+    /// talk mode alone, which is what somebody switching it off is asking for.
+    pub(crate) voice_detection: bool,
+    /// Open the device at 48 kHz or not at all.
+    ///
+    /// `oldSampleDebug`, which asks `getUserMedia` for `sampleRate: 48000` outright rather
+    /// than accepting what the device offers. The point of a debug switch like this is to
+    /// take the resampler out of the picture when somebody is chasing a sound, so a device
+    /// that cannot do 48 kHz is refused rather than quietly resampled -- which would leave
+    /// the switch on and the thing it removes still there.
+    pub(crate) fixed_rate: bool,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Self {
+            echo_cancellation: true,
+            noise_suppression: true,
+            voice_detection: true,
+            fixed_rate: false,
+        }
+    }
+}
+
+/// Where the voice detector's noise floor should sit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Floor {
+    /// Whatever `VadSettings::default` says, which is what an unticked box means.
+    Default,
+    /// The level the player chose.
+    At(f64),
+}
+
+impl Floor {
+    /// The settings a detector should be rebuilt with.
+    fn settings(self) -> acl_audio::vad::VadSettings {
+        let mut settings = acl_audio::vad::VadSettings::default();
+        if let Self::At(level) = self {
+            settings.min_noise_level = level;
+        }
+        settings
+    }
+}
+
+/// The capture settings that change while the microphone is open.
+///
+/// Atomics rather than a lock. These are read inside a real-time callback, and a callback
+/// that waits on a mutex the settings screen is holding is a callback that misses its
+/// deadline — which is heard as a click. The two `f32`/`f64` values are stored as their
+/// bit patterns because there is no atomic float.
+#[derive(Debug)]
+pub(crate) struct Tuning {
+    /// Input gain, as a multiplier. One is unchanged.
+    gain: std::sync::atomic::AtomicU32,
+    /// The voice detector's noise floor, or negative for "leave it alone".
+    noise_floor: std::sync::atomic::AtomicU64,
+    /// Bumped whenever `noise_floor` changes, so the callback knows to re-tune the
+    /// detector rather than comparing floats every frame.
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            gain: std::sync::atomic::AtomicU32::new(1.0_f32.to_bits()),
+            noise_floor: std::sync::atomic::AtomicU64::new((-1.0_f64).to_bits()),
+            generation: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl Tuning {
+    /// Sets both, and says so if the floor moved.
+    fn set(&self, gain: f32, noise_floor: Option<f64>) {
+        use std::sync::atomic::Ordering;
+        self.gain.store(gain.to_bits(), Ordering::Relaxed);
+        let wanted = noise_floor.unwrap_or(-1.0).to_bits();
+        if self.noise_floor.swap(wanted, Ordering::Relaxed) != wanted {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The gain to apply to the next frame.
+    fn gain(&self) -> f32 {
+        f32::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The floor to re-tune to, if it has moved since `seen`.
+    ///
+    /// Three answers, so a named one: nothing changed, changed to a number, or changed back
+    /// to the detector's own default.
+    fn floor_if_moved(&self, seen: &mut u64) -> Option<Floor> {
+        use std::sync::atomic::Ordering;
+        let now = self.generation.load(Ordering::Relaxed);
+        if now == *seen {
+            return None;
+        }
+        *seen = now;
+        let stored = f64::from_bits(self.noise_floor.load(Ordering::Relaxed));
+        Some(if stored >= 0.0 {
+            Floor::At(stored)
+        } else {
+            Floor::Default
+        })
+    }
+}
+
 /// One per audible peer, replaced wholesale each frame. The gain is
 /// `acl_audio::voice::voice_params`' answer — every rule about distance, walls, vision, the
 /// dead and the vents is already in it — and the position is where the panner should put
@@ -88,6 +215,8 @@ pub(crate) struct Audio {
     activity: Receiver<bool>,
     /// What each peer sounds like, read by the mixing thread.
     placements: Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
+    /// The capture settings that change while it runs, read by the capture callback.
+    tuning: Arc<Tuning>,
     /// Why there is no audio, when there is none.
     trouble: Option<String>,
     /// Kept alive: dropping a `cpal` stream stops it.
@@ -100,20 +229,22 @@ impl Audio {
     /// A failure is not fatal and not silent. A client with no microphone is a client that
     /// can still hear, and one with no speaker can still be heard; both are worth saying
     /// out loud and neither is worth refusing to start over.
-    pub(crate) fn start() -> Self {
+    pub(crate) fn start(capture: Capture) -> Self {
         let (incoming, packets) = std::sync::mpsc::channel::<Incoming>();
         let (encoded, outgoing) = std::sync::mpsc::channel::<Vec<u8>>();
         // Transitions only, which is what makes an unbounded channel safe here: somebody
         // talking produces two of these a sentence, not fifty a second.
         let (voice, activity) = std::sync::mpsc::channel::<bool>();
         let placements = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+        let tuning = Arc::new(Tuning::default());
 
-        match Self::open(packets, &encoded, &voice, &placements) {
+        match Self::open(packets, &encoded, &voice, &placements, capture, &tuning) {
             Ok(streams) => Self {
                 incoming,
                 outgoing,
                 activity,
                 placements,
+                tuning,
                 trouble: None,
                 _streams: streams,
             },
@@ -122,10 +253,25 @@ impl Audio {
                 outgoing,
                 activity,
                 placements,
+                tuning,
                 trouble: Some(why),
                 _streams: Vec::new(),
             },
         }
+    }
+
+    /// The settings that can change while the microphone is open.
+    ///
+    /// `gain` is `microphoneGain / 100` when the player enabled it and one when they did
+    /// not. `noise_floor` is `micSensitivity` when *that* is enabled and `None` for the
+    /// detector's own default.
+    ///
+    /// **The shipped client couples these and this does not.** `Voice.tsx` sets the gain
+    /// only `if (!micSensitivityEnabled)`, so switching sensitivity on silently discards
+    /// the gain the player set — two independent settings on the same page, one quietly
+    /// disabling the other. Each is applied here for what its own label says it does.
+    pub(crate) fn tune(&self, gain: f32, noise_floor: Option<f64>) {
+        self.tuning.set(gain, noise_floor);
     }
 
     /// Hands one arrived packet to the decoder.
@@ -186,6 +332,8 @@ impl Audio {
         encoded: &Sender<Vec<u8>>,
         voice: &Sender<bool>,
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
+        capture: Capture,
+        tuning: &Arc<Tuning>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         // What the mixing thread produces and the output callback consumes. A mutex the
         // callback only ever *tries*: blocking there would miss a deadline measured in
@@ -207,7 +355,7 @@ impl Audio {
         // The speaker first, because a client that can hear is useful on its own and a
         // microphone failure should not cost it.
         let speaker = open_speaker(&host, &ready, &played)?;
-        let microphone = open_microphone(&host, encoded, voice, &played)?;
+        let microphone = open_microphone(&host, encoded, voice, &played, capture, tuning)?;
         Ok(vec![speaker, microphone])
     }
 
@@ -287,11 +435,17 @@ fn open_speaker(
 
 /// Opens the microphone: resample, cancel the echo, encode, hand over.
 #[cfg(feature = "audio")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one function because it is one device: the encoder, the resampler, the               canceller and the detector are built in the order the callback uses them,               and the callback closes over all four. Splitting it would move the captures               into a struct and the reading order into two places"
+)]
 fn open_microphone(
     host: &cpal::Host,
     encoded: &Sender<Vec<u8>>,
     voice: &Sender<bool>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+    capture: Capture,
+    tuning: &Arc<Tuning>,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
@@ -299,6 +453,12 @@ fn open_microphone(
         .default_input_device()
         .ok_or_else(|| "no input device".to_owned())?;
     let config = at_any_rate(&input, true)?;
+    if capture.fixed_rate && config.sample_rate != acl_audio::stream::WANTED_RATE {
+        return Err(format!(
+            "the microphone runs at {} Hz and the 48 kHz debug setting is on",
+            config.sample_rate
+        ));
+    }
     let channels = config.channels.max(1) as usize;
 
     let mut opus = Encoder::new().map_err(|error| format!("the encoder refused: {error}"))?;
@@ -312,7 +472,12 @@ fn open_microphone(
                 .map_err(|error| format!("no resampler for this device: {error}"))?,
         )
     };
-    let mut apm: Box<dyn acl_audio::apm::Apm> = Box::new(acl_audio::apm::Sonora::new());
+    // The two stages the player can switch off. Both were hard-coded until 2026-08-27 --
+    // cancellation on, suppression off -- and neither setting reached this line.
+    let mut apm: Box<dyn acl_audio::apm::Apm> = Box::new(acl_audio::apm::Sonora::configured(
+        capture.echo_cancellation,
+        capture.noise_suppression,
+    ));
     // A starting point rather than a measurement: the canceller refines it, and what it
     // needs is the right region. Two device buffers is what a default-sized `cpal` stream
     // comes to on Windows.
@@ -340,6 +505,10 @@ fn open_microphone(
     let mut heard_frames = 0_u64;
 
     let reference = Arc::clone(played);
+    let tuning = Arc::clone(tuning);
+    // What generation of the sensitivity setting the detector was last built for.
+    let mut tuned_for = 0_u64;
+    let detecting = capture.voice_detection;
     let voice = voice.clone();
     let encoded = encoded.clone();
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
@@ -361,6 +530,18 @@ fn open_microphone(
                         reason = "a channel count, which is one or two"
                     )]
                     mono.push(sum / channels as f32);
+                }
+
+                // `microphoneGain`, which is a `GainNode` on the shipped client and sits in
+                // the same place: after the source and before everything that reads it, so
+                // the canceller, the detector and the encoder all see one signal. Clamped,
+                // because the setting goes to 300 per cent and three times a loud sample is
+                // not a sample.
+                let gain = tuning.gain();
+                if (gain - 1.0).abs() > f32::EPSILON {
+                    for sample in &mut mono {
+                        *sample = (*sample * gain).clamp(-1.0, 1.0);
+                    }
                 }
 
                 match rates.as_mut() {
@@ -390,14 +571,27 @@ fn open_microphone(
                     // On the same frame the encoder gets, before it gets it. The
                     // detector consumes nothing, and reading it here is what guarantees the
                     // two are looking at identical samples.
-                    analyser.push(&frame);
-                    let heard = detector.push(&analyser);
-                    heard_frames += 1;
-                    if heard_frames == calibration_frames {
-                        detector.finish_calibration();
-                    }
-                    if heard.changed && voice.send(heard.talking).is_err() {
-                        return;
+                    //
+                    // Skipped entirely when the player switched the detector off: with
+                    // `vadEnabled` false nothing should be measuring them, and reporting a
+                    // level from a detector nobody asked for is the opposite of off.
+                    if detecting {
+                        // `micSensitivity`, which the shipped client applies live and then
+                        // re-runs its calibration. Same here: a floor learned against a
+                        // threshold that is no longer in force is worse than no floor.
+                        if let Some(floor) = tuning.floor_if_moved(&mut tuned_for) {
+                            detector.retune(floor.settings());
+                            heard_frames = 0;
+                        }
+                        analyser.push(&frame);
+                        let heard = detector.push(&analyser);
+                        heard_frames += 1;
+                        if heard_frames == calibration_frames {
+                            detector.finish_calibration();
+                        }
+                        if heard.changed && voice.send(heard.talking).is_err() {
+                            return;
+                        }
                     }
 
                     packet.clear();
@@ -659,7 +853,58 @@ pub(crate) fn encode_frame(
 
 #[cfg(test)]
 mod tests {
+
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// The floor only counts as moved when it moves.
+    ///
+    /// The callback rebuilds the detector on every reported move, and rebuilding restarts
+    /// its calibration — so a generation that ticked on every frame would leave the
+    /// microphone permanently in its first second, never deciding anything.
+    #[test]
+    fn re_tuning_is_reported_once_per_change() {
+        let tuning = super::Tuning::default();
+        let mut seen = 0;
+        // The first read is a change: the default is "leave it alone", and the callback has
+        // not been told anything yet.
+        tuning.set(1.0, Some(0.2));
+        assert_eq!(
+            tuning.floor_if_moved(&mut seen),
+            Some(super::Floor::At(0.2))
+        );
+        assert_eq!(tuning.floor_if_moved(&mut seen), None, "nothing moved");
+
+        // The same value again is not a move, even though it was stored again.
+        tuning.set(2.0, Some(0.2));
+        assert_eq!(tuning.floor_if_moved(&mut seen), None);
+
+        // Turning the setting off is a move, back to the detector's own default.
+        tuning.set(2.0, None);
+        assert_eq!(
+            tuning.floor_if_moved(&mut seen),
+            Some(super::Floor::Default)
+        );
+    }
+
+    /// The gain survives the round trip through its bit pattern.
+    #[test]
+    fn the_gain_is_the_gain() {
+        let tuning = super::Tuning::default();
+        assert!((tuning.gain() - 1.0).abs() < f32::EPSILON, "one by default");
+        tuning.set(3.0, None);
+        assert!((tuning.gain() - 3.0).abs() < f32::EPSILON);
+    }
+
+    /// Only `Floor::At` moves the threshold; the default leaves it where the detector puts
+    /// it.
+    #[test]
+    fn a_default_floor_changes_nothing() {
+        let plain = acl_audio::vad::VadSettings::default();
+        assert_eq!(super::Floor::Default.settings(), plain);
+        let moved = super::Floor::At(0.42).settings();
+        assert!((moved.min_noise_level - 0.42).abs() < f64::EPSILON);
+        assert!((moved.max_noise_level - plain.max_noise_level).abs() < f64::EPSILON);
+    }
 
     use super::{Audio, Listener, Placement, encode_frame};
     use acl_audio::codec::{Encoder, FRAME_SAMPLES};
@@ -750,7 +995,7 @@ mod tests {
     /// devices were real. What it should assert is the invariant rather than the outcome.
     #[test]
     fn a_client_starts_with_devices_or_without_and_says_which() {
-        let audio = Audio::start();
+        let audio = Audio::start(super::Capture::default());
         // `None` means the devices opened, and nothing here plays anything -- that would
         // put a noise on the machine of whoever ran the tests.
         if let Some(why) = audio.trouble() {

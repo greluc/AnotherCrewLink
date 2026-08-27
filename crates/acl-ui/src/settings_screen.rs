@@ -580,6 +580,20 @@ pub fn controls() -> impl Iterator<Item = &'static Control> {
     SECTIONS.iter().flat_map(|section| section.controls.iter())
 }
 
+/// Whether a gate is itself one of the screen's controls.
+///
+/// Two of the four are: `enableOverlay` and `publicLobby_on` each have a row of their own,
+/// with a label a translator wrote. Drawing a gating checkbox for them as well put the same
+/// switch on the screen a second, third and fourth time with nothing beside it — which is
+/// what an unlabelled checkbox under "Compact overlay" was.
+///
+/// The other two, `microphoneGainEnabled` and `micSensitivityEnabled`, exist only to enable
+/// their slider. Those are drawn, and they take the slider's own label.
+#[must_use]
+pub fn gate_is_its_own_control(gate: &str) -> bool {
+    controls().any(|control| control.key == gate)
+}
+
 /// What a slider shows for a stored value.
 ///
 /// The identity for every slider but one. See [`Kind::Slider`]'s `inverted`.
@@ -620,7 +634,10 @@ mod tests {
     // happen, which is noise around the thing being checked.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Choice, Kind, NOT_SHOWN, SECTIONS, Scope, availability, controls, shown, stored};
+    use super::{
+        Choice, Kind, NOT_SHOWN, SECTIONS, Scope, availability, controls, gate_is_its_own_control,
+        shown, stored,
+    };
     use crate::settings::{Default_, defaults, lobby_defaults};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
@@ -628,6 +645,43 @@ mod tests {
     /// Every setting, from both lists, with the type its default has.
     fn schema() -> BTreeMap<&'static str, Default_> {
         defaults().into_iter().chain(lobby_defaults()).collect()
+    }
+
+    /// A gate with a row of its own is not drawn a second time.
+    ///
+    /// Two of the four are: `enableOverlay` and `publicLobby_on`. Drawing a gating checkbox
+    /// for them as well put the same switch on the screen four times over, three of those
+    /// with no label beside it.
+    #[test]
+    fn a_gate_that_is_a_control_is_recognised_as_one() {
+        assert!(gate_is_its_own_control("enableOverlay"));
+        assert!(gate_is_its_own_control("publicLobby_on"));
+        assert!(!gate_is_its_own_control("microphoneGainEnabled"));
+        assert!(!gate_is_its_own_control("micSensitivityEnabled"));
+        assert!(!gate_is_its_own_control("no_such_setting"));
+    }
+
+    /// Every gate that *is* drawn has a label to take.
+    ///
+    /// It takes the label of the control it gates, so a gate on a control that has none
+    /// would be an unlabelled checkbox again — the exact thing this is here to prevent, and
+    /// invisible until somebody opens the screen and looks.
+    #[test]
+    fn every_drawn_gate_has_a_label_to_borrow() {
+        for control in controls() {
+            let Some(gate) = control.gate else {
+                continue;
+            };
+            if gate_is_its_own_control(gate) {
+                continue;
+            }
+            assert!(
+                control.label.is_some(),
+                "{} gates {} and has no label for it",
+                gate,
+                control.key
+            );
+        }
     }
 
     /// Every key this screen can write: a control's own key, and any gate it names.

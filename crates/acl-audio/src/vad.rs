@@ -124,6 +124,24 @@ impl Vad {
         }
     }
 
+    /// Changes the settings and learns the room again.
+    ///
+    /// `micSensitivity` is a live setting on the shipped client -- it writes
+    /// `audioListener.options.minNoiseLevel` and then calls `init()`, which starts the
+    /// measurement over. Keeping the old floor would be worse than either: it was decided
+    /// against a threshold that is no longer the one in force.
+    ///
+    /// Allocation-free, which matters because the caller is an audio callback: the only
+    /// heap in here is the calibration buffer, and clearing a `Vec` does not touch it.
+    pub fn retune(&mut self, settings: VadSettings) {
+        self.settings = settings;
+        self.calibration.clear();
+        self.base_level = None;
+        self.voice_scale = 1.0;
+        self.counter = 0;
+        self.talking = false;
+    }
+
     /// Whether the floor has been decided yet.
     #[must_use]
     pub fn calibrated(&self) -> bool {

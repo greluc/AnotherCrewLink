@@ -52,6 +52,14 @@ pub enum HelperMessage {
     /// or the boundary crate grows a dependency on one of the two sides it separates.
     GameState(Vec<u8>),
     /// A key the helper's hook saw, by the code the platform layer defines.
+    ///
+    /// **Nothing sends this and nothing handles it**, and that is not an oversight to fix
+    /// by wiring it up. The client reads the keyboard itself with `GetAsyncKeyState`, which
+    /// reads global key state and is not blocked by the integrity rules that stop a lower
+    /// process talking to a higher one — so the shortcuts work with the game elevated
+    /// without a hook in the elevated half at all. Installing one there would be a
+    /// keyboard hook in an administrator process, which is a thing to need a reason for
+    /// rather than a thing to have in reserve.
     KeyEvent {
         /// Platform key code.
         code: u32,
@@ -91,6 +99,13 @@ pub enum CoreMessage {
     /// Begin sampling the game.
     StartReading,
     /// Stop sampling, without exiting.
+    ///
+    /// **Nothing sends this.** The client's only stop is the reload button, and reload
+    /// wants the helper replaced rather than paused: that is what re-fetches the offsets,
+    /// which is the usual reason somebody presses it. Kept because the distinction is real
+    /// — a paused helper keeps its elevation, and asking for elevation again costs a
+    /// prompt — and it is the message a future "stop reading while I alt-tab" would use.
+    /// Named here so an audit finds a reason rather than silence.
     StopReading,
     /// Show or hide the overlay window.
     SetOverlayVisible(bool),

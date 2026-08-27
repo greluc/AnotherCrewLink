@@ -107,11 +107,46 @@ pub struct Worn<'a> {
     pub visor: &'a str,
 }
 
+/// Where the body's top edge sits inside the avatar box, as a fraction of the box.
+///
+/// `Avatar.tsx` puts the body at `top: 22%` and every cosmetic at `calc(22% + <its own
+/// top>)`, so the whole crewmate — body and everything worn on it — is shifted down by this
+/// much and the box's upper fifth is empty. Leaving it out placed the hats against the top
+/// of the sprite while the body sat in the middle of it, which on a hard hat reads as a
+/// crewmate holding one above their head.
+pub const BASE_TOP: f32 = 0.22;
+
+/// How wide the body is drawn, as a fraction of the avatar box.
+///
+/// `width: 105%`, so it overflows its box slightly on the right and is cropped there. Not a
+/// rounding artefact in the stylesheet: it is what makes the crewmate fill the circle.
+pub const BASE_WIDTH: f32 = 1.05;
+
+/// Where the body goes on a sprite of a given size, in pixels.
+///
+/// Square, because both masters are. The height is the width for the same reason.
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "sprite dimensions in pixels, far below f32's exact integer range"
+)]
+pub fn base_placement(sprite: i32) -> ((i32, i32), (i32, i32)) {
+    let size = sprite as f32;
+    // Rounded, not truncated: `1.05 * 100.0` is 104.99999 in binary and a body one pixel
+    // narrower than the box it overflows is not the shape the stylesheet asks for.
+    let across = (BASE_WIDTH * size).round() as i32;
+    ((0, (BASE_TOP * size).round() as i32), (across, across))
+}
+
 /// Where one piece goes on a sprite of a given size, in pixels.
 ///
 /// The geometry is fractions of the sprite's width, and the height follows the artwork's own
 /// proportions — the stylesheet this is ported from gives a width and nothing else, so a
 /// height taken from anywhere but the file would stretch it.
+///
+/// [`BASE_TOP`] is added to the top, because the geometry is relative to the body and the
+/// body is not at the top of the box.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -123,7 +158,10 @@ pub fn placement(geometry: Geometry, sprite: i32, artwork: (i32, i32)) -> ((i32,
     let width = geometry.width * size;
     let height = width * artwork.1 as f32 / artwork.0.max(1) as f32;
     (
-        ((geometry.left * size) as i32, (geometry.top * size) as i32),
+        (
+            (geometry.left * size) as i32,
+            ((BASE_TOP + geometry.top) * size) as i32,
+        ),
         (width as i32, height as i32),
     )
 }
@@ -132,7 +170,7 @@ pub fn placement(geometry: Geometry, sprite: i32, artwork: (i32, i32)) -> ((i32,
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Worn, pieces, placement};
+    use super::{Worn, base_placement, pieces, placement};
     use crate::cosmetics::{Geometry, Layer};
     use crate::hats::{BASE, Collection};
 
@@ -252,9 +290,41 @@ mod tests {
             width: 0.5,
         };
         let (at, size) = placement(geometry, 100, (40, 80));
-        assert_eq!(at, (25, 10));
+        assert_eq!(
+            at,
+            (25, 32),
+            "ten per cent below the body, which is at twenty-two"
+        );
         assert_eq!(size.0, 50, "width is the geometry's share of the sprite");
         assert_eq!(size.1, 100, "a 1:2 image at 50 wide is 100 tall");
+    }
+
+    /// The body sits a fifth of the way down and overflows its box.
+    ///
+    /// Both numbers are `Avatar.tsx`'s. The width being over one is the part that looks
+    /// like a typo and is not.
+    #[test]
+    fn the_body_is_low_and_wide() {
+        let (at, size) = base_placement(100);
+        assert_eq!(at, (0, 22));
+        assert_eq!(size, (105, 105));
+    }
+
+    /// A cosmetic with no offset of its own still lands on the body, not above it.
+    ///
+    /// This is the regression: every hat, skin and visor was drawn a fifth of a sprite too
+    /// high, because the geometry is measured from the body and the body had been left
+    /// where the box starts.
+    #[test]
+    fn a_cosmetic_at_zero_sits_where_the_body_starts() {
+        let geometry = Geometry {
+            top: 0.0,
+            left: 0.0,
+            width: 1.0,
+        };
+        let (at, _) = placement(geometry, 100, (10, 10));
+        let ((_, body_top), _) = base_placement(100);
+        assert_eq!(at.1, body_top);
     }
 
     /// A zero-width artwork does not divide by zero.

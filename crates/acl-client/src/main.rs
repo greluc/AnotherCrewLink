@@ -100,6 +100,11 @@ struct Appearance {
     hat: String,
     skin: String,
     visor: String,
+    /// Which of the two masters the body comes from.
+    ///
+    /// Part of the key rather than a tint applied afterwards, because the ghost is a
+    /// different drawing — it has a tail where the crewmate has legs.
+    alive: bool,
 }
 
 /// The dressed crewmates the main window is showing, as GPU textures.
@@ -151,11 +156,13 @@ impl Portraits {
             acl_types::cosmetics::HAT_COLLECTION_URL,
             acl_ui::hats::BASE,
         );
-        // Nothing to composite. The view's own drawing is better than a texture of the same
-        // shapes: it is one draw call rather than an upload, and it recolours for free.
-        if pieces.len() == 1 {
-            return None;
-        }
+        // No early return for a player wearing nothing. There used to be one -- the view
+        // draws its own crewmate and that seemed cheaper than a texture of the same shapes
+        // -- but the shapes are not the same: `views::main::shapes` paints two circles and
+        // a visor, and the body is a drawing. So a lobby of players in default outfits was
+        // a row of coloured discs next to the shipped client's crewmates. The fallback
+        // stays for the case it was written for, which is artwork that will not decode.
+        //
         // Every layer, or none. A half-dressed crewmate cached now would stay half-dressed
         // until the outfit changed, because nothing here revisits a texture it already has.
         if pieces
@@ -173,18 +180,23 @@ impl Portraits {
                 // The body. Plain: no speaking ring and no fading, because the view draws
                 // both of those over whatever body it has and would otherwise draw them
                 // twice.
-                let base = acl_ui::sprite::crewmate(
-                    PORTRAIT_SPRITE,
-                    acl_ui::sprite::Crewmate {
-                        body: (body.r(), body.g(), body.b()),
-                        shadow: (shadow.r(), shadow.g(), shadow.b()),
-                        talking: false,
-                        alive: true,
-                    },
-                );
-                canvas.composite(&base, (0, 0), (PORTRAIT_SPRITE, PORTRAIT_SPRITE));
+                //
+                // Low and slightly wider than its box, which is where every cosmetic's
+                // geometry is measured from -- see `worn::BASE_TOP`.
+                let base = acl_ui::body::recoloured(
+                    appearance.alive,
+                    (body.r(), body.g(), body.b()),
+                    (shadow.r(), shadow.g(), shadow.b()),
+                )?;
+                let (at, size) = acl_ui::worn::base_placement(PORTRAIT_SPRITE);
+                canvas.composite(&base, at, size);
                 continue;
             };
+            // A ghost wears nothing. `Avatar.tsx` sets `display: none` on all three
+            // cosmetic layers for a dead player -- the hat does not follow you out.
+            if !appearance.alive {
+                continue;
+            }
             let Some(artwork) = hats.image(url) else {
                 continue;
             };
@@ -197,8 +209,23 @@ impl Portraits {
             canvas.composite(&artwork, at, size);
         }
 
+        // The round window the shipped client's `border-radius: 50%` gives it. Last, so it
+        // takes the cosmetics with it -- a hat wide enough to leave the circle is cropped
+        // there rather than sticking out of a round avatar.
+        acl_ui::sprite::clip_to_circle(&mut canvas);
+
+        // Named after everything it is built from. It was named after the colour and the
+        // hat, which is not a key: two players in one colour and one hat, one of them in a
+        // skin, would have shared a name in the texture debugger while being two textures.
         let handle = context.load_texture(
-            format!("portrait-{}-{}", appearance.colour, appearance.hat),
+            format!(
+                "portrait-{}-{}-{}-{}-{}",
+                appearance.colour,
+                appearance.hat,
+                appearance.skin,
+                appearance.visor,
+                if appearance.alive { "alive" } else { "ghost" },
+            ),
             acl_ui::sprite::to_image(&canvas),
             egui::TextureOptions::LINEAR,
         );
@@ -215,6 +242,171 @@ impl Portraits {
         self.held.retain(|key, _| self.seen.contains(key));
         self.seen.clear();
     }
+}
+
+/// The capture settings that are fixed when the microphone opens.
+///
+/// Read here rather than in `audio`, because the settings file belongs to this half and
+/// `audio` should not have to know what a key is called. The three of them are
+/// `getUserMedia` constraints on the shipped client and are applied the same way: at open
+/// time, and again when the reload button reopens the audio.
+fn capture_settings(stored: &acl_ui::config::Config) -> audio::Capture {
+    audio::Capture {
+        echo_cancellation: stored.bool_at("echoCancellation"),
+        noise_suppression: stored.bool_at("noiseSuppression"),
+        voice_detection: stored.bool_at("vadEnabled"),
+        fixed_rate: stored.bool_at("oldSampleDebug"),
+    }
+}
+
+/// The capture settings that change while it is open, as `audio::Audio::tune` wants them.
+///
+/// `microphoneGain` is a percentage and the gain is a multiplier, which is the shipped
+/// client's own `settings.microphoneGain / 100`. Each is `None`-equivalent when its own
+/// checkbox is off; see `tune` for why they are independent here and coupled there.
+fn live_settings(stored: &acl_ui::config::Config) -> (f32, Option<f64>) {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a percentage between zero and three hundred, divided by a hundred"
+    )]
+    let gain = if stored.bool_at("microphoneGainEnabled") {
+        (stored.number_at("microphoneGain") / 100.0) as f32
+    } else {
+        1.0
+    };
+    let floor = stored
+        .bool_at("micSensitivityEnabled")
+        .then(|| stored.number_at("micSensitivity"));
+    (gain, floor)
+}
+
+/// The pickable devices for one direction, as the pairs the picker shows.
+///
+/// The device the settings already name is in the list whether or not the machine can see
+/// it. A headset that is unplugged is still what the client is set to use, and a picker that
+/// silently drops it looks like the setting was lost — worse, picking anything else to make
+/// the list sensible would change the setting. It is shown by the label stored beside it,
+/// which is what `microphoneLabel` and `speakerLabel` are for: Windows changes a device's id
+/// when it moves to another port, and the label is what survives that.
+fn named(
+    devices: &[acl_audio::device::Device],
+    direction: acl_audio::device::Direction,
+    stored: &acl_ui::config::Config,
+    key: &str,
+) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = devices
+        .iter()
+        .filter(|device| device.direction == direction)
+        .map(|device| (device.id.clone(), device.name.clone()))
+        .collect();
+
+    let chosen = stored.text_at(key);
+    if !chosen.is_empty() && !pairs.iter().any(|(id, _)| *id == chosen) {
+        let label = stored.text_at(&format!("{key}Label"));
+        let shown = if label.is_empty() {
+            chosen.clone()
+        } else {
+            label
+        };
+        pairs.insert(0, (chosen, shown));
+    }
+    pairs
+}
+
+/// The machine's microphones and speakers, as the settings screen needs them.
+///
+/// Cached, because enumerating is a trip through WASAPI and the screen repaints five times
+/// a second — but not cached for the session, because a headset plugged in while the
+/// settings are open should appear in the list. Two seconds is below noticing and far above
+/// the repaint rate.
+#[derive(Default)]
+struct Devices {
+    held: Vec<acl_audio::device::Device>,
+    refreshed: Option<std::time::Instant>,
+}
+
+impl Devices {
+    /// How stale the list may be.
+    const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// What the machine has, enumerating again if it has been a while.
+    fn current(&mut self) -> &[acl_audio::device::Device] {
+        let due = self
+            .refreshed
+            .is_none_or(|last| last.elapsed() >= Self::FRESH_FOR);
+        if due {
+            use acl_audio::device::Backend as _;
+            // A failure leaves the last good list standing rather than emptying the picker:
+            // a device that was there a moment ago is a better answer than none, and the
+            // one that is stored is still what the client is using.
+            if let Ok(found) = acl_audio::device::system::Cpal::new().devices() {
+                self.held = found;
+            }
+            self.refreshed = Some(std::time::Instant::now());
+        }
+        &self.held
+    }
+}
+
+/// Says what the window frame just did, when asked to.
+///
+/// Behind `ACL_CHROME_LOG` because it is a line per click and nobody needs that by default.
+/// It exists at all because a frameless window's move and resize are the client's own job --
+/// there is no system title bar to blame -- and when they do not work there is nothing to
+/// look at. The closure is not called unless the variable is set.
+fn chrome_log(what: impl FnOnce() -> String) {
+    if std::env::var_os("ACL_CHROME_LOG").is_some() {
+        eprintln!("AnotherCrewLink: {}", what());
+    }
+}
+
+/// One overlay crewmate: the body artwork in its box, with the speaking ring around it.
+///
+/// The same body the main window draws, from the same master and at the same offset, because
+/// `Overlay.tsx` renders the very same `Avatar` component the player list does. Keeping them
+/// on one geometry is also what lets `worn::placement` mean one thing: it measures from the
+/// body, and both surfaces now put the body in the same place.
+///
+/// Falls back to the drawn shape if the vendored artwork does not decode, which is a broken
+/// build rather than anything a running client can reach.
+#[cfg(windows)]
+fn overlay_body(
+    size: i32,
+    talking: bool,
+    alive: bool,
+    body: (u8, u8, u8),
+    shadow: (u8, u8, u8),
+) -> acl_ui::sprite::Bitmap {
+    let Some(artwork) = acl_ui::body::recoloured(alive, body, shadow) else {
+        return acl_ui::sprite::crewmate(
+            size,
+            acl_ui::sprite::Crewmate {
+                body,
+                shadow,
+                talking,
+                alive,
+            },
+        );
+    };
+    let mut bitmap = acl_ui::sprite::Bitmap::blank(size, size);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a sprite size in pixels, far below f32's exact integer range"
+    )]
+    let extent = size as f32;
+    // Before the body, and at the same radius `sprite::crewmate` uses, so a sprite does not
+    // change size when somebody starts speaking.
+    if talking {
+        bitmap.ring(
+            (extent / 2.0, extent / 2.0),
+            extent / 2.0 - extent * 0.04,
+            extent * 0.06,
+            acl_ui::sprite::TALKING,
+        );
+    }
+    let (at, placed) = acl_ui::worn::base_placement(size);
+    bitmap.composite(&artwork, at, placed);
+    bitmap
 }
 
 /// How large a main-window crewmate is rasterised.
@@ -251,6 +443,11 @@ struct Wearing {
     hat: String,
     skin: String,
     visor: String,
+    /// Whether they are alive, because a ghost wears nothing.
+    ///
+    /// `Avatar.tsx` sets `display: none` on all three cosmetic layers for a dead player, and
+    /// the overlay renders that same component.
+    alive: bool,
 }
 
 const OVERLAY_SPRITE: i32 = 56;
@@ -306,7 +503,9 @@ fn main() -> eframe::Result<()> {
     )]
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("AnotherCrewLink")
-        // Frameless, because the title bar is drawn below.
+        // Frameless, because the title bar is drawn below. The edges are hit-tested by
+        // `acl_ui::edges` for the same reason -- see that module for why `with_resizable`
+        // on its own leaves a window that cannot be dragged larger.
         //
         // **The style word is not how to check this.** Measured on 2026-08-26: the window
         // keeps `WS_CAPTION | WS_THICKFRAME` -- style `0x16cf0000` -- and is undecorated all
@@ -671,12 +870,44 @@ struct Client {
     /// helper would act on either correctly, and a command five times a second for a state
     /// that has not changed is a pipe carrying nothing.
     overlay_shown: bool,
+    /// The window level the viewport has been told about.
+    ///
+    /// Remembered rather than sent every frame: a viewport command is a round trip to
+    /// winit, and telling it four times a second that nothing changed is four hundred
+    /// messages for the one that matters. `None` until the first frame, which is what makes
+    /// the setting take effect on the way up as well as when it is changed.
+    on_top: Option<bool>,
+    /// The last public-lobby listing sent, so it is sent only when it changes.
+    ///
+    /// The server rate-limits this handler, and the listing is derived from a frame that
+    /// arrives five times a second — most of which say the same thing. `Voice.tsx` sends it
+    /// on a change too, from a `useEffect`.
+    listed: Option<serde_json::Value>,
+    /// Whether the server has been asked for public-lobby updates.
+    ///
+    /// Told once, like `overlay_shown`: `watch_lobbies` is a message, and asking every frame
+    /// is a message a second for a subscription the server already has. Cleared when the
+    /// connection goes, so a reconnected session subscribes again rather than believing a
+    /// subscription that went with the socket.
+    watching_lobbies: bool,
+    /// What the machine has to listen and speak through.
+    devices: Devices,
 }
 
 impl Client {
     fn new(state_file: PathBuf, paths: &Paths) -> Self {
         let settings = settings_page::Page::open(paths.config_file());
         let catalogue = load_catalogue(&settings);
+        // Reading the game is the whole point of the window, so it starts reading. The
+        // shipped client has no start button either -- it launches its reader on the way up
+        // -- and a client that opens showing nothing until you press something reads as one
+        // that does not work.
+        // Before `settings` is moved into the struct below.
+        let capture = capture_settings(settings.config());
+        let reader = reader::Reader::start().ok();
+        if let Some(reader) = reader.as_ref() {
+            reader.ask_to_start();
+        }
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
@@ -697,7 +928,7 @@ impl Client {
             },
             settings,
             link: net::Link::start(),
-            audio: audio::Audio::start(),
+            audio: audio::Audio::start(capture),
             speaking: std::collections::BTreeSet::new(),
             joined: None,
             mods: None,
@@ -705,9 +936,13 @@ impl Client {
             catalogue,
             // A reader that will not start is not a reason to refuse to open: the window is
             // where somebody would find out about it, so it opens and says so.
-            reader: reader::Reader::start().ok(),
+            reader,
             last_seen: None,
             overlay_shown: false,
+            listed: None,
+            on_top: None,
+            watching_lobbies: false,
+            devices: Devices::default(),
         }
     }
 
@@ -879,14 +1114,12 @@ impl Client {
                 let player = state.players.get(entry.at)?;
                 let (body, shadow) =
                     acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
-                let bitmap = acl_ui::sprite::crewmate(
+                let bitmap = overlay_body(
                     OVERLAY_SPRITE,
-                    acl_ui::sprite::Crewmate {
-                        body: (body.r(), body.g(), body.b()),
-                        shadow: (shadow.r(), shadow.g(), shadow.b()),
-                        talking: entry.talking,
-                        alive: entry.alive,
-                    },
+                    entry.talking,
+                    entry.alive,
+                    (body.r(), body.g(), body.b()),
+                    (shadow.r(), shadow.g(), shadow.b()),
                 );
                 Some((*x, *y, bitmap))
             })
@@ -902,6 +1135,7 @@ impl Client {
                         hat: player.hat_id.clone(),
                         skin: player.skin_id.clone(),
                         visor: player.visor_id.clone(),
+                        alive: !player.is_dead,
                     },
                 ));
             }
@@ -958,14 +1192,12 @@ impl Client {
             let (body, shadow) =
                 acl_ui::views::colour::crew(i32::try_from(player.color_id).unwrap_or(-1));
             let side = seat.width.min(seat.height).max(1);
-            let bitmap = acl_ui::sprite::crewmate(
+            let bitmap = overlay_body(
                 side,
-                acl_ui::sprite::Crewmate {
-                    body: (body.r(), body.g(), body.b()),
-                    shadow: (shadow.r(), shadow.g(), shadow.b()),
-                    talking: true,
-                    alive: !player.is_dead,
-                },
+                true,
+                !player.is_dead,
+                (body.r(), body.g(), body.b()),
+                (shadow.r(), shadow.g(), shadow.b()),
             );
             let grown = placement.map_or(*seat, |so_far| union(so_far, *seat));
             placement = Some(grown);
@@ -1051,7 +1283,7 @@ impl Client {
         }
         // The three switches, before anything is sent. Rebound first, because somebody
         // may have just changed one on the settings page and the next press should use it.
-        let push_to_talk = {
+        let mode = {
             let saved = self.settings.config();
             self.controls.rebind(
                 &saved.text_at("muteShortcut"),
@@ -1059,10 +1291,14 @@ impl Client {
                 &saved.text_at("pushToTalkShortcut"),
                 &saved.text_at("impostorRadioShortcut"),
             );
-            saved.bool_at("pushToTalk")
+            // `pushToTalkMode`, which is what the settings screen writes. It used to read
+            // `pushToTalk` -- a boolean that nothing in this project has ever written, so it
+            // was always false and every client was in voice activity whatever the screen
+            // said. Push-to-mute did not exist at all.
+            controls::Mode::from_setting(saved.number_at("pushToTalkMode"))
         };
         let switches = self.controls.poll(&acl_core::keys::AsyncKeyState);
-        let transmitting = switches.transmitting(push_to_talk);
+        let transmitting = switches.transmitting(mode);
 
         // The impostor radio, on the transition. Three conditions this end has to check
         // before claiming it, and `Voice.tsx` checks the same three at line 902: an
@@ -1255,6 +1491,105 @@ impl Client {
         placements
     }
 
+    /// Applies "always on top", which is a setting that had nowhere to go.
+    ///
+    /// `alwaysOnTop` was stored, defaulted, translated and tested, and never reached a
+    /// window: the only mentions of it outside the settings model were its own tests. It is
+    /// the first checkbox on the overlay page, and it did nothing at all.
+    ///
+    /// `WindowLevel` rather than the builder's `with_always_on_top`, because the setting can
+    /// be turned off again and a window built on top would stay there for the session.
+    fn keep_on_top(&mut self, ctx: &egui::Context) {
+        let wanted = self.settings.config().bool_at("alwaysOnTop");
+        if self.on_top == Some(wanted) {
+            return;
+        }
+        self.on_top = Some(wanted);
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if wanted {
+            egui::viewport::WindowLevel::AlwaysOnTop
+        } else {
+            egui::viewport::WindowLevel::Normal
+        }));
+    }
+
+    /// Lists this lobby in the public browser, when its host asked for that.
+    ///
+    /// `Voice.tsx`'s `updateLobby`, with its four guards: a game state, being the host, a
+    /// lobby code that is not the menu, and players. Only the host, because the listing
+    /// claims a player count and a host name that only the host can speak for.
+    ///
+    /// Sent on a change rather than per frame. The listing is derived from a frame that
+    /// arrives five times a second and mostly says the same thing, and the server rate-
+    /// limits this handler — a client that ignored that would have its own listing dropped.
+    ///
+    /// Switching `publicLobby_on` off sends the same message with `isPublic` false, which
+    /// is how the server is told to remove a listing: one command, both directions.
+    fn keep_listed(&mut self) {
+        // Before the reader is borrowed: `installed_mod` takes `&mut self`.
+        let mods = self.installed_mod().id().to_owned();
+        let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest())
+            .filter(|state| state.is_host && !state.players.is_empty())
+        else {
+            return;
+        };
+        let code = state.lobby_code.trim().to_owned();
+        if code.is_empty() || code == "MENU" {
+            return;
+        }
+
+        let stored = self.settings.config();
+        let host = state
+            .players
+            .iter()
+            .find(|player| player.is_local)
+            .map_or_else(String::new, |player| player.name.clone());
+        let lobby = serde_json::json!({
+            // The server assigns the real one; `Voice.tsx` sends this and so does this.
+            "id": -1,
+            "title": stored.text_at("localLobbySettings.publicLobby_title"),
+            "host": host,
+            "current_players": state.players.len(),
+            "max_players": state.max_players,
+            "server": state.current_server,
+            "language": stored.text_at("localLobbySettings.publicLobby_language"),
+            "mods": mods,
+            "isPublic": stored.bool_at("localLobbySettings.publicLobby_on"),
+            "gameState": state.game_state as i32,
+        });
+        if self.listed.as_ref() == Some(&lobby) {
+            return;
+        }
+        self.listed = Some(lobby.clone());
+        self.link.advertise(&code, lobby);
+    }
+
+    /// Connects to the voice server, and stays connected.
+    ///
+    /// On the way up rather than on the way into a screen. Until 2026-08-27 the only
+    /// `connect` call was inside the public-lobby browser, so a client that never opened
+    /// that screen never joined the server: no peers, no voice, and every crewmate in the
+    /// window wearing the "no connection" badge -- correctly, which is how it was found.
+    ///
+    /// `Failed` is left alone. A connection that was refused is retried when somebody asks
+    /// for it, not four times a second: the settings screen has the server address and the
+    /// browser has a button.
+    fn keep_connected(&mut self) {
+        match self.link.state() {
+            net::State::Idle => {
+                // The server the settings name, which is 1.x's `serverURL` -- the same key
+                // in the same file, so a player who changed it keeps their change.
+                let url = self.settings.config().text_at("serverURL");
+                self.link.connect(&url);
+            }
+            // A subscription belongs to a socket. When the socket goes, so does it.
+            net::State::Connecting | net::State::Failed(_) => self.watching_lobbies = false,
+            net::State::Connected(_) => {}
+        }
+    }
+
     /// Joins and leaves the lobby the game is in.
     ///
     /// On the edges rather than every frame: a join sent five times a second is a join the
@@ -1329,12 +1664,7 @@ impl Client {
 
         match self.link.state().clone() {
             net::State::Idle => {
-                // The server the settings name, which is 1.x's `serverURL` -- the same key
-                // in the same file, so a player who changed it keeps their change.
-                let url = self.settings.config().text_at("serverURL");
-                ui.label(format!("Connecting to {url}…"));
-                self.link.connect(&url);
-                self.link.watch_lobbies(true);
+                ui.label("Connecting…");
                 return;
             }
             net::State::Connecting => {
@@ -1349,7 +1679,15 @@ impl Client {
                 }
                 return;
             }
-            net::State::Connected(_) => {}
+            net::State::Connected(_) => {
+                // Once, on arriving here connected. It used to be sent beside `connect`,
+                // which was in the `Idle` arm above -- so a browser opened on an
+                // already-connected session subscribed to nothing and listed nothing.
+                if !self.watching_lobbies {
+                    self.link.watch_lobbies(true);
+                    self.watching_lobbies = true;
+                }
+            }
         }
 
         let listings: Vec<acl_ui::views::lobby_browser::Listing<'_>> = self
@@ -1389,6 +1727,7 @@ impl Client {
                 // receives every change to every public lobby for as long as it is
                 // connected.
                 self.link.watch_lobbies(false);
+                self.watching_lobbies = false;
                 self.page = Screen::Main;
             }
             None => {}
@@ -1428,12 +1767,6 @@ impl Client {
                 acl_types::cosmetics::HAT_COLLECTION_URL,
                 acl_ui::hats::BASE,
             );
-            // Nothing but the body: leave it alone rather than copying it through a blank
-            // canvas for no reason. This is the common case -- most players wear nothing.
-            if pieces.len() == 1 {
-                continue;
-            }
-
             let mut canvas = acl_ui::sprite::Bitmap::blank(body.width, body.height);
             for piece in &pieces {
                 let Some(url) = piece.url.as_deref() else {
@@ -1441,6 +1774,9 @@ impl Client {
                     canvas.composite(body, (0, 0), (body.width, body.height));
                     continue;
                 };
+                if !worn.alive {
+                    continue;
+                }
                 let Some(artwork) = hats.image(url) else {
                     // Not fetched yet, or not fetchable. The layer is skipped and the rest
                     // are drawn -- a missing hat is a player without a hat, not a player
@@ -1455,26 +1791,58 @@ impl Client {
                 );
                 canvas.composite(&artwork, at, size);
             }
+            // Round, like the main window's and like the `Avatar` the shipped overlay
+            // renders. Here rather than in `overlay_body` so it happens once: clipping a
+            // feathered edge twice thins it.
+            acl_ui::sprite::clip_to_circle(&mut canvas);
             *body = canvas;
         }
     }
 
     /// Draws the settings, and does whatever they asked for.
     ///
-    /// The device lists are empty until the audio pipeline lands in this process: a
-    /// picker with nothing in it still shows what is stored, which is the truth about a
-    /// client that is not yet listening to anything. Wiring it to `acl_audio::device`
-    /// belongs with the pipeline that will use the answer.
+    /// The device pickers list what the machine has, by name. They showed the stored *id*
+    /// until 2026-08-27 -- a forty-character hash, twice, where two device names belong --
+    /// because the lists were left empty while the audio pipeline was still elsewhere. It
+    /// is in this process now, so they are filled from it.
     fn show_settings(&mut self, ui: &mut egui::Ui) {
         let catalogue = self.catalogue.as_ref();
         let translate = move |key: &str| {
             catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
         };
         let locales = settings_page::locales();
+        // Scoped, because `show` below wants the settings mutably and these only need to
+        // read them.
+        let (microphones, speakers) = {
+            let stored = self.settings.config();
+            let found = self.devices.current();
+            (
+                named(
+                    found,
+                    acl_audio::device::Direction::Input,
+                    stored,
+                    "microphone",
+                ),
+                named(
+                    found,
+                    acl_audio::device::Direction::Output,
+                    stored,
+                    "speaker",
+                ),
+            )
+        };
+        let microphones: Vec<acl_ui::views::settings::Entry<'_>> = microphones
+            .iter()
+            .map(|(id, label)| acl_ui::views::settings::Entry { id, label })
+            .collect();
+        let speakers: Vec<acl_ui::views::settings::Entry<'_>> = speakers
+            .iter()
+            .map(|(id, label)| acl_ui::views::settings::Entry { id, label })
+            .collect();
         let context = acl_ui::views::settings::Context {
             t: &translate,
-            microphones: &[],
-            speakers: &[],
+            microphones: &microphones,
+            speakers: &speakers,
             locales: &locales,
             // Both false until this process has a session: nobody is host of a lobby it
             // has not joined. Saying so is what puts the "not in a lobby" explanation on
@@ -1514,11 +1882,12 @@ impl Client {
     /// `StartDrag`, which hands the move to the window manager rather than repositioning
     /// the window per frame — the difference is visible as smoothness and as whether snap
     /// layouts work at all.
-    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) {
+    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) -> bool {
         let bar = egui::Rect::from_min_size(
             ui.max_rect().min,
             egui::vec2(ui.max_rect().width(), TITLE_BAR),
         );
+        let mut reload = false;
         let response = ui.interact(
             bar,
             ui.id().with("title-bar"),
@@ -1526,12 +1895,15 @@ impl Client {
         );
         if response.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            chrome_log(|| "title bar: move started".to_owned());
         }
 
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
             ui.horizontal_centered(|ui| {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("AnotherCrewLink").strong());
+                // Everything in one right-to-left row, controls added first so they take
+                // their space from the right and the *name* is what gives way. Laid out the
+                // other way round -- name first -- a 250-point window pushed the buttons off
+                // the end and clipped the title mid-word as well.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("✕").on_hover_text("Close").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1557,9 +1929,26 @@ impl Client {
                     {
                         *page = Screen::Lobbies;
                     }
+                    reload = ui
+                        .button("⟳")
+                        .on_hover_text("Reload: start the game reader again")
+                        .clicked();
+                    // The version beside the name, as the shipped client shows it: it is
+                    // the first thing anybody is asked for when they report something.
+                    ui.label(
+                        egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .weak()
+                            .small(),
+                    );
+                    // Last, so it fills what is left and truncates there.
+                    ui.add(
+                        egui::Label::new(egui::RichText::new("AnotherCrewLink").strong())
+                            .truncate(),
+                    );
                 });
             });
         });
+        reload
     }
 }
 
@@ -1596,6 +1985,7 @@ impl Client {
                 hat: player.hat_id.clone(),
                 skin: player.skin_id.clone(),
                 visor: player.visor_id.clone(),
+                alive: !player.is_dead,
             };
             if let Some(id) = self.portraits.of(context, &mut self.hats, appearance) {
                 dressed.insert(at, id);
@@ -1607,6 +1997,22 @@ impl Client {
 }
 
 impl Client {
+    /// The lobby's code and what the game is doing, as one line.
+    ///
+    /// `hideCode` is applied here: `Voice.tsx` line 277 replaces the code with the word
+    /// LOBBY rather than blanking it, so somebody streaming shows that there *is* a lobby
+    /// without showing which one. The menu keeps its own name — there is no code to give
+    /// away, and a menu labelled LOBBY would be a lie rather than a redaction.
+    fn lobby_line(&self, state: &acl_game::AmongUsState) -> String {
+        let code =
+            if self.settings.config().bool_at("hideCode") && state.lobby_code.trim() != "MENU" {
+                "LOBBY"
+            } else {
+                state.lobby_code.as_str()
+            };
+        format!("{code} — {:?}", state.game_state)
+    }
+
     /// The line of things that are wrong, and the one number that says whether it works.
     ///
     /// Four sources in one strip rather than four panels: none of them is why anybody
@@ -1619,6 +2025,17 @@ impl Client {
         ui.horizontal(|ui| {
             ui.label("Game reader:");
             ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
+            // The server, beside the reader. Both are things that can be down, and only one
+            // of them used to be sayable here -- a connection that never happened showed as
+            // fifteen crewmates wearing a "no connection" badge and nothing that said why.
+            ui.label("· Server:");
+            let (word, colour) = match self.link.state() {
+                net::State::Connected(_) => ("connected", ui.visuals().text_color()),
+                net::State::Connecting => ("connecting…", ui.visuals().weak_text_color()),
+                net::State::Idle => ("not connected", TROUBLE),
+                net::State::Failed(_) => ("failed", TROUBLE),
+            };
+            ui.colored_label(colour, egui::RichText::new(word).strong());
             // How many peers are actually reachable, which is a different question from how
             // many players the game reports. A lobby of six with one connection is the shape
             // of a problem, and it is invisible without a number.
@@ -1627,8 +2044,13 @@ impl Client {
                 self.link.connected_peers()
             ));
         });
+        let link_trouble = match self.link.state() {
+            net::State::Failed(why) => Some(why.as_str()),
+            _ => None,
+        };
         for (what, trouble) in [
             (None, reader.trouble()),
+            (Some("Server"), link_trouble),
             (Some("Hats"), self.hats.trouble()),
             (Some("Audio"), self.audio.trouble()),
         ] {
@@ -1763,7 +2185,16 @@ impl eframe::App for Client {
         // Once a frame, and it decays on its own: a peer who stops sending is not in the
         // next one, with nothing having to notice they went quiet.
         self.speaking = self.link.take_speaking();
+        self.keep_on_top(ctx);
+        // Cheap enough to do every frame: two atomic stores, and the alternative is another
+        // thing to invalidate when the settings screen writes.
+        let (gain, floor) = live_settings(self.settings.config());
+        self.audio.tune(gain, floor);
+        self.link
+            .set_force_relay(self.settings.config().bool_at("natFix"));
+        self.keep_connected();
         self.follow_the_lobby();
+        self.keep_listed();
         self.carry_audio();
 
         // Remembered every frame and written once, on the way out. The shipped keeper
@@ -1826,11 +2257,43 @@ impl eframe::App for Client {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Before the panel, because the edge has to beat whatever the panel draws under it.
+        if let Some(direction) = acl_ui::edges::interact(&ctx) {
+            chrome_log(|| format!("edge: resize started {direction:?}"));
+        }
+        // Where a press landed and how big the window thought it was. Two rounds of "I
+        // cannot move or resize it" were spent guessing at this; one line per click is
+        // cheap and turns the next one into a measurement.
+        if ctx.input(|input| input.pointer.primary_pressed()) {
+            chrome_log(|| {
+                let pointer = ctx.input(|input| input.pointer.interact_pos());
+                format!(
+                    "press at {pointer:?} in {:?} (focused {})",
+                    ctx.content_rect(),
+                    ctx.input(|input| input.viewport().focused.unwrap_or(false)),
+                )
+            });
+        }
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
-            Self::title_bar(ui, &ctx, &mut page);
+            let reload = Self::title_bar(ui, &ctx, &mut page);
             self.page = page;
+            // Stop then start, in that order and on one channel, so the thread does them in
+            // that order: the shipped client's ⟳ reloads its renderer, and the nearest
+            // thing here is letting the helper go and asking for a fresh one. That is what
+            // re-fetches the offsets, which is what somebody pressing it usually wants.
+            if reload {
+                if let Some(reader) = self.reader.as_ref() {
+                    reader.ask_to_stop();
+                    reader.ask_to_start();
+                }
+                // And the audio, which is what applies the three capture settings that can
+                // only be given when the device is opened. `Settings.tsx` raises an
+                // "unsaved" count for exactly those and asks for a reconnect; this is that
+                // reconnect. Dropping the old handle stops its streams.
+                self.audio = audio::Audio::start(capture_settings(self.settings.config()));
+            }
             ui.add_space(TITLE_BAR);
             ui.separator();
 
@@ -1853,22 +2316,13 @@ impl eframe::App for Client {
 
             self.status_strip(ui, reader);
 
-            ui.horizontal(|ui| {
-                if ui.button("Start").clicked() {
-                    reader.ask_to_start();
-                }
-                if ui.button("Stop").clicked() {
-                    reader.ask_to_stop();
-                }
-            });
-
             ui.separator();
             let Some(state) = reader.latest() else {
-                ui.label("No frame yet. Start the reader with Among Us running.");
+                ui.label("No frame yet. Waiting for Among Us.");
                 return;
             };
 
-            ui.label(format!("{} — {:?}", state.lobby_code, state.game_state));
+            ui.label(self.lobby_line(state));
             ui.add_space(4.0);
 
             // The roster decides who is shown; this only draws them. Nothing here knows

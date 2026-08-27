@@ -28,7 +28,7 @@
 //! speaks in `FRAME_SAMPLES`, and one module knowing about two block sizes is better than
 //! every module knowing about one it does not use.
 
-use sonora::config::EchoCanceller;
+use sonora::config::{EchoCanceller, NoiseSuppression};
 use sonora::{AudioProcessing, Config, StreamConfig};
 
 use crate::codec::{FRAME_SAMPLES, SAMPLE_RATE};
@@ -110,10 +110,28 @@ impl Sonora {
     /// listening tests to justify rather than an opinion.
     #[must_use]
     pub fn new() -> Self {
+        Self::configured(true, true)
+    }
+
+    /// The same, with the two stages the player can switch off.
+    ///
+    /// `echoCancellation` and `noiseSuppression` are settings on the shipped client's audio
+    /// page, and they are given to `getUserMedia` when the microphone is opened rather than
+    /// changed while it runs — so they belong here, at construction, and take effect when
+    /// the capture is next opened. Neither reached this constructor until 2026-08-27:
+    /// cancellation was hard-coded on and suppression hard-coded *off*, which is not even
+    /// the setting's own default.
+    ///
+    /// The other stages stay at their defaults: this client's DSP graph does its own gain
+    /// and the microphone signal goes through a VAD, so overriding what WebRTC's own tuning
+    /// does is a change that would need listening tests to justify rather than an opinion.
+    #[must_use]
+    pub fn configured(echo_cancellation: bool, noise_suppression: bool) -> Self {
         let stream = StreamConfig::new(SAMPLE_RATE, 1);
         let inner = AudioProcessing::builder()
             .config(Config {
-                echo_canceller: Some(EchoCanceller::default()),
+                echo_canceller: echo_cancellation.then(EchoCanceller::default),
+                noise_suppression: noise_suppression.then(NoiseSuppression::default),
                 ..Config::default()
             })
             .capture_config(stream)
