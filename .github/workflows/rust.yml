@@ -21,6 +21,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # The installer job below compiles this and then runs what it produced. Without it
+      # here, an edit to the script is checked at release time, which is the one moment
+      # when discovering it is most expensive.
+      - 'installer/**'
       # Gate G1 replays these against the Rust reader. Without them here, adding a
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
@@ -42,6 +46,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # The installer job below compiles this and then runs what it produced. Without it
+      # here, an edit to the script is checked at release time, which is the one moment
+      # when discovering it is most expensive.
+      - 'installer/**'
       # Gate G1 replays these against the Rust reader. Without them here, adding a
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
@@ -131,6 +139,76 @@ jobs:
         env:
           ACL_SERVER_BIN: server/target/debug/acl-server.exe
         run: cargo test --locked --workspace --target x86_64-pc-windows-msvc
+
+  installer:
+    # The installer script, compiled and then *run*.
+    #
+    # It used to be built only by the release job, on a tag. So a script that did not
+    # compile stayed green until somebody cut a release, and `tests/installer_contract.rs`
+    # -- which reads the .nsi as text -- could only ever check that the right words were
+    # in it. Words being in a file is not the same as NSIS accepting them.
+    #
+    # The binaries are stubs. What is under test is the script: its sections, its macros,
+    # the whole MUI setup, the registry writes, and the uninstaller it generates. None of
+    # that depends on what is inside the executables it copies, and building the real ones
+    # here would add ten minutes to every push to check nothing extra.
+    runs-on: windows-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress --yes
+
+      - name: Stand in for the built binaries
+        shell: bash
+        run: |
+          mkdir -p stubs
+          for name in anothercrewlink acl-helper acl-updater; do
+            printf 'stub' > "stubs/$name.exe"
+          done
+
+      - name: Compile the installer
+        shell: bash
+        run: |
+          # NSIS is not on PATH after a choco install in the same job.
+          "/c/Program Files (x86)/NSIS/makensis.exe"             -DVERSION=0.0.0-ci             -DSOURCE_DIR=../stubs             installer/anothercrewlink.nsi
+          test -s installer/AnotherCrewLink-Setup-0.0.0-ci.exe
+
+      # The silent switches are a contract with 1.x's updater, which spawns
+      # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that
+      # compiles but shows a dialog under /S hangs that updater forever, and no amount of
+      # reading the source says whether it does.
+      - name: Install it silently, the way the updater will
+        shell: bash
+        run: |
+          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S             /D=$(cygpath -w "$PWD/installed")
+          # NSIS returns immediately and carries on in another process.
+          for _ in $(seq 40); do
+            [ -f installed/anothercrewlink.exe ] && break
+            sleep 1
+          done
+          test -f installed/anothercrewlink.exe
+          test -f installed/acl-helper.exe
+          test -f installed/Uninstall.exe
+          # The locales are what the app reads at startup; an installer that forgot them
+          # is one that starts and shows nothing but keys.
+          test -d installed/static/locales
+          test -s installed/static/locales/en/translation.json
+
+      - name: And take it away again
+        shell: bash
+        run: |
+          ./installed/Uninstall.exe /S _?=$(cygpath -w "$PWD/installed")
+          for _ in $(seq 40); do
+            [ -f installed/anothercrewlink.exe ] || break
+            sleep 1
+          done
+          # `_?=` keeps Uninstall.exe itself, which is how NSIS runs an uninstaller
+          # in-place rather than from a copy in the temp directory. Everything it was
+          # responsible for should be gone.
+          test ! -f installed/anothercrewlink.exe
+          test ! -d installed/static
 
   deny:
     # Advisories, licences, duplicate versions and crate sources — the policy is in
