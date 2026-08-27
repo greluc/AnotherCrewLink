@@ -340,3 +340,73 @@ fn a_dressed_player_and_a_drawn_one_both_get_their_indicators() {
         );
     }
 }
+
+/// Your own avatar draws, muted and deafened and neither.
+///
+/// Reported missing from 2.0.0-alpha.1: `main_view` filters the local player out by design
+/// — it answers "who else is here" — and nothing put them back, so you could not see
+/// yourself. This is where you check the two things only you can be, and a mute key that
+/// works while showing nothing is a mute key you cannot trust.
+#[test]
+fn your_own_avatar_draws_in_every_state() {
+    let state = Shown {
+        at: 0,
+        talking: false,
+        alive: true,
+        link: Link::Connected,
+        using_radio: false,
+    };
+    let portrait = main::Portrait {
+        name: "You",
+        color_id: 0,
+        state,
+        art: None,
+    };
+
+    for (what, muted, deafened) in [
+        ("neither", false, false),
+        ("muted", true, false),
+        ("deafened", true, true),
+    ] {
+        let own = main::Own {
+            portrait,
+            muted,
+            deafened,
+        };
+        let output = run(|ui| {
+            main::draw_own(ui, &own);
+        });
+        assert!(painted(&output), "{what}: painted nothing");
+        assert!(
+            clashes(&output).is_empty(),
+            "{what}: {:?}",
+            clashes(&output)
+        );
+    }
+}
+
+/// And with artwork, which takes the other branch.
+#[test]
+fn your_own_avatar_draws_dressed_too() {
+    let own = main::Own {
+        portrait: main::Portrait {
+            name: "You",
+            color_id: 3,
+            state: Shown {
+                at: 0,
+                talking: true,
+                alive: false,
+                link: Link::Disconnected,
+                using_radio: false,
+            },
+            art: Some(egui::TextureId::Managed(0)),
+        },
+        muted: false,
+        deafened: false,
+    };
+    let output = run(|ui| {
+        main::draw_own(ui, &own);
+    });
+    assert!(painted(&output), "painted nothing");
+    assert!(clashes(&output).is_empty(), "{:?}", clashes(&output));
+}

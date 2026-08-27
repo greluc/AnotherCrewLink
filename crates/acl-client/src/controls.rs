@@ -22,7 +22,17 @@
 use acl_core::keys::{Edge, KeyState, Shortcut};
 use acl_core::shortcuts::binding_for;
 
-/// What the three switches say right now.
+/// What the switches say right now.
+///
+/// Four booleans, and clippy is right that four is a lot and wrong that it is a problem
+/// here: they are four independent physical switches, every combination is reachable, and
+/// the only thing an enum could express is a mutual exclusion that does not exist. Somebody
+/// can be muted, deafened, holding push-to-talk and holding the radio at once -- pointlessly,
+/// but the type should not be the thing that says so.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "four independent switches, every combination reachable"
+)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State {
     /// The microphone is off.
@@ -31,6 +41,13 @@ pub(crate) struct State {
     pub(crate) deafened: bool,
     /// Push-to-talk is held, which only means anything in push-to-talk mode.
     pub(crate) holding: bool,
+    /// The impostor radio key is held.
+    ///
+    /// A level like push-to-talk and unlike the other two: you hold it to talk to the other
+    /// impostors, and letting go ends it. Whether it *does* anything depends on being an
+    /// impostor, being alive and the lobby allowing it — none of which this knows, so all
+    /// three are checked where the claim is made.
+    pub(crate) on_radio: bool,
 }
 
 impl State {
@@ -53,23 +70,30 @@ pub(crate) struct Controls {
     mute: Shortcut,
     deafen: Shortcut,
     talk: Shortcut,
+    radio: Shortcut,
     state: State,
     /// What the bindings were last built from, so they are rebuilt only when they change.
     ///
-    /// Parsing three shortcut strings every frame would be three allocations sixty times a
+    /// Parsing four shortcut strings every frame would be four allocations sixty times a
     /// second to answer a question whose answer changes when somebody opens the settings.
-    bound: [String; 3],
+    bound: [String; 4],
 }
 
 impl Controls {
     /// Shortcuts from their settings strings.
-    pub(crate) fn new(mute: &str, deafen: &str, talk: &str) -> Self {
+    pub(crate) fn new(mute: &str, deafen: &str, talk: &str, radio: &str) -> Self {
         Self {
             mute: Shortcut::new(binding_for(mute)),
             deafen: Shortcut::new(binding_for(deafen)),
             talk: Shortcut::new(binding_for(talk)),
+            radio: Shortcut::new(binding_for(radio)),
             state: State::default(),
-            bound: [mute.to_owned(), deafen.to_owned(), talk.to_owned()],
+            bound: [
+                mute.to_owned(),
+                deafen.to_owned(),
+                talk.to_owned(),
+                radio.to_owned(),
+            ],
         }
     }
 
@@ -78,12 +102,16 @@ impl Controls {
     /// The pressed state is deliberately not carried across: a shortcut that was held when
     /// it was rebound is a key nobody is holding any more, and `Shortcut::new` starts from
     /// not-pressed for the same reason.
-    pub(crate) fn rebind(&mut self, mute: &str, deafen: &str, talk: &str) {
-        if self.bound[0] == mute && self.bound[1] == deafen && self.bound[2] == talk {
+    pub(crate) fn rebind(&mut self, mute: &str, deafen: &str, talk: &str, radio: &str) {
+        if self.bound[0] == mute
+            && self.bound[1] == deafen
+            && self.bound[2] == talk
+            && self.bound[3] == radio
+        {
             return;
         }
         let held = self.state;
-        *self = Self::new(mute, deafen, talk);
+        *self = Self::new(mute, deafen, talk, radio);
         // The toggles survive; only the key that produces them changed.
         self.state.muted = held.muted;
         self.state.deafened = held.deafened;
@@ -108,9 +136,11 @@ impl Controls {
                 self.state.muted = !self.state.muted;
             }
         }
-        // A level, not an edge: this one is held rather than toggled.
+        // Levels, not edges: these two are held rather than toggled.
         let _ = self.talk.poll(keys);
         self.state.holding = self.talk.is_down();
+        let _ = self.radio.poll(keys);
+        self.state.on_radio = self.radio.is_down();
         self.state
     }
 
@@ -138,12 +168,13 @@ mod tests {
 
     /// `F1`, `F2`, `F3` — three bindings the vendored table knows.
     fn controls() -> Controls {
-        Controls::new("F1", "F2", "F3")
+        Controls::new("F1", "F2", "F3", "F4")
     }
 
     const F1: u16 = 0x70;
     const F2: u16 = 0x71;
     const F3: u16 = 0x72;
+    const F4: u16 = 0x73;
 
     /// Nothing held, nothing changed.
     #[test]
@@ -217,6 +248,39 @@ mod tests {
         assert!(!state.transmitting(false));
     }
 
+    /// The radio is a level, like push-to-talk and unlike the toggles.
+    ///
+    /// You hold it to talk to the other impostors and letting go ends it. A toggle here
+    /// would be a key that leaves you broadcasting to the impostors after you thought you
+    /// had stopped, which in this game is the worst possible failure mode.
+    #[test]
+    fn the_radio_is_held_rather_than_toggled() {
+        let mut controls = controls();
+        assert!(!controls.poll(&Held(vec![])).on_radio);
+        assert!(controls.poll(&Held(vec![F4])).on_radio);
+        assert!(
+            controls.poll(&Held(vec![F4])).on_radio,
+            "it turned itself off"
+        );
+        assert!(
+            !controls.poll(&Held(vec![])).on_radio,
+            "letting go did not end it"
+        );
+    }
+
+    /// And it is independent of the others: an impostor on the radio can still be muted.
+    #[test]
+    fn the_radio_and_the_microphone_are_separate_switches() {
+        let mut controls = controls();
+        let state = controls.poll(&Held(vec![F1, F4]));
+        assert!(state.muted);
+        assert!(state.on_radio);
+        assert!(
+            !state.transmitting(false),
+            "muted, so nothing goes out over the radio either"
+        );
+    }
+
     /// Rebinding keeps the toggles and forgets what was held.
     ///
     /// A key that was down when it stopped being the binding is a key nobody is holding any
@@ -229,7 +293,7 @@ mod tests {
         assert!(controls.state().muted);
         assert!(controls.state().holding);
 
-        controls.rebind("F1", "F2", "F4");
+        controls.rebind("F1", "F2", "F5", "F4");
         assert!(controls.state().muted, "the toggle was forgotten");
         assert!(!controls.state().holding, "a key nobody is holding is held");
     }
@@ -239,7 +303,7 @@ mod tests {
     fn rebinding_to_what_is_already_bound_is_free() {
         let mut controls = controls();
         controls.poll(&Held(vec![F3]));
-        controls.rebind("F1", "F2", "F3");
+        controls.rebind("F1", "F2", "F3", "F4");
         assert!(
             controls.state().holding,
             "an unchanged rebind threw the key away"

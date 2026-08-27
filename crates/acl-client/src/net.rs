@@ -64,6 +64,8 @@ pub(crate) enum Command {
     VoiceActivity(bool),
     /// Claim the game host's role, after having become it.
     SetHost(i64),
+    /// Claim or release the impostor radio.
+    ImpostorRadio(bool),
     /// Leave it, closing every connection.
     Leave,
 }
@@ -130,6 +132,13 @@ pub(crate) struct Link {
     /// the server is the only thing that sees both. Kept here because it is the only place
     /// both halves pass through.
     sockets: std::collections::BTreeMap<i64, String>,
+    /// Who is on the impostor radio, by socket id.
+    ///
+    /// One at a time in practice -- `Voice.tsx` keeps a single `impostorRadioClientId` and
+    /// the first claim wins -- but held as a set here rather than as an option, because two
+    /// claims arriving before either is released is a state the wire can produce and an
+    /// `Option` would silently drop one of them.
+    on_radio: std::collections::BTreeSet<String>,
     /// Who the server says is speaking, by socket id.
     ///
     /// A level, not a moment, which is the difference between this and [`Self::speaking`].
@@ -177,6 +186,7 @@ impl Link {
             connected: std::collections::BTreeSet::new(),
             sockets: std::collections::BTreeMap::new(),
             vocal: std::collections::BTreeSet::new(),
+            on_radio: std::collections::BTreeSet::new(),
             speaking: std::collections::BTreeSet::new(),
             arrived: Vec::new(),
         }
@@ -254,6 +264,17 @@ impl Link {
                 self.connected.remove(&socket_id);
                 // Or they stay speaking forever, on a screen, after they have gone.
                 self.vocal.remove(&socket_id);
+                self.on_radio.remove(&socket_id);
+            }
+            Event::ImpostorRadio {
+                socket_id,
+                on_radio,
+            } => {
+                if on_radio {
+                    self.on_radio.insert(socket_id);
+                } else {
+                    self.on_radio.remove(&socket_id);
+                }
             }
             Event::VoiceActivity {
                 socket_id,
@@ -295,6 +316,27 @@ impl Link {
     #[must_use]
     pub(crate) fn take_arrived(&mut self) -> Vec<acl_core::peers::Incoming> {
         std::mem::take(&mut self.arrived)
+    }
+
+    /// Which player is on the impostor radio, if any.
+    ///
+    /// The lowest client id when more than one has claimed it, which is arbitrary and
+    /// deliberate: the alternative is a rule that depends on arrival order, and two clients
+    /// disagreeing about who is on the radio is worse than both being arbitrary in the same
+    /// way. `Voice.tsx` keeps one and lets the first claim win, which has the same problem
+    /// and resolves it less predictably.
+    #[must_use]
+    pub(crate) fn on_radio(&self) -> Option<i64> {
+        self.sockets
+            .iter()
+            .filter(|(_, socket)| self.on_radio.contains(*socket))
+            .map(|(client_id, _)| *client_id)
+            .min()
+    }
+
+    /// Claims or releases the impostor radio for this player.
+    pub(crate) fn say_on_radio(&self, on_radio: bool) {
+        self.send(Command::ImpostorRadio(on_radio));
     }
 
     /// Whether the server says this player is speaking.
@@ -731,6 +773,11 @@ fn obey(
         Command::SetHost(client_id) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.set_host(client_id));
+            }
+        }
+        Command::ImpostorRadio(on_radio) => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.impostor_radio(on_radio));
             }
         }
         Command::Leave => {
@@ -1327,6 +1374,67 @@ mod tests {
             !links[1].talking(11)
         });
         assert!(out, "the speaker stopped and the indicator stayed on");
+    }
+
+    /// One impostor claims the radio, and the other one hears about it.
+    ///
+    /// The whole point of `impostorRadio` being a socket event at all. 1.x carries the claim
+    /// over the WebRTC data channel, which this client does not have -- §4.13 recorded that
+    /// as blocking, on the grounds that *moving* the claim would break 1.x peers. Adding a
+    /// second route breaks nobody: a 1.x client neither sends nor receives this, so a mixed
+    /// lobby degrades exactly as far as it already did, and a lobby of 2.x clients gets a
+    /// radio instead of none.
+    ///
+    /// Against a real server because the relaying is the server's, and because this is a
+    /// *new* event: a test against our own loopback would prove both halves of one guess.
+    #[test]
+    #[ignore = "needs a server: set ACL_SERVER_BIN"]
+    fn claiming_the_radio_reaches_the_other_impostor() {
+        const PORT: u16 = 19_765;
+        let Some(_server) = serving(PORT) else {
+            eprintln!("skipping: set ACL_SERVER_BIN to the server binary");
+            return;
+        };
+        let base = format!("http://127.0.0.1:{PORT}");
+
+        let mut claiming = Link::start();
+        let mut listening = Link::start();
+        claiming.connect(&base);
+        listening.connect(&base);
+        let both_up = wait(&mut [&mut claiming, &mut listening], |links| {
+            links
+                .iter()
+                .all(|link| matches!(link.state(), State::Connected(_)))
+        });
+        assert!(both_up, "one of the sessions never connected");
+
+        claiming.join("RADIO", 1, 11, true);
+        listening.join("RADIO", 2, 22, false);
+        let met = wait(&mut [&mut claiming, &mut listening], |links| {
+            links[1].socket_of(11).is_some()
+        });
+        assert!(met, "the listener never learned the claimant's socket");
+
+        assert_eq!(
+            listening.on_radio(),
+            None,
+            "somebody is on the radio before anybody claimed it"
+        );
+
+        claiming.say_on_radio(true);
+        let heard = wait(&mut [&mut claiming, &mut listening], |links| {
+            links[1].on_radio() == Some(11)
+        });
+        assert!(heard, "the claim never arrived");
+
+        // And letting go ends it. A radio that only ever switches on is an impostor
+        // broadcasting to the other impostors after they thought they had stopped, which in
+        // this game is the worst failure this feature has.
+        claiming.say_on_radio(false);
+        let released = wait(&mut [&mut claiming, &mut listening], |links| {
+            links[1].on_radio().is_none()
+        });
+        assert!(released, "the radio stayed on after it was released");
     }
 
     /// Drives some links until something is true of them, or long enough to say it is not.

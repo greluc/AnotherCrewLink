@@ -1,3 +1,20 @@
+//! No console window.
+//!
+//! Reported against 2.0.0-alpha.1: a terminal opened beside the client. A Rust binary is a
+//! console-subsystem application unless it says otherwise, so Windows gives it a console --
+//! and one that nobody asked for, in front of a proximity chat, is a window a user has to
+//! work out is safe to ignore.
+//!
+//! Unconditional rather than `cfg_attr(not(debug_assertions))`. A debug build that behaves
+//! differently from the shipped one in the window department is a difference that hides
+//! exactly this class of bug until a release, which is where this one was found.
+//!
+//! What goes with it: `eprintln!` now writes nowhere. That is acceptable for the diagnostic
+//! lines -- a user launching from the Start menu never saw them either -- and is *not*
+//! acceptable for the one message that exists to be read, which is a second copy telling
+//! you the first is already running. That one is a message box now.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! The window.
 //!
 //! §4.8 item 1: the shell, a custom title bar, and window state persistence. It is also the
@@ -207,6 +224,23 @@ impl Portraits {
 /// both is the square of this.
 const PORTRAIT_SPRITE: i32 = 128;
 
+/// What the lobby has already been told, so it is not told again every frame.
+///
+/// Both of these are claims made on a *transition*: the state they describe is a level and
+/// the wire wants edges. `setHost` every frame would be a message a second to a server that
+/// already agrees, and the radio key is held rather than tapped.
+///
+/// One struct rather than two fields because they are the same kind of thing, and because
+/// three loose booleans on a client this size is where nobody can tell which are state and
+/// which are memory of what was sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Announced {
+    /// The server has been told this client is the game host.
+    host: bool,
+    /// The lobby has been told this player is on the impostor radio.
+    radio: bool,
+}
+
 /// The three cosmetic ids a player is wearing.
 ///
 /// Named fields rather than a tuple of three `String`s: they are the same type, and nothing
@@ -254,7 +288,10 @@ fn main() -> eframe::Result<()> {
     let _instance = match single_instance::claim(paths.user_data(), paths.legacy_user_data()) {
         Ok(guard) => guard,
         Err(occupant) => {
-            eprintln!("AnotherCrewLink: {}", occupant.message());
+            // A message box, because there is no console to print to and this is the one
+            // line a user has to see: without it a second copy simply does nothing, which
+            // reads as a client that will not start.
+            tell_the_user(occupant.message());
             return Ok(());
         }
     };
@@ -586,11 +623,8 @@ struct Client {
     local_talking: bool,
     /// The sockets whose gain is above zero this frame. See where it is filled.
     hearable: std::collections::BTreeSet<String>,
-    /// Whether the server has been told this client is the host.
-    ///
-    /// Kept so the claim is made on the *transition*. `setHost` every frame would be a
-    /// message a second to a server that already agrees.
-    claimed_host: bool,
+    /// What the lobby has already been told about this client. See [`Announced`].
+    announced: Announced,
     /// Who the voice layer believes is dead, by client id.
     ///
     /// Not the game's `is_dead`, and the difference is the whole point. See
@@ -649,7 +683,7 @@ impl Client {
             portraits: Portraits::default(),
             local_talking: false,
             hearable: std::collections::BTreeSet::new(),
-            claimed_host: false,
+            announced: Announced::default(),
             dead: std::collections::BTreeMap::new(),
             last_game_state: None,
             controls: {
@@ -658,6 +692,7 @@ impl Client {
                     &saved.text_at("muteShortcut"),
                     &saved.text_at("deafenShortcut"),
                     &saved.text_at("pushToTalkShortcut"),
+                    &saved.text_at("impostorRadioShortcut"),
                 )
             },
             settings,
@@ -734,17 +769,11 @@ impl Client {
             audible: &|client_id| heard.contains(&client_id),
             local_talking,
             local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
-            // `impostor_radio` is §4.13's one genuinely blocked item, and this is where
-            // it shows. 1.x claims the radio over the *data channel* -- `Voice.tsx` 913 and
-            // 1290 -- and this client has none by design: `the_offer_carries_audio_and_no_
-            // data_channel` asserts the SDP has no `m=application`. Moving the claim to the
-            // socket is the change §4.12's rollout forbids while both generations share a
-            // lobby, so it stays `None` until 1.x is switched off.
-            //
-            // `local_is_impostor` is not blocked and is read from the game. On its own it
-            // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
-            // available is a line that stops looking like a stub.
-            impostor_radio: None,
+            // 1.x carries this over the WebRTC data channel, which this client does not
+            // have. §4.13 recorded the blocker as *moving* the claim to the socket, which
+            // would break 1.x peers; a second route breaks nobody, so `impostorRadio` is a
+            // 2.x socket event and a mixed lobby degrades exactly as far as it did before.
+            impostor_radio: link.on_radio(),
             local_is_impostor: state
                 .players
                 .iter()
@@ -1028,13 +1057,37 @@ impl Client {
                 &saved.text_at("muteShortcut"),
                 &saved.text_at("deafenShortcut"),
                 &saved.text_at("pushToTalkShortcut"),
+                &saved.text_at("impostorRadioShortcut"),
             );
             saved.bool_at("pushToTalk")
         };
-        let transmitting = self
-            .controls
-            .poll(&acl_core::keys::AsyncKeyState)
-            .transmitting(push_to_talk);
+        let switches = self.controls.poll(&acl_core::keys::AsyncKeyState);
+        let transmitting = switches.transmitting(push_to_talk);
+
+        // The impostor radio, on the transition. Three conditions this end has to check
+        // before claiming it, and `Voice.tsx` checks the same three at line 902: an
+        // impostor, alive, and a lobby that allows it. The receiving end checks again --
+        // `voice_params` only lifts the distance rule when both are impostors -- so a
+        // client that lied would be believed by nobody.
+        let wants_radio = switches.on_radio
+            && self
+                .settings
+                .config()
+                .bool_at("localLobbySettings.impostorRadioEnabled")
+            && self
+                .reader
+                .as_ref()
+                .and_then(|reader| reader.latest())
+                .is_some_and(|state| {
+                    state
+                        .players
+                        .iter()
+                        .any(|player| player.is_local && player.is_impostor && !player.is_dead)
+                });
+        if wants_radio != self.announced.radio {
+            self.announced.radio = wants_radio;
+            self.link.say_on_radio(wants_radio);
+        }
 
         for packet in self.audio.take_encoded() {
             // Drained either way. The encoder runs whatever the switches say, and a queue
@@ -1112,6 +1165,10 @@ impl Client {
         client: acl_audio::voice::ClientSettings,
     ) -> std::collections::BTreeMap<String, audio::Placement> {
         let mut placements = std::collections::BTreeMap::new();
+        let on_radio = self
+            .link
+            .on_radio()
+            .and_then(|client_id| u32::try_from(client_id).ok());
         let Some(me) = state.players.iter().find(|player| player.is_local) else {
             return placements;
         };
@@ -1140,7 +1197,10 @@ impl Client {
                 &listener,
                 &as_voice_player(player),
                 lobby.max_distance,
-                None,
+                // Who the lobby says is on the radio. `voice_params` has implemented the
+                // rule since P3+ -- skip the distance check, add the highpass muffle -- and
+                // was passed `None` until 2026-08-27, so it never once fired.
+                on_radio,
             );
             // Deafened silences everybody, which is the same `gain = 0` the per-player
             // mute below takes and is checked in the same place for the same reason:
@@ -1220,7 +1280,7 @@ impl Client {
             // us. Among Us promotes somebody when the host leaves, and the server goes on
             // routing host-dependent decisions to a socket that is gone until it is told.
             let host_now = state.as_ref().is_some_and(|state| state.is_host);
-            if host_now && !self.claimed_host {
+            if host_now && !self.announced.host {
                 let client_id = state
                     .as_ref()
                     .and_then(|state| state.players.iter().find(|player| player.is_local))
@@ -1228,11 +1288,11 @@ impl Client {
                     .map_or(-1, i64::from);
                 if client_id >= 0 {
                     self.link.say_host(client_id);
-                    self.claimed_host = true;
+                    self.announced.host = true;
                 }
             } else if !host_now {
                 // Reset, so a second promotion in the same session is claimed again.
-                self.claimed_host = false;
+                self.announced.host = false;
             }
             return;
         }
@@ -1246,7 +1306,7 @@ impl Client {
                 let is_host = state.as_ref().is_some_and(|state| state.is_host);
                 self.link.join(code, player_id, client_id, is_host);
                 // `join` carries it, so a claim on top would be the same statement twice.
-                self.claimed_host = is_host;
+                self.announced.host = is_host;
             }
             None => self.link.leave(),
         }
@@ -1547,6 +1607,96 @@ impl Client {
 }
 
 impl Client {
+    /// The line of things that are wrong, and the one number that says whether it works.
+    ///
+    /// Four sources in one strip rather than four panels: none of them is why anybody
+    /// opened this window, and each is worth knowing about when it applies. A client with
+    /// no microphone is a working client with half its voice, and it is the first thing
+    /// somebody asks about when nobody can hear them.
+    fn status_strip(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
+        const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
+
+        ui.horizontal(|ui| {
+            ui.label("Game reader:");
+            ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
+            // How many peers are actually reachable, which is a different question from how
+            // many players the game reports. A lobby of six with one connection is the shape
+            // of a problem, and it is invisible without a number.
+            ui.label(format!(
+                "· {} peer(s) connected",
+                self.link.connected_peers()
+            ));
+        });
+        for (what, trouble) in [
+            (None, reader.trouble()),
+            (Some("Hats"), self.hats.trouble()),
+            (Some("Audio"), self.audio.trouble()),
+        ] {
+            let Some(trouble) = trouble else {
+                continue;
+            };
+            ui.colored_label(
+                TROUBLE,
+                what.map_or_else(|| trouble.to_owned(), |name| format!("{name}: {trouble}")),
+            );
+        }
+    }
+
+    /// You, above everybody else, which is where `Voice.tsx` puts you.
+    ///
+    /// `main_view` filters the local player out on purpose -- it answers "who else is
+    /// here" -- so this is built separately rather than by asking it for a row it will
+    /// never return.
+    ///
+    /// Its own function because `ui` was over a hundred lines with it inline, and because
+    /// what it draws is genuinely a different thing: everybody else's row says whether you
+    /// can hear them, and this one says whether anybody can hear you.
+    fn draw_you(
+        ui: &mut egui::Ui,
+        state: &acl_game::AmongUsState,
+        controls: &controls::Controls,
+        connected: bool,
+        local_talking: bool,
+        dressed: &std::collections::BTreeMap<usize, egui::TextureId>,
+    ) {
+        let Some((at, me)) = state
+            .players
+            .iter()
+            .enumerate()
+            .find(|(_, player)| player.is_local)
+        else {
+            return;
+        };
+        let switches = controls.state();
+        acl_ui::views::main::draw_own(
+            ui,
+            &acl_ui::views::main::Own {
+                portrait: Portrait {
+                    name: &me.name,
+                    color_id: i32::try_from(me.color_id).unwrap_or(-1),
+                    state: acl_ui::roster::Shown {
+                        at,
+                        talking: local_talking,
+                        alive: !me.is_dead,
+                        // The server connection rather than a peer's, which is what
+                        // `Voice.tsx` shows here: it is the one connection that is yours,
+                        // and losing it is why nobody can hear you.
+                        link: if connected {
+                            acl_ui::roster::Link::Connected
+                        } else {
+                            acl_ui::roster::Link::Disconnected
+                        },
+                        using_radio: false,
+                    },
+                    art: dressed.get(&at).copied(),
+                },
+                muted: switches.muted,
+                deafened: switches.deafened,
+            },
+        );
+        ui.separator();
+    }
+
     /// Everything the frame needs settled before anything is painted.
     ///
     /// It is here rather than inside the panel because of borrowing, not tidiness: the
@@ -1701,37 +1851,7 @@ impl eframe::App for Client {
                 return;
             };
 
-            ui.horizontal(|ui| {
-                ui.label("Game reader:");
-                ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
-                // How many peers are actually reachable, which is a different question from
-                // how many players the game reports. A lobby of six with one connection is
-                // the shape of a problem, and it is invisible without a number.
-                ui.label(format!(
-                    "· {} peer(s) connected",
-                    self.link.connected_peers()
-                ));
-            });
-            if let Some(trouble) = reader.trouble() {
-                ui.colored_label(egui::Color32::from_rgb(230, 140, 90), trouble);
-            }
-            // The artwork is not why anybody opened this window, so it says so in the same
-            // place and the same colour rather than in one of its own: a hat that did not
-            // arrive is worth knowing about and is not worth a second panel.
-            if let Some(trouble) = self.hats.trouble() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(230, 140, 90),
-                    format!("Hats: {trouble}"),
-                );
-            }
-            // No microphone or no speaker is a working client with half its voice, and it
-            // is the first thing somebody will ask about when nobody can hear them.
-            if let Some(trouble) = self.audio.trouble() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(230, 140, 90),
-                    format!("Audio: {trouble}"),
-                );
-            }
+            self.status_strip(ui, reader);
 
             ui.horizontal(|ui| {
                 if ui.button("Start").clicked() {
@@ -1765,6 +1885,8 @@ impl eframe::App for Client {
             let local_talking = self.local_talking;
             let hearable = &self.hearable;
             let believed_dead = &self.dead;
+            let controls = &self.controls;
+            let connected_to_server = matches!(self.link.state(), net::State::Connected(_));
             // `Voice.tsx` line 1598, and the reason is in the comment where `hearable` is
             // filled: a peer is shown as speaking only if this client can hear them.
             let can_hear = |client_id: i64| {
@@ -1793,7 +1915,7 @@ impl eframe::App for Client {
                 // `local_is_impostor` is not blocked and is read from the game. On its own it
                 // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
                 // available is a line that stops looking like a stub.
-                impostor_radio: None,
+                impostor_radio: link.on_radio(),
                 local_is_impostor: state
                     .players
                     .iter()
@@ -1814,7 +1936,40 @@ impl eframe::App for Client {
                     })
                 })
                 .collect();
+            Self::draw_you(
+                ui,
+                state,
+                controls,
+                connected_to_server,
+                local_talking,
+                &dressed,
+            );
             acl_ui::views::main::draw(ui, &portraits);
         });
+    }
+}
+
+/// Shows one line to somebody who has no console to read it in.
+///
+/// `MessageBoxW` rather than a toolkit window: this runs before eframe has started, and the
+/// cases that need it are exactly the ones where the client is about to exit without ever
+/// drawing anything. A window that never appears is the failure this replaces.
+#[cfg(windows)]
+fn tell_the_user(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MessageBoxW};
+
+    let mut body: Vec<u16> = message.encode_utf16().collect();
+    body.push(0);
+    let mut title: Vec<u16> = "AnotherCrewLink".encode_utf16().collect();
+    title.push(0);
+    // SAFETY: two null-terminated wide strings that outlive the call, and a null owner
+    // window, which is what a process with no window of its own has.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
     }
 }

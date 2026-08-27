@@ -150,12 +150,29 @@ fn dressed(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>, art: egui::TextureId)
     );
 }
 
+/// The outline colour for a connection state, or `None` when there is nothing to say.
+///
+/// Nothing is drawn for a good connection: an indicator that is always on is one nobody
+/// reads.
+fn outline_for(link: Link) -> Option<Color32> {
+    match link {
+        Link::Disconnected => Some(Color32::from_rgb(210, 90, 90)),
+        Link::Silent => Some(Color32::from_rgb(220, 180, 80)),
+        Link::Connected => None,
+    }
+}
+
 /// The crewmate as shapes, for when there is no artwork.
 ///
 /// The game's silhouette in the crudest terms it can be: a body, a visor, and a shadow that
 /// makes it read as round. The shadow matters more than it sounds — `player_colors` carries
 /// one per colour precisely because using the body colour for it gives a flat sticker.
 fn shapes(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
+    shapes_at(ui, centre, portrait, AVATAR / 2.0);
+}
+
+/// The same, at whatever size the caller wants it.
+fn shapes_at(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>, half: f32) {
     let (mut body, mut shadow) = colour::crew(portrait.color_id);
     let painter = ui.painter();
 
@@ -172,16 +189,20 @@ fn shapes(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
     if portrait.state.talking {
         painter.circle_stroke(
             centre,
-            AVATAR / 2.0,
-            Stroke::new(3.0, Color32::from_rgb(80, 220, 120)),
+            half,
+            Stroke::new(3.0 * half / (AVATAR / 2.0), Color32::from_rgb(80, 220, 120)),
         );
     }
 
-    let radius = AVATAR / 2.0 - 5.0;
+    // Everything below is in proportion to the half-width rather than to `AVATAR`, so
+    // the same crewmate can be drawn at the size your own avatar wants without the visor
+    // sliding off it.
+    let scale = half / (AVATAR / 2.0);
+    let radius = half - 5.0 * scale;
     painter.circle_filled(centre, radius, shadow);
     painter.circle_filled(
-        Pos2::new(centre.x - 1.5, centre.y - 1.5),
-        radius - 2.0,
+        Pos2::new(centre.x - 1.5 * scale, centre.y - 1.5 * scale),
+        radius - 2.0 * scale,
         body,
     );
     // The visor, offset the way the game draws it: up and to the side.
@@ -254,6 +275,110 @@ pub fn slot_rect(origin: Pos2, index: usize, available_width: f32) -> Rect {
         Pos2::new(origin.x + column * SLOT, origin.y + row * SLOT),
         Vec2::splat(SLOT),
     )
+}
+
+/// You, drawn larger and above everybody else.
+///
+/// `Voice.tsx` lines 1739-1752 puts the local player in their own place at the top rather
+/// than in the wrapped list, and reported missing from 2.0.0-alpha.1: `main_view` filters
+/// the local player out by design, and nothing put them back.
+///
+/// It is not vanity. This is where you check the two things only you can be: muted and
+/// deafened. A client whose mute key works and shows nothing is a client you cannot trust
+/// you have muted — and the border carries a third, which is whether you are connected to
+/// the server at all.
+pub struct Own<'a> {
+    /// Your crewmate, exactly as everybody else's is described.
+    pub portrait: Portrait<'a>,
+    /// Your microphone is off.
+    pub muted: bool,
+    /// You cannot hear the lobby, which also means your microphone is off.
+    pub deafened: bool,
+}
+
+/// How wide your own slot is.
+pub const OWN_SLOT: f32 = 96.0;
+
+/// How much of it the crewmate takes.
+const OWN_AVATAR: f32 = 68.0;
+
+/// Draws you.
+pub fn draw_own(ui: &mut Ui, own: &Own<'_>) {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_SLOT), egui::Sense::hover());
+    let centre = Pos2::new(rect.center().x, rect.min.y + OWN_AVATAR / 2.0);
+
+    if let Some(art) = own.portrait.art {
+        let square = Rect::from_center_size(centre, Vec2::splat(OWN_AVATAR));
+        let tint = if own.portrait.state.alive {
+            Color32::WHITE
+        } else {
+            Color32::from_white_alpha(90)
+        };
+        ui.painter().image(
+            art,
+            square,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            tint,
+        );
+    } else {
+        shapes_at(ui, centre, &own.portrait, OWN_AVATAR / 2.0);
+    }
+
+    // The same outline the others get, and it means the same thing: whether there is a
+    // connection. For you that is the connection to the server rather than to a peer, which
+    // is `Voice.tsx`'s own `connected ? 'connected' : 'disconnected'`.
+    if let Some(colour) = outline_for(own.portrait.state.link) {
+        ui.painter()
+            .circle_stroke(centre, OWN_AVATAR / 2.0 - 1.0, Stroke::new(2.5, colour));
+    }
+
+    // Muted and deafened, as two badges rather than one: they are different states and
+    // deafened is the one people reach for by accident.
+    let mut badges: Vec<(&str, Color32)> = Vec::new();
+    if own.deafened {
+        badges.push(("deafened", Color32::from_rgb(210, 90, 90)));
+    } else if own.muted {
+        badges.push(("muted", Color32::from_rgb(220, 180, 80)));
+    }
+    if own.portrait.state.talking {
+        badges.push(("speaking", Color32::from_rgb(80, 220, 120)));
+    }
+    let mut y = rect.max.y - 10.0;
+    for (word, colour) in badges.iter().rev() {
+        ui.painter().text(
+            Pos2::new(rect.center().x, y),
+            Align2::CENTER_CENTER,
+            *word,
+            FontId::proportional(10.0),
+            *colour,
+        );
+        y -= 11.0;
+    }
+
+    response.on_hover_text(describe_own(own));
+}
+
+/// What your own badges mean, spelled out.
+fn describe_own(own: &Own<'_>) -> String {
+    let mut said = vec![own.portrait.name.to_owned()];
+    said.push(
+        match own.portrait.state.link {
+            Link::Disconnected => "not connected to the server",
+            Link::Silent => "connected, no audio",
+            Link::Connected => "connected",
+        }
+        .to_owned(),
+    );
+    if own.deafened {
+        said.push("deafened — you cannot hear anybody and nobody can hear you".to_owned());
+    } else if own.muted {
+        said.push("muted — nobody can hear you".to_owned());
+    }
+    if !own.portrait.state.alive {
+        said.push("dead".to_owned());
+    }
+    said.join(" — ")
 }
 
 #[cfg(test)]

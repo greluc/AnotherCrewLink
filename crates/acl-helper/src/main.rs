@@ -1,3 +1,15 @@
+//! No console window.
+//!
+//! The client became a windows-subsystem application on 2026-08-27 to stop a terminal
+//! opening beside it. That alone would have moved the problem rather than fixed it: a
+//! console-subsystem child spawned by a GUI parent gets a console of its own, so the one
+//! window would have become one window that appears a moment later.
+//!
+//! The two diagnostics below are for somebody who ran this by hand, and they still reach a
+//! shell that redirected them -- which is how `it_refuses_to_start_without_being_told_who_
+//! started_it` reads them.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! The elevated half of the client.
 //!
 //! §4.7 of `docs/rust-port/04-implementation-plan.md` splits the client in two, and §6 of

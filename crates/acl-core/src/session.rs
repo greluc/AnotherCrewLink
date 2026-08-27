@@ -129,6 +129,21 @@ pub enum Event {
         /// What they sent, untouched.
         data: Value,
     },
+    /// A peer claiming or releasing the impostor radio.
+    ///
+    /// **A 2.x event, added 2026-08-27.** 1.x carries this over the WebRTC data channel
+    /// (`Voice.tsx` 913 and 1290) and this client has none by design. §4.13 records the
+    /// blocker as *moving* the claim to the socket, which would break 1.x peers; adding a
+    /// second route breaks nobody. A 1.x client never sends this and never receives it, so
+    /// a mixed lobby degrades exactly as far as it did before -- 2.x impostors hear each
+    /// other on the radio and 1.x impostors do not -- rather than 2.x having no radio at
+    /// all, which is where it was.
+    ImpostorRadio {
+        /// Whose.
+        socket_id: String,
+        /// Whether they are on it.
+        on_radio: bool,
+    },
     /// A peer's voice activity, as the server relays it.
     VoiceActivity {
         /// Whose.
@@ -334,6 +349,7 @@ impl Lobby {
             "setHost" => self.on_set_host(args, events),
             "signal" => self.on_signal(args, events),
             "VAD" => Self::on_voice_activity(args, events),
+            "impostorRadio" => Self::on_impostor_radio(args, events),
             "new_lobbies" => Self::on_lobbies(args, events),
             "update_lobby" => Self::on_lobby_updated(args, events),
             "remove_lobby" => Self::on_lobby_removed(args, events),
@@ -527,6 +543,30 @@ impl Lobby {
         });
     }
 
+    /// Reads the server's `impostorRadio`.
+    ///
+    /// The same shape as `VAD`, deliberately: it is the same kind of message -- one peer,
+    /// one boolean, relayed to the lobby -- and giving it a second shape would be two
+    /// parsers to keep in step for no reason.
+    fn on_impostor_radio(args: &[Value], events: &mut Vec<Event>) {
+        let Some(payload) = args.first() else {
+            events.push(Event::Ignored("impostorRadio with no payload".to_owned()));
+            return;
+        };
+        match (
+            payload.get("socketId").and_then(Value::as_str),
+            payload.get("onRadio").and_then(Value::as_bool),
+        ) {
+            (Some(socket_id), Some(on_radio)) => events.push(Event::ImpostorRadio {
+                socket_id: socket_id.to_owned(),
+                on_radio,
+            }),
+            _ => events.push(Event::Ignored(
+                "impostorRadio with an unexpected shape".to_owned(),
+            )),
+        }
+    }
+
     /// Reads the server's `VAD`.
     ///
     /// **One object, not two positional arguments — corrected 2026-08-27.** This read
@@ -698,6 +738,23 @@ impl Session {
         };
         self.emit("setHost", vec![json!(code), json!(client_id)])
             .await
+    }
+
+    /// Claims or releases the impostor radio.
+    ///
+    /// Sent on the transition, like `voice_activity`: it is a level, and a message per
+    /// frame while somebody holds a key would be more traffic than the audio.
+    ///
+    /// Whether the sender is *allowed* to is not decided here. Being an impostor, being
+    /// alive and the lobby permitting it are the caller's checks, and the receiver applies
+    /// its own -- `voice_params` only lifts the distance rule when both ends are impostors.
+    /// A client that lied would be believed by nobody.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn impostor_radio(&mut self, on_radio: bool) -> Result<(), TransportError> {
+        self.emit("impostorRadio", vec![json!(on_radio)]).await
     }
 
     /// Tells the lobby whether this player is speaking.

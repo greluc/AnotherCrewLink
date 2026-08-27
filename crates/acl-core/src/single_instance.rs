@@ -339,7 +339,15 @@ mod tests {
 
         let directory = std::env::temp_dir().join("acl-single-instance-test");
 
-        let held = claim(&directory, None).expect("nothing owns a temporary directory");
+        // A running client owns the *shared* name, which is global on purpose -- it is how
+        // a 2.x notices a 1.x. So this test cannot run while any client is up, and saying
+        // so is better than the failure it used to produce: developers run the thing they
+        // are working on, and a red suite that means "your app is open" is one people learn
+        // to ignore.
+        let Ok(held) = claim(&directory, None) else {
+            eprintln!("skipping: a client is running and owns the shared instance name");
+            return;
+        };
         // The specific answer, not the coarse one. Getting `OtherInstallation` here would
         // mean the shared name is being claimed first, and a second 2.x would be told a
         // 1.x is running.
