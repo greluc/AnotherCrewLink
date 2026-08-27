@@ -78,7 +78,7 @@ pub fn resolve_offsets(
     for (signature_name, field) in FILLS {
         match scan(memory, module, offsets.signatures.get(signature_name))? {
             Some(address) => {
-                if fill_first_step(&mut resolved, field, address) {
+                if fill_first_step(&mut resolved, field, address, module) {
                     found.insert(signature_name.to_owned(), address);
                     if field == "gameoptionsData" {
                         options_filled = true;
@@ -94,7 +94,7 @@ pub fn resolve_offsets(
         // control singleton.
         let (signature_name, field) = OPTIONS_FALLBACK;
         if let Some(address) = scan(memory, module, offsets.signatures.get(signature_name))?
-            && fill_first_step(&mut resolved, field, address)
+            && fill_first_step(&mut resolved, field, address, module)
         {
             found.insert(signature_name.to_owned(), address);
         }
@@ -152,8 +152,24 @@ fn scan(
 ///
 /// Returns whether the field existed and was a chain. `innerNetClient.base` is written
 /// with a dot because it lives one level down.
-fn fill_first_step(offsets: &mut Offsets, field: &str, address: u64) -> bool {
-    let Ok(value) = i64::try_from(address) else {
+///
+/// # Module-relative, not absolute
+///
+/// `resolve_signature` returns an absolute address -- it checks `module.contains` on it --
+/// and every chain here is walked by `resolve_chain`, which *starts at the module base and
+/// adds each step*. Storing the absolute address therefore adds the base a second time, and
+/// the sum is an address outside the module.
+///
+/// Measured on a live 32-bit Among Us on 2026-08-27: `innerNetClient` resolved to
+/// `0x5d071351` in a module based at `0x5cb80000`; reading at the signature worked and
+/// reading at `0x5cb80000 + 0x5d071351 = 0xb9bf1351` did not. Every signature-rooted chain
+/// failed, so `innerNetClient` was zero, the game state fell back through "no lobby code"
+/// to `Menu`, and the client showed an empty lobby while the game was plainly running.
+///
+/// Subtracting the base is right whatever the caller does with it: `base + (address - base)`
+/// is `address` for any base, including the zero a replayed process reports.
+fn fill_first_step(offsets: &mut Offsets, field: &str, address: u64, module: &Module) -> bool {
+    let Ok(value) = i64::try_from(address.saturating_sub(module.base)) else {
         return false;
     };
     let target = match field.split_once('.') {
@@ -176,7 +192,14 @@ fn fill_first_step(offsets: &mut Offsets, field: &str, address: u64) -> bool {
 /// [`fill_first_step`], for a sibling module's tests.
 #[cfg(test)]
 pub(crate) fn fill_first_step_for_test(offsets: &mut Offsets, field: &str, address: u64) -> bool {
-    fill_first_step(offsets, field, address)
+    // A zero base, so the address is stored as given: this shim exists for tests that are
+    // about the chain's shape rather than about where the module sits.
+    let module = Module {
+        name: "GameAssembly.dll".to_owned(),
+        base: 0,
+        size: u64::MAX,
+    };
+    fill_first_step(offsets, field, address, &module)
 }
 
 #[cfg(test)]
@@ -194,6 +217,15 @@ mod tests {
         )
         .expect("a fixture");
         serde_json::from_str(&text).expect("parses")
+    }
+
+    /// A module at a stated base, for the arithmetic below.
+    fn based(base: u64) -> Module {
+        Module {
+            name: "GameAssembly.dll".to_owned(),
+            base,
+            size: 0x0100_0000,
+        }
     }
 
     fn module() -> Module {
@@ -225,7 +257,12 @@ mod tests {
     #[test]
     fn fills_a_scanned_address_into_the_first_chain_step() {
         let mut offsets = offsets();
-        assert!(fill_first_step(&mut offsets, "innerNetClient.base", 0x1234));
+        assert!(fill_first_step(
+            &mut offsets,
+            "innerNetClient.base",
+            0x1234,
+            &based(0)
+        ));
         let chain = offsets
             .rest
             .get("innerNetClient")
@@ -237,11 +274,48 @@ mod tests {
         assert_eq!(chain.len(), 3);
     }
 
+    /// What goes into the chain is module-*relative*, because that is what walks it.
+    ///
+    /// `resolve_chain` starts at the module base and adds each step, so storing an absolute
+    /// address adds the base twice. Live on a 32-bit build that put every signature-rooted
+    /// chain outside the module, and the reader saw an empty menu while a game was running.
+    #[test]
+    fn the_stored_step_is_relative_to_the_module() {
+        let mut offsets = offsets();
+        assert!(fill_first_step(
+            &mut offsets,
+            "innerNetClient.base",
+            0x5cb8_1234,
+            &based(0x5cb8_0000)
+        ));
+        let chain = offsets
+            .rest
+            .get("innerNetClient")
+            .and_then(|block| block.get("base"))
+            .and_then(serde_json::Value::as_array)
+            .expect("still a chain");
+        assert_eq!(
+            chain[0].as_i64(),
+            Some(0x1234),
+            "the base must not survive into the step that gets added to the base"
+        );
+    }
+
     #[test]
     fn a_field_that_is_not_a_chain_is_left_alone() {
         let mut offsets = offsets();
-        assert!(!fill_first_step(&mut offsets, "no_such_field", 0x1234));
-        assert!(!fill_first_step(&mut offsets, "disableWriting", 0x1234));
+        assert!(!fill_first_step(
+            &mut offsets,
+            "no_such_field",
+            0x1234,
+            &based(0)
+        ));
+        assert!(!fill_first_step(
+            &mut offsets,
+            "disableWriting",
+            0x1234,
+            &based(0)
+        ));
     }
 
     #[test]
@@ -262,27 +336,45 @@ mod tests {
         assert_eq!(chain.first(), Some(&-1));
     }
 
+    /// A 32-bit signature, end to end: match the pattern, read what it stores, store that
+    /// relative to the module.
+    ///
+    /// Both halves were wrong until 2026-08-27 and this test agreed with both, because it
+    /// let the pattern be its own answer: `pattern_offset: 0` with the resolved address
+    /// compared against the address of the match. Written that way it cannot tell the
+    /// address of the immediate from the immediate, which is the entire distinction.
+    ///
+    /// So the pattern is four bytes and the address it names is *after* them.
     #[test]
     fn finds_a_signature_that_is_in_the_module() {
         let mut offsets = offsets();
-        // Give one signature something to match, and check the address lands in the chain.
         offsets.signatures.insert(
             "gameData".to_owned(),
             SignatureEntry {
                 sig: Some("DE AD BE EF".to_owned()),
-                pattern_offset: Some(0),
+                // Past the pattern, where a 32-bit instruction keeps its immediate.
+                pattern_offset: Some(4),
                 address_offset: Some(0),
             },
         );
         let mut bytes = vec![0u8; 0x4000];
         bytes[0x800..0x804].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        // The global this signature names, stored where the instruction keeps it.
+        bytes[0x804..0x808].copy_from_slice(&0x1000_0c00_u32.to_le_bytes());
         let process = SparseProcess::new(false)
             .with_region(0x1000_0000, bytes)
             .with_module("GameAssembly.dll", 0x1000_0000, 0x4000);
 
         let resolved = resolve_offsets(&process, &module(), &offsets).expect("resolves");
-        assert_eq!(resolved.found.get("gameData"), Some(&0x1000_0800));
+        assert_eq!(
+            resolved.found.get("gameData"),
+            Some(&0x1000_0c00),
+            "the answer is the address stored at the match, not the match"
+        );
+
+        // And what lands in the chain is module-relative, because `resolve_chain` adds the
+        // module base to it. Storing the absolute address adds the base twice.
         let chain = top_level_chain(&resolved.offsets, "allPlayersPtr").expect("a chain");
-        assert_eq!(chain.first(), Some(&0x1000_0800));
+        assert_eq!(chain.first(), Some(&0x0c00));
     }
 }

@@ -222,7 +222,18 @@ pub fn resolve_signature(
             reason: "displacement moves past the address space",
         })?
     } else {
-        at.checked_add_signed(signature.address_offset)
+        // A 32-bit build stores the global's absolute address *in* the instruction, so the
+        // four bytes at this point are the answer -- not the place the answer is.
+        //
+        // This returned `at + address_offset` until 2026-08-27: the address of the
+        // immediate rather than the immediate. Every signature then resolved to a location
+        // inside the code section, `module.contains` was satisfied by it, and the chain
+        // walked from a pointer that was really an instruction. `GameReader.ts:863-867`
+        // reads it, and the difference is a reader that cannot see a running game at all.
+        let mut immediate = [0u8; 4];
+        memory.read_exact(at, &mut immediate)?;
+        u64::from(u32::from_le_bytes(immediate))
+            .checked_add_signed(signature.address_offset)
             .ok_or(ReadError::Chain {
                 step: 0,
                 reason: "address offset moves past the address space",
@@ -410,9 +421,20 @@ mod tests {
         );
     }
 
+    /// A 32-bit signature names an address that is *stored* at the match, not the match.
+    ///
+    /// This asserted the opposite until 2026-08-27 — that the answer was the address of the
+    /// four bytes — which is the shape the code had, so the test agreed with it and neither
+    /// was checked against a game. `GameReader.ts:863-867` reads the immediate, and on a
+    /// live 32-bit build the difference was a reader that resolved every signature into the
+    /// code section and saw an empty menu while a game was running.
     #[test]
-    fn resolves_an_absolute_signature() {
-        let process = SparseProcess::new(true).with_region(0x1000_0000, vec![0u8; 0x1000]);
+    fn an_absolute_signature_is_the_address_stored_at_the_match() {
+        let mut bytes = vec![0u8; 0x1000];
+        // The instruction's immediate: the global lives at 0x1000_0800.
+        bytes[0x103..0x107].copy_from_slice(&0x1000_0800_u32.to_le_bytes());
+        let process = SparseProcess::new(true).with_region(0x1000_0000, bytes);
+
         let resolved = resolve_signature(
             &process,
             &module(),
@@ -424,7 +446,36 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(resolved, 0x1000_0103);
+        assert_eq!(
+            resolved, 0x1000_0800,
+            "the immediate was not read; this is the address it was read *from*"
+        );
+    }
+
+    /// And a signature whose immediate points outside the module is refused.
+    ///
+    /// The check was already there and was being satisfied by the wrong value: the address
+    /// of the match is inside the module by construction, so it could never fire. Now it
+    /// judges the thing it was written to judge.
+    #[test]
+    fn an_absolute_signature_pointing_out_of_the_module_is_refused() {
+        let mut bytes = vec![0u8; 0x1000];
+        bytes[0x103..0x107].copy_from_slice(&0xdead_0000_u32.to_le_bytes());
+        let process = SparseProcess::new(true).with_region(0x1000_0000, bytes);
+
+        assert!(
+            resolve_signature(
+                &process,
+                &module(),
+                0x1000_0100,
+                Signature {
+                    pattern_offset: 3,
+                    address_offset: 0,
+                    relative: false,
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]

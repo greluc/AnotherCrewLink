@@ -40,6 +40,25 @@ fn serially() -> MutexGuard<'static, ()> {
     ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Whether somebody else's overlay is already on screen.
+///
+/// These tests find their window by title, because a click-through window with no taskbar
+/// button never becomes the foreground one -- and a title is not exclusive. A helper
+/// belonging to a client the developer happens to be running owns a window with this exact
+/// title, so the test would place *its* overlay, watch it not move, and report a bug in
+/// code that is working.
+///
+/// Skipping is the honest answer: the alternative is a suite that goes red whenever
+/// somebody has the thing they are working on open, which is a suite people learn to
+/// ignore. Cost one false lead on 2026-08-27.
+fn somebody_elses_overlay() -> bool {
+    if find().is_some() {
+        eprintln!("skipping: an overlay window already exists, so a client is running");
+        return true;
+    }
+    false
+}
+
 /// Finds the overlay by title.
 ///
 /// By title, and not `GetForegroundWindow`: a click-through window with no taskbar button
@@ -81,6 +100,9 @@ fn one_pixel() -> Sprite {
 #[test]
 fn the_window_has_every_style_that_makes_it_an_overlay() {
     let _serially = serially();
+    if somebody_elses_overlay() {
+        return;
+    }
     let overlay = start().expect("the overlay thread starts");
     let window = wait_for_window();
 
@@ -128,6 +150,9 @@ fn the_window_has_every_style_that_makes_it_an_overlay() {
 #[test]
 fn it_goes_where_it_is_put_and_hides_when_told() {
     let _serially = serially();
+    if somebody_elses_overlay() {
+        return;
+    }
     let overlay = start().expect("the overlay thread starts");
     let window = wait_for_window();
 
@@ -183,6 +208,9 @@ fn it_goes_where_it_is_put_and_hides_when_told() {
 #[test]
 fn dropping_it_closes_the_window() {
     let _serially = serially();
+    if somebody_elses_overlay() {
+        return;
+    }
     {
         let overlay = start().expect("the overlay thread starts");
         wait_for_window();
