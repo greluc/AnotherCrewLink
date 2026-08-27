@@ -178,9 +178,88 @@ fn default_for(key: &str) -> Option<Default_> {
         .map(|(_, value)| value)
 }
 
+/// One player's own volume and mute, applied to a gain.
+///
+/// `None` means they are muted and nothing should be placed for them at all — a peer left
+/// out of the map is a peer the mixer does not mix, which is cheaper than mixing silence.
+///
+/// # Keyed on the name hash, which is 1.x's choice and the right one
+///
+/// `Voice.tsx` lines 1584-1590. Client and socket ids change every session; turning
+/// somebody down is a decision about a *person*, and it has to survive them reconnecting.
+/// The hash is signed, because it is JavaScript's `hashCode` ending in `| 0`, so the key
+/// can carry a minus sign and the formatting must not lose it.
+///
+/// The order is theirs too: mute to zero first, multiply second. It reads as the same
+/// answer either way and is not — a muted player with a volume of 2 would come back.
+#[must_use]
+pub fn per_player_gain(config: &Config, name_hash: i32, gain: f32) -> Option<f32> {
+    let key = format!("playerConfigMap.{name_hash}");
+    if config.bool_at(&format!("{key}.isMuted")) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a volume multiplier from the settings file, which the UI bounds"
+    )]
+    let volume = config
+        .get(&format!("{key}.volume"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0) as f32;
+    Some(gain * volume)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// A player nobody touched sounds exactly as the rules left them.
+    #[test]
+    fn an_untouched_player_keeps_their_gain() {
+        let config = Config::default();
+        assert_eq!(
+            super::per_player_gain(&config, 1_741_422_841, 0.5),
+            Some(0.5)
+        );
+    }
+
+    /// Turning somebody down multiplies what the rules decided.
+    #[test]
+    fn a_volume_multiplies_rather_than_replaces() {
+        let mut config = Config::default();
+        config.set("playerConfigMap.1741422841", json!({"volume": 0.5}));
+        assert_eq!(
+            super::per_player_gain(&config, 1_741_422_841, 0.8),
+            Some(0.4)
+        );
+    }
+
+    /// Muting is not a volume of zero: nothing is placed for them at all.
+    ///
+    /// And it wins over the volume, which is `Voice.tsx`'s order. Reading it the other way
+    /// round is the same answer until somebody has a volume above one, at which point a
+    /// muted player comes back.
+    #[test]
+    fn muting_beats_whatever_the_volume_says() {
+        let mut config = Config::default();
+        config.set(
+            "playerConfigMap.1741422841",
+            json!({"volume": 2.0, "isMuted": true}),
+        );
+        assert_eq!(super::per_player_gain(&config, 1_741_422_841, 0.8), None);
+    }
+
+    /// A negative hash is a key like any other.
+    ///
+    /// `hashCode` ends in `| 0`, so half of them are negative. A formatter that lost the
+    /// sign would quietly apply one player's settings to a different player.
+    #[test]
+    fn a_negative_name_hash_addresses_its_own_player() {
+        let mut config = Config::default();
+        config.set("playerConfigMap.-42", json!({"volume": 0.25}));
+        assert_eq!(super::per_player_gain(&config, -42, 1.0), Some(0.25));
+        assert_eq!(super::per_player_gain(&config, 42, 1.0), Some(1.0));
+    }
 
     use super::Config;
     use serde_json::{Value, json};

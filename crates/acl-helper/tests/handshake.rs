@@ -170,11 +170,11 @@ fn the_link_starts_the_helper_and_keeps_it() {
     // that a helper which fell over on the first attempt to attach to a game that is not
     // there would be caught rather than missed.
     //
-    // Everything seen is kept, and the assertions below print it. This test failed three
-    // times on 2026-08-27 and has not been reproducible since — sixteen runs, including
-    // three with a forced rebuild to recreate the load it seemed to correlate with. So the
-    // next occurrence has to carry its own diagnosis: which poll it was on, what the link
-    // said, and what it had said before that.
+    // Everything seen is kept and the assertions print it. Added while this test was
+    // failing intermittently for a reason that turned out not to be here at all — see
+    // `a_replacement_helper_waits_for_its_predecessors_pipe`, which now covers the cause.
+    // Kept because the diagnosis it produces is what any future failure will need: which
+    // poll it was on, what the link said, and what it had said before that.
     let mut seen: Vec<String> = Vec::new();
     for round in 0..10 {
         for event in link.poll() {
@@ -402,12 +402,10 @@ fn within(
 /// when the test passes, because this returns as soon as the child is gone; it costs
 /// twenty-five extra seconds on a real failure, which is the moment to be patient.
 ///
-/// **This is not a fix for anything observed, and should not be read as one.** These tests
-/// failed three times in a row on 2026-08-27 during `cargo test --workspace`, each time
-/// straight after a recompile, and have passed sixteen times since — six alone and ten in a
-/// workspace run — with no change that could explain it. The failure was reported against
-/// `the_link_starts_the_helper_and_keeps_it`, which does not call this function at all, so
-/// whatever it was is still there. Recorded here because this is where somebody will look.
+/// It was raised while chasing an intermittent failure that turned out to have nothing to
+/// do with it — a replacement helper failing to claim a pipe its predecessor had not yet
+/// released, which `a_replacement_helper_waits_for_its_predecessors_pipe` now covers. The
+/// longer bound stays on its own merits.
 fn wait_briefly(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
     for _ in 0..600 {
         if let Some(status) = child.try_wait().expect("the child is waitable") {
@@ -417,4 +415,57 @@ fn wait_briefly(child: &mut std::process::Child) -> Option<std::process::ExitSta
     }
     let _ = child.kill();
     None
+}
+
+/// A helper started straight after another one has been stopped gets its pipe.
+///
+/// # The thirty-second hang this is here to prevent
+///
+/// Found on 2026-08-27 as an intermittent failure of the test above, and it was neither
+/// intermittent nor about that test. Stopping a helper and starting another within a second
+/// or two had the replacement fail immediately with "all pipe instances are busy", exit, and
+/// leave the core waiting the full connect timeout for a pipe nobody was ever going to
+/// serve. `Link::stop` predicts it in a warning it had been printing all along: "the helper
+/// did not exit when asked; a replacement may not get its pipe."
+///
+/// It reached the suite as a flake because it needs a *slow* predecessor, and only the
+/// overlay test left one — so it depended on which tests had run, which is why running the
+/// failing test on its own always passed.
+///
+/// It is not a test-only problem. The client stops and restarts the helper whenever the
+/// reader is restarted, and a user who did that twice in quick succession waited thirty
+/// seconds for a client that looked hung.
+#[test]
+fn a_replacement_helper_waits_for_its_predecessors_pipe() {
+    let _serially = serially();
+
+    let mut first = acl_core::link::Link::new();
+    first
+        .start(
+            std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+            acl_core::launch::Elevation::AsIs,
+            OFFSETS,
+        )
+        .expect("the first helper starts");
+    first.stop();
+
+    // Immediately, with no pause: the pause is the bug. `stop` waits two seconds for the
+    // predecessor and gives up quietly if it takes longer, so the replacement has to be the
+    // one that copes.
+    let started = std::time::Instant::now();
+    let mut second = acl_core::link::Link::new();
+    let outcome = second.start(
+        std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+        acl_core::launch::Elevation::AsIs,
+        OFFSETS,
+    );
+    let took = started.elapsed();
+    second.stop();
+
+    outcome.expect("the replacement gets the pipe its predecessor let go of");
+    // Well under the connect timeout, which is what the failure used to consume in full.
+    assert!(
+        took < Duration::from_secs(15),
+        "the replacement took {took:?}, which is the shape of the hang rather than the fix"
+    );
 }

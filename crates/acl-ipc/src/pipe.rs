@@ -103,6 +103,39 @@ mod platform {
     /// prompt that is usually not there.
     const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 
+    /// How long a new server waits for its predecessor to let go of the name.
+    ///
+    /// # This was zero, and it cost thirty seconds
+    ///
+    /// Found on 2026-08-27. Stopping the helper and starting another within a second or two
+    /// -- which the client does whenever the reader is restarted -- had the replacement fail
+    /// immediately with "all pipe instances are busy", exit, and leave the core waiting the
+    /// full [`CONNECT_TIMEOUT`] for a pipe nobody was ever going to serve. `Link::stop` even
+    /// predicts it in a warning: "the helper did not exit when asked; a replacement may not
+    /// get its pipe."
+    ///
+    /// A predecessor releasing a name is an ordinary race and not a failure, so the
+    /// replacement waits it out. Shorter than `CONNECT_TIMEOUT` on purpose: the core is
+    /// waiting on the other side of this, and a helper that gives up first turns a hang into
+    /// an error somebody can read.
+    const REPLACE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// The two the kernel gives for a name somebody already has.
+    ///
+    /// `ERROR_PIPE_BUSY` is the ordinary one. `ERROR_ACCESS_DENIED` is what it says instead
+    /// when the existing pipe was created by a process whose security descriptor refuses
+    /// this one -- and a predecessor of *this* client looks exactly like that for as long as
+    /// its handle is open, so it is waited out too. If it really is somebody else's pipe,
+    /// the wait ends in the same refusal it would have started with.
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "two small documented WIN32_ERROR values, 5 and 231"
+    )]
+    const TAKEN: [i32; 2] = [
+        windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32,
+        windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32,
+    ];
+
     /// A null-terminated UTF-16 copy.
     fn wide(value: &OsStr) -> Vec<u16> {
         value.encode_wide().chain(std::iter::once(0)).collect()
@@ -432,6 +465,32 @@ mod platform {
         /// holds this name — see the module documentation for why that is refused rather
         /// than joined.
         pub fn create(name: &str) -> io::Result<Self> {
+            let deadline = std::time::Instant::now() + REPLACE_TIMEOUT;
+            loop {
+                match Self::create_once(name) {
+                    Ok(server) => return Ok(server),
+                    // `FILE_FLAG_FIRST_PIPE_INSTANCE` refuses a name somebody already has,
+                    // and a predecessor finishing its teardown is somebody who already has
+                    // it for a moment. Waiting is safe in a way that connecting would not
+                    // be: this either takes the name or it does not, and it never attaches
+                    // to a pipe another process is serving.
+                    Err(error)
+                        if error
+                            .raw_os_error()
+                            .is_some_and(|code| TAKEN.contains(&code)) =>
+                    {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(error);
+                        }
+                        std::thread::sleep(RETRY_DELAY);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        /// One attempt at claiming the name.
+        fn create_once(name: &str) -> io::Result<Self> {
             let descriptor = Descriptor::for_this_user()?;
             let mut attributes = descriptor.attributes();
             // SAFETY: the name is null-terminated and the attributes outlive the call.

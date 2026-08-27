@@ -1110,7 +1110,21 @@ impl Client {
                 lobby.max_distance,
                 None,
             );
-            if params.gain <= 0.0 {
+            // Per-player volume and mute. `voice_params` deliberately does not know about
+            // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
+            // the rule and the reason it is keyed on the name hash are in
+            // `acl_ui::config::per_player_gain`, which is tested without a game.
+            let Some(gain) = acl_ui::config::per_player_gain(
+                self.settings.config(),
+                player.name_hash,
+                params.gain,
+            ) else {
+                // Muted, so nothing is placed for them at all -- cheaper than mixing
+                // silence, and the same thing `gain <= 0` does below.
+                continue;
+            };
+
+            if gain <= 0.0 {
                 // Silent, and `placed` false means the panner was not given a position
                 // either -- the Electron original leaves the graph alone in that case, and
                 // a peer left out of the map is a peer the mixer does not mix.
@@ -1119,7 +1133,7 @@ impl Client {
             placements.insert(
                 socket.to_owned(),
                 audio::Placement {
-                    gain: params.gain,
+                    gain,
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
                         y: 0.0,
