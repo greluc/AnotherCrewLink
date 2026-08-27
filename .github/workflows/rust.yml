@@ -168,12 +168,21 @@ jobs:
             printf 'stub' > "stubs/$name.exe"
           done
 
+      # The version carries a prerelease suffix on purpose. `VIProductVersion` takes four
+      # numbers and aborts on anything else, the release workflow triggers on `v2.*` --
+      # which matches `v2.0.0-rc.1` -- and §4.12's staged rollout is exactly what would be
+      # tagged that way. Compiling only `0.0.0` here would leave that path to be discovered
+      # by the first staging release, on the day it mattered.
       - name: Compile the installer
         shell: bash
         run: |
           # NSIS is not on PATH after a choco install in the same job.
-          "/c/Program Files (x86)/NSIS/makensis.exe"             -DVERSION=0.0.0-ci             -DSOURCE_DIR=../stubs             installer/anothercrewlink.nsi
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          "$makensis" -DVERSION=0.0.0-ci -DSOURCE_DIR=../stubs installer/anothercrewlink.nsi
           test -s installer/AnotherCrewLink-Setup-0.0.0-ci.exe
+          # The bridge is the script the installed fleet actually runs, so it is the one
+          # whose failure would be discovered by everybody at once.
+          "$makensis" -DVERSION=1.1.0 -DSOURCE_DIR=../stubs installer/bridge.nsi
 
       # The silent switches are a contract with 1.x's updater, which spawns
       # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that
@@ -182,7 +191,9 @@ jobs:
       - name: Install it silently, the way the updater will
         shell: bash
         run: |
-          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S             /D=$(cygpath -w "$PWD/installed")
+          # /D= last and unquoted, which is NSIS's rule and not a style choice: it takes
+          # the rest of the line verbatim, so a quote would land in the path.
+          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S /D=$(cygpath -w "$PWD/installed")
           # NSIS returns immediately and carries on in another process.
           for _ in $(seq 40); do
             [ -f installed/anothercrewlink.exe ] && break

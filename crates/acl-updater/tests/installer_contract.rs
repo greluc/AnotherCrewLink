@@ -146,6 +146,31 @@ fn the_install_needs_no_elevation() {
 /// `electron-updater`'s `findFile` picks by extension and then prefers a filename
 /// containing `x64` — 1.x published no token and one `.exe`, so any single `.exe` keeps
 /// being picked. Changing the extension is the same act as abandoning the installed base.
+/// A prerelease version still compiles.
+///
+/// `VIProductVersion` takes four numbers and aborts on anything else — `makensis` says
+/// "invalid VIProductVersion format" and stops. The release workflow triggers on `v2.*`,
+/// which matches `v2.0.0-rc.1`, and §4.12's staged rollout is the thing that would be
+/// tagged that way. So the scripts take the numeric part themselves rather than trusting
+/// the caller to have stripped it.
+///
+/// Found by the `installer` job in `rust.yml` on its second run, which is the argument for
+/// having it: what NSIS will accept is not visible to a test that reads the source.
+#[test]
+fn a_prerelease_version_does_not_abort_the_build() {
+    for file in ["anothercrewlink.nsi", "bridge.nsi"] {
+        let instructions = instructions_of(file);
+        assert!(
+            instructions.contains("!searchparse"),
+            "{file} does not derive a numeric version, so a -rc tag will not build"
+        );
+        assert!(
+            instructions.contains("VIProductVersion \"${VERSION_NUMERIC}"),
+            "{file} still passes the unstripped version to VIProductVersion"
+        );
+    }
+}
+
 /// A 32-bit machine is refused, rather than quietly given something that cannot run.
 ///
 /// This is not a hypothetical. The 32-bit build was removed on 2026-08-25, and §4.12's

@@ -62,7 +62,23 @@ InstallDir "$LOCALAPPDATA\Programs\${APP_DIRECTORY}"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "${VERSION}.0"
+; VIProductVersion takes four numbers and nothing else -- a prerelease suffix aborts
+; makensis with "invalid VIProductVersion format". That is not a hypothetical: the release
+; workflow triggers on `v2.*`, which matches `v2.0.0-rc.1`, and §4.12's staged rollout is
+; exactly the thing that would be tagged that way. So the numeric part is taken here rather
+; than assumed of the caller.
+;
+; `!searchparse` fails when there is no `-` to find, which is the ordinary case; /noerrors
+; makes that silent and the !ifndef below supplies the whole string.
+!searchparse /noerrors "${VERSION}" "" VERSION_NUMERIC "-"
+!ifndef VERSION_NUMERIC
+  !define VERSION_NUMERIC "${VERSION}"
+!endif
+
+; The numeric four-part version for the resource, and the full string -- suffix and all --
+; for the keys that are free text. A user reading the file properties should see the version
+; that was released, not a rounded-off one.
+VIProductVersion "${VERSION_NUMERIC}.0"
 VIAddVersionKey "ProductName" "${PRODUCT}"
 VIAddVersionKey "FileDescription" "${PRODUCT} bridge installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
