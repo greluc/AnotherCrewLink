@@ -192,12 +192,17 @@ mod tests {
 
     /// The arguments here are the arguments in the installer script. Two files that have to
     /// agree, and the script is the one the 1.x fleet's updater will also be calling.
+    ///
+    /// `common.nsh` since 2026-08-27: the argument handling is shared by all three scripts,
+    /// so this reads the file that holds it. Reading `anothercrewlink.nsi` alone was what
+    /// this used to do, and the refactor broke it — correctly, because the sentence it was
+    /// checking had moved and a test that still passed would have been checking nothing.
     #[test]
     fn the_installer_script_handles_what_is_sent_to_it() {
         let script = std::fs::read_to_string(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../installer/anothercrewlink.nsi"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../installer/common.nsh"),
         )
-        .expect("the installer script is in the repository");
+        .expect("the shared installer contract is in the repository");
         let plan = Plan::updating(PathBuf::from("Setup.exe"), Path::new(r"C:\x"));
         assert!(
             script.contains(&plan.arguments[0]),

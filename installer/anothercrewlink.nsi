@@ -5,43 +5,10 @@
 ; changing artefact type is the same act as abandoning the installed base. So the NSIS
 ; script is hand-built and keeps its exact CLI contract."
 ;
-; THE CLI CONTRACT IS THE POINT OF THIS FILE.
-;
-; `electron-updater`'s `NsisUpdater` spawns an installer as
-;
-;     installer.exe --updated /S /D=<installDirectory>
-;
-; and every one of those three has to work, because P8 publishes a bridge build into the
-; 1.x feed and the installed fleet's updater is what runs it. `/S` and `/D=` are NSIS's
-; own; `--updated` is electron-builder's and means "this is an update, not a first
-; install", which here means: do not open the app afterwards and do not ask anything.
-;
-; `/D=` must be the last argument and takes no quotes even when the path has spaces. That
-; is NSIS, not a choice made here, and it is why the uninstaller records the directory
-; rather than the installer being asked to remember it.
-;
-; PER-USER, NEVER ELEVATED.
-;
-; 1.x is a one-click per-user install and so is this. It matters beyond habit: §4.9 item 3
-; refuses to install an update from an elevated process, and a per-machine installer would
-; make every update an elevation prompt -- which trains people to click through the one
-; prompt this project actually needs, the helper's.
-;
-; UNSIGNED, AND THAT IS WRITTEN DOWN.
-;
-; §4.9 item 2: no Authenticode. Every user sees the unknown-publisher warning on every
-; install, exactly as they do with 1.0.2 today. Nothing here hides that or works around it.
+; The contract itself, and why each half of it exists, is in `common.nsh`. This file is the
+; payload: which binaries go down, what the uninstaller takes away again, and the one thing
+; that is specific to a deliberate install -- starting the app afterwards.
 
-Unicode true
-ManifestDPIAware true
-
-!include "MUI2.nsh"
-!include "FileFunc.nsh"
-!include "LogicLib.nsh"
-; For ${RunningX64}, used by the architecture guard in .onInit.
-!include "x64.nsh"
-
-; Supplied by the release job: !define VERSION, !define SOURCE_DIR, !define OUT_FILE.
 !ifndef VERSION
   !define VERSION "0.0.0"
 !endif
@@ -58,6 +25,10 @@ ManifestDPIAware true
 ; `installer_contract.rs`, which fails if the two drift apart.
 !define APP_DIRECTORY "ACL"
 !define REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_DIRECTORY}"
+!define DESCRIPTION "${PRODUCT} installer"
+!define ARCH_REFUSAL "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
+
+!include "common.nsh"
 
 Name "${PRODUCT}"
 OutFile "${OUT_FILE}"
@@ -65,79 +36,10 @@ OutFile "${OUT_FILE}"
 ; installable by the process that downloaded it.
 InstallDir "$LOCALAPPDATA\Programs\${APP_DIRECTORY}"
 InstallDirRegKey HKCU "${REGISTRY_KEY}" "InstallLocation"
-RequestExecutionLevel user
-SetCompressor /SOLID lzma
-
-; VIProductVersion takes four numbers and nothing else -- a prerelease suffix aborts
-; makensis with "invalid VIProductVersion format". That is not a hypothetical: the release
-; workflow triggers on `v2.*`, which matches `v2.0.0-rc.1`, and §4.12's staged rollout is
-; exactly the thing that would be tagged that way. So the numeric part is taken here rather
-; than assumed of the caller.
-;
-; `!searchparse` fails when there is no `-` to find, which is the ordinary case; /noerrors
-; makes that silent and the !ifndef below supplies the whole string.
-!searchparse /noerrors "${VERSION}" "" VERSION_NUMERIC "-"
-!ifndef VERSION_NUMERIC
-  !define VERSION_NUMERIC "${VERSION}"
-!endif
-
-; The numeric four-part version for the resource, and the full string -- suffix and all --
-; for the keys that are free text. A user reading the file properties should see the version
-; that was released, not a rounded-off one.
-VIProductVersion "${VERSION_NUMERIC}.0"
-VIAddVersionKey "ProductName" "${PRODUCT}"
-VIAddVersionKey "FileDescription" "${PRODUCT} installer"
-VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "ProductVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Lucas Greuloch. GPL-3.0-or-later."
-
-!define MUI_ABORTWARNING
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "English"
-
-Var IsUpdate
-
-; Reads `--updated` out of the command line.
-;
-; electron-updater passes it; a person double-clicking does not. It decides one thing --
-; whether the app is started afterwards -- because an update that reopened the window a
-; user had closed would be the installer deciding what they were doing.
-Function ParseArguments
-  ${GetParameters} $R0
-  ${GetOptions} $R0 "--updated" $R1
-  ${IfNot} ${Errors}
-    StrCpy $IsUpdate "1"
-  ${Else}
-    StrCpy $IsUpdate "0"
-  ${EndIf}
-FunctionEnd
 
 Function .onInit
   Call ParseArguments
-
-  ; 2.x is x64-only: the 32-bit build was removed on 2026-08-25. This matters here and
-  ; not only in a build script, because of how the fleet reaches this installer.
-  ;
-  ; 1.x's updater picks an artefact with `findFile`, which prefers a file name containing
-  ; `x64` or `ia32` and otherwise takes the first `.exe` in the feed. The bridge publishes
-  ; one `.exe` and no token -- there is no 32-bit build to publish -- so a 32-bit 1.0.2
-  ; client is handed this, and runs it. NSIS installers are 32-bit themselves, so it would
-  ; run happily to the end and lay down x64 binaries that cannot start: an install that
-  ; reports success and leaves the machine with nothing that works.
-  ;
-  ; Refusing is not a fix for those users; nothing here can be. It is the difference
-  ; between a broken install they cannot diagnose and a message that says what happened.
-  ${IfNot} ${RunningX64}
-    ; No dialog under /S. The updater that spawned this is waiting on the process and
-    ; never sees a window, so a message box there is a hang rather than an explanation --
-    ; the exit code is the only thing it can read.
-    IfSilent refuse
-    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
-  refuse:
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
+  !insertmacro ACL_ARCHITECTURE_GUARD
 FunctionEnd
 
 Section "Install"

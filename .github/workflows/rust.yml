@@ -167,6 +167,13 @@ jobs:
           for name in anothercrewlink acl-helper acl-updater; do
             printf 'stub' > "stubs/$name.exe"
           done
+          # And for what `electron-builder --dir` leaves behind, which legacy.nsi packages.
+          # A tree rather than a list, because that is what the script copies: naming files
+          # here would test a payload the real one does not have.
+          mkdir -p unpacked/resources unpacked/locales
+          printf 'stub' > unpacked/AnotherCrewLink.exe
+          printf 'stub' > unpacked/resources/app.asar
+          printf 'stub' > unpacked/locales/en-US.pak
 
       # The version carries a prerelease suffix on purpose. `VIProductVersion` takes four
       # numbers and aborts on anything else, the release workflow triggers on `v2.*` --
@@ -183,6 +190,12 @@ jobs:
           # The bridge is the script the installed fleet actually runs, so it is the one
           # whose failure would be discovered by everybody at once.
           "$makensis" -DVERSION=1.1.0 -DSOURCE_DIR=../stubs installer/bridge.nsi
+          # And the one that carries an ordinary 1.0.x release -- §4.9's way of proving the
+          # contract against real updaters. Its payload is a tree, not three named files, so
+          # compiling it exercises a path the other two do not have.
+          "$makensis" -DVERSION=1.0.3 -DSOURCE_DIR=../unpacked \
+            -DOUT_FILE=AnotherCrewLink-Setup-1.0.3.exe installer/legacy.nsi
+          test -s installer/AnotherCrewLink-Setup-1.0.3.exe
 
       # The silent switches are a contract with 1.x's updater, which spawns
       # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that

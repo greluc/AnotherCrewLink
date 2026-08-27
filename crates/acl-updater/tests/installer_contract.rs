@@ -48,12 +48,36 @@ fn script() -> String {
     named("anothercrewlink.nsi")
 }
 
-/// One of the installer scripts, by name.
+/// Every installer script there is.
+///
+/// Named here rather than globbed, so adding a fourth is a deliberate act that makes a
+/// test fail until somebody has said which of these apply to it.
+const SCRIPTS: [&str; 3] = ["anothercrewlink.nsi", "bridge.nsi", "legacy.nsi"];
+
+/// One of the installer scripts, by name, with `common.nsh` resolved into it.
+///
+/// The shared half of the contract moved into an include on 2026-08-27, and a test that
+/// read only the `.nsi` would have declared every one of these scripts broken. Resolving it
+/// the way `makensis` does keeps the assertions asking about the script *as compiled*,
+/// which is the thing that reaches the fleet -- and it means a script that stops including
+/// the common file fails these tests rather than quietly losing the contract.
 fn named(file: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../installer")
-        .join(file);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../installer");
+    let path = directory.join(file);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let Some(at) = text.find("!include \"common.nsh\"") else {
+        return text;
+    };
+    let shared = std::fs::read_to_string(directory.join("common.nsh")).expect("common.nsh");
+    // In place, because order matters to some of these checks -- `IfSilent` must come
+    // before the `MessageBox` it guards, and that is only true once the include is where
+    // the script put it.
+    format!(
+        "{}\n{shared}\n{}",
+        &text[..at],
+        &text[at + "!include \"common.nsh\"".len()..]
+    )
 }
 
 /// One of them with its comments removed, for the checks that must not match prose.
@@ -141,11 +165,6 @@ fn the_install_needs_no_elevation() {
     );
 }
 
-/// The artefact keeps the name 1.x has always published under.
-///
-/// `electron-updater`'s `findFile` picks by extension and then prefers a filename
-/// containing `x64` — 1.x published no token and one `.exe`, so any single `.exe` keeps
-/// being picked. Changing the extension is the same act as abandoning the installed base.
 /// A prerelease version still compiles.
 ///
 /// `VIProductVersion` takes four numbers and aborts on anything else — `makensis` says
@@ -158,7 +177,7 @@ fn the_install_needs_no_elevation() {
 /// having it: what NSIS will accept is not visible to a test that reads the source.
 #[test]
 fn a_prerelease_version_does_not_abort_the_build() {
-    for file in ["anothercrewlink.nsi", "bridge.nsi"] {
+    for file in SCRIPTS {
         let instructions = instructions_of(file);
         assert!(
             instructions.contains("!searchparse"),
@@ -224,6 +243,11 @@ fn the_refusal_shows_no_dialog_when_silent() {
     }
 }
 
+/// The artefact keeps the name 1.x has always published under.
+///
+/// `electron-updater`'s `findFile` picks by extension and then prefers a filename
+/// containing `x64` — 1.x published no token and one `.exe`, so any single `.exe` keeps
+/// being picked. Changing the extension is the same act as abandoning the installed base.
 #[test]
 fn the_artefact_is_still_one_exe_under_the_old_name() {
     let script = script();
@@ -451,6 +475,140 @@ mod bridge {
         assert!(
             !uninstall.contains("1.x-backup"),
             "the uninstaller removes the way back to 1.x"
+        );
+    }
+}
+
+/// Every script honours the contract, whichever one the fleet ends up running.
+///
+/// The point of `common.nsh` is that there is one copy of this. The point of this test is
+/// that a script can still fail to include it — and the failure would be a script that
+/// compiles, installs, and ignores `/S`, which is discovered by whoever is waiting on the
+/// process.
+#[test]
+fn all_three_scripts_keep_the_same_contract() {
+    for file in SCRIPTS {
+        let raw = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../installer")
+                .join(file),
+        )
+        .expect("the script");
+        assert!(
+            raw.contains("!include \"common.nsh\""),
+            "{file} does not include common.nsh, so it has its own copy of the contract"
+        );
+
+        let instructions = instructions_of(file);
+        for required in [
+            "--updated",
+            "${GetOptions}",
+            "RequestExecutionLevel user",
+            "ACL_ARCHITECTURE_GUARD",
+            "WriteUninstaller",
+        ] {
+            assert!(
+                instructions.contains(required),
+                "{file} is missing {required}"
+            );
+        }
+        assert!(
+            !instructions.contains("RequestExecutionLevel admin"),
+            "{file} asks for elevation, which makes every update a UAC prompt"
+        );
+    }
+}
+
+/// The script that carries an ordinary 1.0.x release.
+///
+/// §4.9: "Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
+/// its CLI contract is tested against real 1.x updaters before it carries anything
+/// important." Decided 2026-08-27 that this is the path, and this is the artefact.
+mod legacy {
+    use super::instructions_of;
+
+    fn legacy() -> String {
+        instructions_of("legacy.nsi")
+    }
+
+    /// It installs where 1.x already is, not where 2.x goes.
+    ///
+    /// `the_directory_name_matches_the_clients` holds the other two to
+    /// `acl_core::paths::APP_DIRECTORY`, which is `ACL`. This one must not match it: an
+    /// ordinary 1.0.3 that installed into 2.x's directory would leave somebody with two 1.x
+    /// installations, the old one still on the Start menu.
+    #[test]
+    fn it_lands_in_the_directory_one_x_already_uses() {
+        let instructions = legacy();
+        assert!(
+            instructions.contains("!define APP_DIRECTORY \"AnotherCrewLink\""),
+            "the 1.0.x installer no longer targets 1.x's own directory"
+        );
+        assert!(
+            !instructions.contains("!define APP_DIRECTORY \"ACL\""),
+            "it targets 2.x's directory, which would be a second installation"
+        );
+    }
+
+    /// It carries the Electron client, and carries it as a tree.
+    ///
+    /// Naming the files would be a list that goes stale on the next Electron upgrade —
+    /// silently, by omitting a DLL rather than by failing. And if it carried the Rust
+    /// binaries it would not be an ordinary 1.0.x release; it would be the bridge, which is
+    /// a different act with a different blast radius.
+    #[test]
+    fn it_carries_the_electron_client_and_not_the_rust_one() {
+        let instructions = legacy();
+        assert!(
+            instructions.contains("File /r \"${SOURCE_DIR}\\*.*\""),
+            "the payload is not the unpacked Electron tree"
+        );
+        assert!(
+            instructions.contains("win-unpacked"),
+            "SOURCE_DIR does not default to what `electron-builder --dir` produces"
+        );
+        assert!(
+            !instructions.contains("anothercrewlink.exe"),
+            "it ships the Rust client, which would make this the bridge and not a 1.0.x \
+             release"
+        );
+    }
+
+    /// The uninstaller takes away what the installer put down.
+    ///
+    /// A tree went in; a tree has to come out. `RMDir /r "$INSTDIR"` cannot be the answer —
+    /// it would delete the uninstaller while it is running — so the pieces are named, and
+    /// the two that hold everything of any size are the ones worth asserting.
+    #[test]
+    fn what_it_installs_it_can_remove() {
+        let instructions = legacy();
+        for required in [
+            "RMDir /r \"$INSTDIR\\resources\"",
+            "RMDir /r \"$INSTDIR\\locales\"",
+        ] {
+            assert!(
+                instructions.contains(required),
+                "the uninstaller leaves {required} behind"
+            );
+        }
+        assert!(
+            !instructions.contains("RMDir /r \"$INSTDIR\""),
+            "it deletes the directory the running uninstaller is in"
+        );
+    }
+
+    /// The settings survive it, because 2.x reads them forward.
+    ///
+    /// `%APPDATA%\AnotherCrewLink` is 1.x's config and also what `acl_core::paths::import`
+    /// reads on 2.x's first run. An uninstaller that removed it would cost somebody their
+    /// settings on a migration they had not made yet.
+    #[test]
+    fn it_leaves_the_settings_for_the_importer() {
+        let instructions = legacy();
+        assert!(
+            !instructions.contains("$APPDATA"),
+            "the 1.0.x installer touches %APPDATA%, where both the old settings and the \
+             importer's source live"
         );
     }
 }

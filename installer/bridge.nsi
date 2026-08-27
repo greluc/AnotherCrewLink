@@ -6,7 +6,8 @@
 ;
 ;     bridge.exe --updated /S /D=<the 1.x install directory>
 ;
-; So `/D=` points at Electron's installation, and this installs 2.x over it.
+; So `/D=` points at Electron's installation, and this installs 2.x over it. The contract
+; those three arguments make, and why each half of it exists, is in `common.nsh`.
 ;
 ; IT RENAMES. IT DOES NOT DELETE.
 ;
@@ -31,15 +32,6 @@
 ; purpose — a documented way back — and is what the split made possible. Recorded here
 ; rather than done quietly.
 
-Unicode true
-ManifestDPIAware true
-
-!include "MUI2.nsh"
-!include "FileFunc.nsh"
-!include "LogicLib.nsh"
-; For ${RunningX64}, used by the architecture guard in .onInit.
-!include "x64.nsh"
-
 !ifndef VERSION
   !define VERSION "1.1.0"
 !endif
@@ -55,74 +47,25 @@ ManifestDPIAware true
 !define REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_DIRECTORY}"
 ; Where the Electron files are put, inside the installation `/D=` names.
 !define BACKUP "1.x-backup"
+!define DESCRIPTION "${PRODUCT} bridge installer"
+; Different from the plain installer's, and the difference is the reassurance: this script
+; renames the 1.x installation, so a refused user needs to be told it did not.
+!define ARCH_REFUSAL "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Your existing installation has not been changed and keeps working."
+
+!include "common.nsh"
 
 Name "${PRODUCT}"
 OutFile "${OUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\${APP_DIRECTORY}"
-RequestExecutionLevel user
-SetCompressor /SOLID lzma
-
-; VIProductVersion takes four numbers and nothing else -- a prerelease suffix aborts
-; makensis with "invalid VIProductVersion format". That is not a hypothetical: the release
-; workflow triggers on `v2.*`, which matches `v2.0.0-rc.1`, and §4.12's staged rollout is
-; exactly the thing that would be tagged that way. So the numeric part is taken here rather
-; than assumed of the caller.
-;
-; `!searchparse` fails when there is no `-` to find, which is the ordinary case; /noerrors
-; makes that silent and the !ifndef below supplies the whole string.
-!searchparse /noerrors "${VERSION}" "" VERSION_NUMERIC "-"
-!ifndef VERSION_NUMERIC
-  !define VERSION_NUMERIC "${VERSION}"
-!endif
-
-; The numeric four-part version for the resource, and the full string -- suffix and all --
-; for the keys that are free text. A user reading the file properties should see the version
-; that was released, not a rounded-off one.
-VIProductVersion "${VERSION_NUMERIC}.0"
-VIAddVersionKey "ProductName" "${PRODUCT}"
-VIAddVersionKey "FileDescription" "${PRODUCT} bridge installer"
-VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "ProductVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Lucas Greuloch. GPL-3.0-or-later."
-
-!define MUI_ABORTWARNING
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "English"
-
-Var IsUpdate
-
-Function ParseArguments
-  ${GetParameters} $R0
-  ${GetOptions} $R0 "--updated" $R1
-  ${IfNot} ${Errors}
-    StrCpy $IsUpdate "1"
-  ${Else}
-    StrCpy $IsUpdate "0"
-  ${EndIf}
-FunctionEnd
 
 Function .onInit
   Call ParseArguments
-
-  ; The same guard as the plain installer, and this is the one that will actually meet a
-  ; 32-bit machine. §4.12's bridge is published into the 1.x feed, and `findFile` hands the
-  ; single `.exe` to every client regardless of architecture -- there is no 32-bit build to
-  ; prefer, because it was removed on 2026-08-25.
-  ;
-  ; Refusing here does something the plain installer's guard does not: this script renames
-  ; the 1.x installation before it writes anything. Aborting in .onInit is aborting *before*
-  ; that, so a 32-bit user who is offered the bridge keeps a working 1.0.2 rather than
-  ; losing it in exchange for binaries their machine cannot execute.
-  ${IfNot} ${RunningX64}
-    ; No dialog under /S: the 1.x updater spawned this and is waiting on the process. See
-    ; `the_bridge_opens_no_window_at_all` -- an error path is still a path.
-    IfSilent refuse
-    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Your existing installation has not been changed and keeps working."
-  refuse:
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
+  ; This is the guard that will actually meet a 32-bit machine: the fleet is *sent* here by
+  ; its own updater rather than choosing to come. And the ordering matters more than it does
+  ; anywhere else -- the section below renames the 1.x installation, and `.onInit` runs
+  ; before it, so a refused user still has a working 1.0.2 rather than having traded it for
+  ; binaries their machine cannot execute.
+  !insertmacro ACL_ARCHITECTURE_GUARD
 FunctionEnd
 
 Section "Install"

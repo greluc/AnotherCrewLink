@@ -28,9 +28,19 @@ fn tool() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_acl-release"))
 }
 
+/// The passphrase these tests use.
+///
+/// A constant, not a secret: the keys generated here live in a scratch directory and are
+/// thrown away. The real one is the maintainer's and never appears in this repository.
+const PASSPHRASE: &str = "a passphrase for a key that lasts one test";
+
 fn run(arguments: &[&str]) -> String {
     let output = Command::new(tool())
         .args(arguments)
+        // Set for every invocation, because `keys` requires it and `sign` needs it to open
+        // what `keys` wrote. Passed as an environment variable here for the same reason the
+        // tool insists on it: an argument would be in the process list.
+        .env("ACL_RELEASE_KEY_PASSWORD", PASSPHRASE)
         .output()
         .expect("the ceremony tool runs");
     assert!(
@@ -165,6 +175,7 @@ fn the_ceremony_refuses_to_overwrite_a_key() {
 
     let output = Command::new(tool())
         .args(["keys", "--into", &directory.to_string_lossy()])
+        .env("ACL_RELEASE_KEY_PASSWORD", PASSPHRASE)
         .output()
         .expect("the tool runs");
     assert!(!output.status.success(), "it overwrote a key");
@@ -172,5 +183,77 @@ fn the_ceremony_refuses_to_overwrite_a_key() {
         std::fs::read_to_string(directory.join("release.pub")).expect("still a key"),
         first,
         "the key changed"
+    );
+}
+
+/// Without a passphrase there is no key at all.
+///
+/// Decided 2026-08-27: the signing key is encrypted. The failure this guards against is not
+/// somebody forgetting the variable — that is loud and self-correcting — but a tool that
+/// helpfully fell back to generating an unencrypted key, which looks the same from the
+/// outside and leaves the maintainer believing in a factor they do not have.
+#[test]
+fn no_passphrase_means_no_key() {
+    let directory = scratch("no-passphrase");
+    let output = Command::new(tool())
+        .args(["keys", "--into", &directory.to_string_lossy()])
+        .env_remove("ACL_RELEASE_KEY_PASSWORD")
+        .output()
+        .expect("the tool runs");
+
+    assert!(!output.status.success(), "it made a key with no passphrase");
+    assert!(
+        !directory.join("release.key").exists(),
+        "it refused and wrote a key anyway"
+    );
+    let complaint = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        complaint.contains("ACL_RELEASE_KEY_PASSWORD"),
+        "the refusal does not say what is missing: {complaint}"
+    );
+
+    // And an empty one is not a passphrase, though it is a value.
+    let output = Command::new(tool())
+        .args(["keys", "--into", &directory.to_string_lossy()])
+        .env("ACL_RELEASE_KEY_PASSWORD", "")
+        .output()
+        .expect("the tool runs");
+    assert!(!output.status.success(), "an empty passphrase was accepted");
+    assert!(
+        !directory.join("release.key").exists(),
+        "an empty passphrase still wrote a key"
+    );
+}
+
+/// The key on disk really is encrypted, and the passphrase really is the one that opens it.
+///
+/// Asserted against the file rather than against the tool's own report, because "I wrote an
+/// encrypted key" is exactly the sentence a tool that wrote an unencrypted one would also
+/// print. The wrong passphrase must fail; without that half, the first assertion would pass
+/// for a key that any passphrase opens.
+#[test]
+fn the_key_on_disk_needs_the_passphrase() {
+    let directory = scratch("encrypted");
+    run(&["keys", "--into", &directory.to_string_lossy()]);
+
+    let written = std::fs::read_to_string(directory.join("release.key")).expect("a key");
+    let boxed = minisign::SecretKeyBox::from_string(&written).expect("a secret key box");
+    assert!(
+        boxed.into_unencrypted_secret_key().is_err(),
+        "the key opened with no passphrase, so it is not encrypted"
+    );
+
+    let boxed = minisign::SecretKeyBox::from_string(&written).expect("a secret key box");
+    assert!(
+        boxed
+            .into_secret_key(Some("not the passphrase".to_owned()))
+            .is_err(),
+        "the wrong passphrase opened it"
+    );
+
+    let boxed = minisign::SecretKeyBox::from_string(&written).expect("a secret key box");
+    assert!(
+        boxed.into_secret_key(Some(PASSPHRASE.to_owned())).is_ok(),
+        "the right passphrase did not open it"
     );
 }

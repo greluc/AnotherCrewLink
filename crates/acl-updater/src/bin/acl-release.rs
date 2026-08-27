@@ -10,10 +10,14 @@
 //! accident:
 //!
 //! ```text
-//! acl-release keys   --into <directory>            # once, offline, on a machine you trust
+//! ACL_RELEASE_KEY_PASSWORD=… acl-release keys --into <dir>  # once, offline, on a machine
+//!                                                           # you trust
 //! acl-release write  --version <v> --url <u> --artefact <path> --into <path>
-//! acl-release sign   --manifest <path> --key <path> [--public <path>]
+//! ACL_RELEASE_KEY_PASSWORD=… acl-release sign --manifest <path> --key <path> [--public <p>]
 //! ```
+//!
+//! The passphrase comes from the environment in both places, never from an argument: on a
+//! command line it is in the shell's history and in every process listing while it runs.
 //!
 //! # It is not in the client
 //!
@@ -52,9 +56,11 @@ fn main() -> std::process::ExitCode {
 
 fn usage() -> String {
     "usage:\n  \
-     acl-release keys  --into <directory>\n  \
+     acl-release keys  --into <directory>          (ACL_RELEASE_KEY_PASSWORD required)\n  \
      acl-release write --version <v> --url <u> --artefact <path> --into <path>\n  \
-     acl-release sign  --manifest <path> --key <path> [--public <path>]"
+     acl-release sign  --manifest <path> --key <path> [--public <path>]\n\
+     \n\
+     The passphrase is read from ACL_RELEASE_KEY_PASSWORD, never from an argument."
         .to_owned()
 }
 
@@ -64,14 +70,18 @@ fn option(arguments: &[String], name: &str) -> Option<String> {
     arguments.get(at + 1).cloned()
 }
 
-/// Generates a keypair.
+/// Generates a keypair, encrypted with a passphrase.
 ///
-/// Unencrypted, because what protects it is where it is kept -- which is what §4.9 asks
-/// for: "held offline and never in a release-workflow secret". A passphrase typed at every
-/// signing is a passphrase that ends up in a note beside the key.
+/// **Decided 2026-08-27.** §4.9's requirement is where the key lives — "held offline and
+/// never in a release-workflow secret" — and that is still the thing that matters most.
+/// The passphrase is the second factor on top of it: whoever copies the file has not yet
+/// got a signing key. It is only worth having if the passphrase lives somewhere the key
+/// file does not, which is a property of the maintainer's habits and not of this tool.
 ///
-/// That is a default rather than a rule: `sign` loads an encrypted key too, given
-/// `ACL_RELEASE_KEY_PASSWORD`. A maintainer who wants one is not blocked by this tool.
+/// There is no unencrypted mode here, deliberately. A flag for it is a flag somebody
+/// reaches for on the day the passphrase is inconvenient, and the resulting file looks
+/// exactly like the encrypted one from the outside. `sign` still *loads* an unencrypted
+/// key, because refusing to would be this tool deciding what an existing key may be.
 ///
 /// Refuses to overwrite. A ceremony that silently replaced a key would be one that could
 /// quietly retire every client that trusts the old one.
@@ -87,9 +97,24 @@ fn keys(arguments: &[String]) -> Result<String, String> {
             ));
         }
     }
+
+    // From the environment, for the reason `sign` takes it that way: a passphrase on a
+    // command line is in the shell's history and in every process listing while it runs.
+    // Refused rather than defaulted -- a key that silently came out unencrypted is worse
+    // than no key, because it is a key somebody believes is protected.
+    let password = std::env::var("ACL_RELEASE_KEY_PASSWORD").map_err(|_| {
+        "set ACL_RELEASE_KEY_PASSWORD to the passphrase for the new key.\n\
+         It is read from the environment and not from an argument, so it stays out of the \
+         shell history and out of the process list. Keep it somewhere the key file is not: \
+         a passphrase stored beside the key it protects is not a second factor."
+            .to_owned()
+    })?;
+    if password.is_empty() {
+        return Err("ACL_RELEASE_KEY_PASSWORD is empty, which encrypts nothing".to_owned());
+    }
     std::fs::create_dir_all(&into).map_err(|error| error.to_string())?;
 
-    let pair = minisign::KeyPair::generate_unencrypted_keypair()
+    let pair = minisign::KeyPair::generate_encrypted_keypair(Some(password.clone()))
         .map_err(|error| format!("no keypair: {error}"))?;
     std::fs::write(
         &public,
@@ -102,11 +127,28 @@ fn keys(arguments: &[String]) -> Result<String, String> {
     )
     .map_err(|error| error.to_string())?;
 
+    // And open it again with the passphrase. The alternative is finding out at the first
+    // release that the file cannot be decrypted -- by which point the ceremony has been
+    // done, the machine may be gone, and there is nothing to compare against.
+    let written = std::fs::read_to_string(&secret).map_err(|error| error.to_string())?;
+    minisign::SecretKeyBox::from_string(&written)
+        .map_err(|error| error.to_string())
+        .and_then(|boxed| {
+            boxed
+                .into_secret_key(Some(password))
+                .map_err(|error| error.to_string())
+        })
+        .map_err(|error| {
+            format!("the key was written but will not open with that passphrase: {error}")
+        })?;
+
     Ok(format!(
-        "wrote {} and {}\n\n\
+        "wrote {} and {}, and opened the secret half again with the passphrase\n\n\
          Put this in `manifest::PUBLIC_KEYS`:\n\n    \"{}\",\n\n\
-         Then keep {} somewhere the release workflow cannot reach. §4.9: the operational \
-         key is \"held offline and never in a release-workflow secret\".",
+         Then keep {} somewhere the release workflow cannot reach, and the passphrase \
+         somewhere that is not beside it. §4.9: the operational key is \"held offline and \
+         never in a release-workflow secret\" -- the passphrase is on top of that, not \
+         instead of it.",
         public.display(),
         secret.display(),
         pair.pk.to_base64(),

@@ -6,13 +6,30 @@ and deciding that a build is good.
 ## Once, and offline
 
 ```bash
-cargo run -p acl-updater --features ceremony --bin acl-release -- keys --into <somewhere safe>
+ACL_RELEASE_KEY_PASSWORD='...' \
+  cargo run -p acl-updater --features ceremony --bin acl-release -- keys --into <somewhere safe>
 ```
 
-It prints the public key ready to paste into `acl_updater::manifest::PUBLIC_KEYS`, and it
-refuses to overwrite an existing key — silently replacing one would retire every client
-that trusts the old one, at the next release, with no step in between where anybody could
-notice.
+**The key is encrypted, and the passphrase is required** — decided 2026-08-27. There is no
+unencrypted mode: a flag for one is a flag somebody reaches for on the day the passphrase
+is inconvenient, and the file it produces looks identical from the outside. Without the
+variable the tool refuses and writes nothing.
+
+The passphrase comes from the environment and never from an argument, because a command
+line is in the shell's history and in every process listing while it runs. In an
+interactive shell, prefix the command with a space if your shell is set to skip those from
+history — or read it from a password manager rather than typing it at all.
+
+**Keep the passphrase somewhere the key file is not.** A passphrase stored beside the key
+it protects is not a second factor; it is a longer key. The whole value of this choice is
+that copying the file gets nobody a signing key.
+
+The tool prints the public key ready to paste into `acl_updater::manifest::PUBLIC_KEYS`. It
+opens the secret half again with the passphrase before reporting success — a key that
+cannot be decrypted is otherwise discovered at the first release, by which point the
+ceremony machine may be gone. And it refuses to overwrite an existing key: silently
+replacing one would retire every client that trusts the old one, at the next release, with
+no step in between where anybody could notice.
 
 **Two keys, and §4.9 says why.** Run it twice, into two places. One signs releases; the
 other never touches a workflow and is what the project recovers with if the first is lost
@@ -41,7 +58,8 @@ cargo run -p acl-updater --features ceremony --bin acl-release -- write \
   --into release.json
 
 # 3. Sign it, and check the signature against the key the *fleet* has.
-cargo run -p acl-updater --features ceremony --bin acl-release -- sign \
+ACL_RELEASE_KEY_PASSWORD='...' \
+  cargo run -p acl-updater --features ceremony --bin acl-release -- sign \
   --manifest release.json --key <somewhere safe>/release.key --public <somewhere safe>/release.pub
 ```
 
