@@ -282,6 +282,19 @@ fn feed(arguments: &[String]) -> Result<String, String> {
     // be a function of its inputs, and a timestamp taken here differs between two builds of
     // the same commit.
     let released = option(arguments, "--released").ok_or_else(usage)?;
+    // UTC, with a `Z`. Every `latest.yml` electron-builder ever wrote for this project used
+    // that shape -- `test/fixtures/latest-1.0.5.yml` is one -- and the first rehearsal of
+    // this command produced `2026-08-27T10:17:35+02:00` instead, because `git log %cI`
+    // reports a local offset. Nothing observed rejects it, which is the problem: the file
+    // that moves the fleet is not the place to find out what an unfamiliar shape does to
+    // some updater version somebody is still running.
+    if !released.ends_with('Z') || !released.contains('T') {
+        return Err(format!(
+            "--released is {released}, which is not the shape electron-builder wrote.\n\
+             It wants UTC with a trailing Z, as in 2026-08-27T08:17:35.000Z. From a commit \
+             date: date -u -d \"$(git log -1 --format=%cI)\" +%Y-%m-%dT%H:%M:%S.000Z"
+        ));
+    }
     let into = PathBuf::from(option(arguments, "--into").ok_or_else(usage)?);
 
     let parsed = semver::Version::parse(&version).map_err(|error| format!("--version: {error}"))?;

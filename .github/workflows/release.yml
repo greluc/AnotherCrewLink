@@ -103,11 +103,30 @@ jobs:
           fi
           wait $installer
           set -e
-          test -f proof/AnotherCrewLink.exe
-          test -f proof/resources/app.asar
+
+          # File for file against what was packaged, not a spot check. `legacy.nsi` copies a
+          # tree, and the way a tree copy goes wrong is by omitting something -- a DLL whose
+          # name changed with the Electron version, a directory the recursion missed. Testing
+          # for the .exe and the asar would pass for an installation that cannot start.
+          (cd dist/win-unpacked && find . -type f | sort) > packaged.txt
+          (cd proof && find . -type f | sort) > installed.txt
+          # One-directional: everything packaged must have arrived, and the installer is
+          # allowed to add its own Uninstall.exe, which is not in the packaged tree.
+          missing=$(comm -23 packaged.txt installed.txt)
+          if [ -n "$missing" ]; then
+            echo "::error::the installer did not lay down every packaged file"
+            echo "$missing"
+            exit 1
+          fi
+          echo "all $(wc -l < packaged.txt) packaged files arrived"
+
           ./proof/Uninstall.exe //S _?=$(cygpath -w "$PWD/proof") </dev/null >/dev/null 2>&1
           for _ in $(seq 30); do [ -f proof/AnotherCrewLink.exe ] || break; sleep 1; done
           test ! -f proof/AnotherCrewLink.exe
+          # And what it left behind. `resources` and `locales` hold everything of any size;
+          # an uninstaller that leaves them leaves most of the installation.
+          test ! -d proof/resources
+          test ! -d proof/locales
 
       - name: Build the feed generator
         run: cargo build --locked --release --features ceremony -p acl-updater --bin acl-release
@@ -121,7 +140,7 @@ jobs:
           ./target/release/acl-release feed \
             --version ${{ steps.version.outputs.version }} \
             --artefact dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
-            --released "$(git log -1 --format=%cI)" \
+            --released "$(date -u -d "$(git log -1 --format=%cI)" +%Y-%m-%dT%H:%M:%S.000Z)" \
             --into dist/latest.yml
           cat dist/latest.yml
 
