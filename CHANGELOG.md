@@ -1,5 +1,36 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.2
+
+Three things people found by running alpha.1, which is what an alpha is for. Still an
+alpha, and the caveats in alpha.1's notes below all still apply — most of all the one
+about nobody having used this to talk to anybody yet.
+
+### Fixed
+
+- **A terminal window opened beside the client.** It served no purpose and there was
+  nothing to read in it. Gone, on both the client and the elevated helper — the helper
+  too, or the one window would simply have appeared a moment later instead.
+
+  One thing that window did carry: the message you get when the client is already
+  running and you start it again. That is a proper dialog now, because otherwise a
+  second copy would silently do nothing, which looks like a client that will not start.
+
+- **You could not see your own crewmate.** The player list showed everybody except you.
+  You are back, at the top, larger — and with the two things only you can be: muted and
+  deafened. There is not much point in a mute key you cannot see the effect of.
+
+- **The impostor radio did nothing.** The rule was there and nothing ever triggered it:
+  the client had no way to tell the other impostors it was transmitting. It does now.
+
+  Hold your radio key and the other impostors hear you regardless of distance, filtered
+  the way 1.x filters it. It works between 2.x clients only — a 1.x client in the same
+  lobby will not hear it and will not be disturbed by it. **This needs server 0.1.3**;
+  against an older server the key does nothing, and nothing breaks.
+
+  Being an impostor, being alive and the lobby allowing it are all checked, at both
+  ends.
+
 ## v2.0.0-alpha.1
 
 **This is the rewrite, and it is an alpha in the honest sense: nobody has yet used it to

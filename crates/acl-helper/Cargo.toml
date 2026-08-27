@@ -20,7 +20,7 @@ path = "src/main.rs"
 # `acl-game` without its `http` feature, and that is the point of the feature existing.
 # §6 of docs/rust-port/06-security.md requires the elevated process to carry no HTTP
 # client; the core fetches the offsets bundle and sends it over the pipe.
-acl-game = { path = "../acl-game", version = "2.0.0-alpha.1", default-features = false }
+acl-game = { path = "../acl-game", version = "2.0.0-alpha.2", default-features = false }
 acl-ipc.workspace = true
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 # The offsets bundle arrives as the JSON it is on disk, not as postcard: it carries
@@ -49,7 +49,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 # For `launch::arguments`, so the test builds the command line the same way the core does
 # rather than spelling it out a third time.
-acl-core = { path = "../acl-core", version = "2.0.0-alpha.1" }
+acl-core = { path = "../acl-core", version = "2.0.0-alpha.2" }
 
 [lints]
 workspace = true
