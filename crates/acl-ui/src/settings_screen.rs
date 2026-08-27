@@ -50,6 +50,12 @@ pub enum Kind {
     },
     /// Free text.
     Text,
+    /// A sentence, drawn where it stands.
+    ///
+    /// Not a setting and not interactive: some fields need a line beside them that is a
+    /// rule rather than a hint, and a tooltip is not where a rule belongs — nobody hovers a
+    /// field before typing in it.
+    Note,
     /// A button that tries something and changes nothing.
     ///
     /// Deliberately **not** [`Kind::Action`]. An action here means one that alters the
@@ -86,6 +92,22 @@ pub struct Choice {
     pub value: Default_,
     /// The i18n key of its label.
     pub label: &'static str,
+}
+
+impl Kind {
+    /// Whether this control stands for a value in `config.json`.
+    ///
+    /// Four kinds do not. `Action` runs something, `Probe` tries something, `Note` says
+    /// something and `Meter` reads something; each needs a key, because the screen builds a
+    /// widget id from it, and none of them is a setting.
+    ///
+    /// Said here rather than in each rule that needs it. Three tests were listing the kinds
+    /// to skip, and a fourth kind added later would have been forgotten by all three at
+    /// once — the way `Note` was, until `the_two_scopes_hold_the_two_lists` caught it.
+    #[must_use]
+    pub const fn is_a_setting(self) -> bool {
+        !matches!(self, Self::Action | Self::Probe | Self::Note | Self::Meter)
+    }
 }
 
 /// One control on the screen.
@@ -261,6 +283,15 @@ const PUBLIC_LOBBY: &[Control] = &[
         "publicLobby_language",
         Some("settings.lobbysettings.public_lobby.language"),
         Kind::Language,
+    )
+    .gated_by("publicLobby_on"),
+    // Under the two fields it is about, because it is about what somebody types into them.
+    // `PublicLobbySettings.tsx` shows it in the same place and for the same reason: a title
+    // is the one thing here that every other player reads.
+    Control::of(
+        "publicLobbyBanWarning",
+        Some("settings.lobbysettings.public_lobby.ban_warning"),
+        Kind::Note,
     )
     .gated_by("publicLobby_on"),
 ];
@@ -749,14 +780,14 @@ mod tests {
 
     /// A control that writes nothing must not share a key with a setting.
     ///
-    /// The same collision `an_action_is_not_a_setting` guards, for the two kinds that were
-    /// added beside it: any code that treated controls uniformly would write `testSpeaker`
+    /// The same collision `an_action_is_not_a_setting` guards, for the three kinds that
+    /// were added beside it: any code that treated controls uniformly would write `testSpeaker`
     /// into `config.json` as though somebody had chosen it.
     #[test]
     fn nothing_that_writes_nothing_shadows_a_setting() {
         let schema = schema();
         for control in controls() {
-            if !matches!(control.kind, Kind::Probe | Kind::Meter) {
+            if control.kind.is_a_setting() || control.kind == Kind::Action {
                 continue;
             }
             assert!(
@@ -821,7 +852,7 @@ mod tests {
     fn every_control_points_at_a_real_setting() {
         let schema = schema();
         for control in controls() {
-            if matches!(control.kind, Kind::Action | Kind::Probe | Kind::Meter) {
+            if !control.kind.is_a_setting() {
                 continue;
             }
             assert!(
@@ -1023,7 +1054,7 @@ mod tests {
         let lobby: BTreeSet<&str> = lobby_defaults().into_iter().map(|(key, _)| key).collect();
         for section in SECTIONS {
             for control in section.controls {
-                if control.kind == Kind::Action {
+                if !control.kind.is_a_setting() {
                     continue;
                 }
                 assert_eq!(

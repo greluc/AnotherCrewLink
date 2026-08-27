@@ -208,6 +208,26 @@ fn gate_checkbox(
     }
 }
 
+/// What the microphone is hearing, as a bar.
+///
+/// A bar rather than a number. The question it answers is "is it hearing me", and the
+/// answer is whether the thing moves when somebody speaks — a figure would have to be read
+/// and compared against another figure to say the same thing.
+fn meter(ui: &mut Ui, level: Option<f32>) {
+    // Green when it is live and grey when nothing has reported: an empty grey bar reads as
+    // "not listening", and an empty green one as "listening, and hearing silence".
+    let fill = if level.is_some() {
+        egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    ui.add(
+        egui::ProgressBar::new(level.unwrap_or(0.0).clamp(0.0, 1.0))
+            .desired_width(200.0)
+            .fill(fill),
+    );
+}
+
 /// One control.
 fn one(
     ui: &mut Ui,
@@ -288,18 +308,7 @@ fn one(
                 changes.push(Change::Capture(control.key));
             }
         }
-        Kind::Meter => {
-            let level = context.input_level.unwrap_or(0.0).clamp(0.0, 1.0);
-            // A bar rather than a number. The question it answers is "is it hearing me",
-            // and the answer is whether the thing moves when you speak.
-            ui.add(egui::ProgressBar::new(level).desired_width(200.0).fill(
-                if context.input_level.is_some() {
-                    egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
-                } else {
-                    ui.visuals().weak_text_color()
-                },
-            ));
-        }
+        Kind::Meter => meter(ui, context.input_level),
         Kind::Text => {
             let mut text = values.text_at(scope, control.key);
             ui.label(label);
@@ -317,6 +326,11 @@ fn one(
                     warning: control.warning,
                 });
             }
+        }
+        Kind::Note => {
+            // Weak and wrapped: it is a rule to be read once, not a label competing with
+            // the fields above it.
+            ui.label(egui::RichText::new(label).weak().small());
         }
         Kind::Probe => {
             // The same `Run`, and never a warning: a `Probe` has none by construction, and
