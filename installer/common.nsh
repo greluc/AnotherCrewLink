@@ -25,7 +25,7 @@
 ; UNSIGNED, AND THAT IS WRITTEN DOWN.
 ;
 ; §4.9 item 2: no Authenticode. Every user sees the unknown-publisher warning on every
-; install, exactly as they do with 1.0.2 today. Nothing here hides that or works around it.
+; install, exactly as they do with 1.x today. Nothing here hides that or works around it.
 ;
 ; WHY AN INCLUDE, SINCE 2026-08-27.
 ;
@@ -109,9 +109,11 @@ FunctionEnd
 ; 32-bit, so it would run to the end, report success, and leave the machine with binaries
 ; that cannot start.
 ;
-; Refusing rescues nobody -- decided 2026-08-27, 1.0.2 is the last version for those
-; machines. It is the difference between an install that reports success and leaves nothing
-; working, and one that says what happened.
+; Refusing rescues nobody. Decided 2026-08-27: those machines stop here, and 1.0.5 -- the
+; last release built with a 32-bit half -- is the last one they get. `CHANGELOG.md`'s 1.0.6
+; entry is where that is said to them; this is only the mechanism. It is the difference
+; between an install that reports success and leaves nothing working, and one that says
+; what happened.
 ;
 ; A macro rather than a Function, and that is not style: `Abort` inside a Function called
 ; from `.onInit` abandons the *function*, and the install carries on. Inlined, it aborts the

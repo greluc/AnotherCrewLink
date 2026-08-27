@@ -483,12 +483,27 @@ Ordered steps:
 > nobody; it is the difference between an install that reports success and leaves nothing
 > working, and one that says what happened.
 >
-> **What is left is a decision, and it is not a technical one.** Either ia32 and Linux users
-> are told plainly that 1.0.2 is their last version and the sunset ends their service, or
-> the sunset does not switch off the 1.x wire format while they are still on it. `G4` cannot
-> be written to cover them, because the artefact it would rehearse is one nobody is building.
-> Until that is settled, `G4` is a **one-leg gate — x64 only**, and saying so is better than
-> a three-leg gate that quietly cannot pass.
+> **Decided 2026-08-27: 1.0.2 is the last version for those machines, and they are told
+> so.** Not left to be discovered on the day the server stops answering. The alternative —
+> keeping the 1.x wire format alive indefinitely for a population nobody can build for — was
+> weighed and refused: it is a second protocol maintained forever against a fleet that can
+> never move, and the sunset decision of 2026-08-24 exists precisely to avoid that.
+>
+> What this obliges, and none of it is optional:
+>
+> * The release notes say it, in the register `CHANGELOG.md` is written in — what changed,
+>   what the user sees, what their options are. **This is already done**: the drafted
+>   `v1.0.6` entry announces both removals at length, and was written on 2026-08-25 when
+>   they happened. The decision recorded here does not create that obligation; it confirms
+>   the answer that entry already gave, and stops the plan documents contradicting it.
+> * Both installers refuse a 32-bit machine rather than reporting success over binaries that
+>   cannot start, which is now true and tested.
+> * `G4` is a **one-leg gate — x64 only**. There is no ia32 or Linux leg to fail, and a
+>   three-leg gate that quietly cannot pass is worse than a one-leg gate that says so.
+>
+> The honest summary is that this decision does not cost those users anything the removal of
+> 2026-08-25 had not already cost them. What it changes is whether they hear it from us or
+> from a client that stops connecting.
 
 > **`G4` gates the 2.0 release itself.** It is no longer a gate whose failure mode is "no fleet migration; 2.0 stays a parallel install" — that fallback died with the sunset decision. Since 2.0 shipping is what switches the 1.x wire format off, a `G4` that has not passed and a fleet that has not moved mean 2.0 cannot ship without cutting off every remaining 1.x user on the day. If `G4` fails, 2.0 waits.
 

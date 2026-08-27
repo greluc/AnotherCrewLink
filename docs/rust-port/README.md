@@ -138,6 +138,13 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > never in the corpus and still are not. `TASKS`, `DISCUSSION`, comms sabotage, doors and
 > cameras need four people in a real round, and freeplay provably cannot reach them —
 > the Electron reader takes all five *inside* `if (state === GameState.TASKS)`.
+>
+> **Decided 2026-08-27: that gap does not hold 2.0.** Exactness is unchanged and still
+> fails on one divergence. What was decided is that a release does not wait on getting four
+> people into a lobby — the release notes name the unproven situations instead, and
+> [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10) stays open. The cost is
+> stated rather than glossed: the fourth session found 23 divergences in branches nobody had
+> reached, so if one of these five is wrong, the players find it.
 > `test/recordings/README.md` records the measurement.
 >
 > `P4+` is **built**, and that is the sentence this note has been unable to write. The
@@ -248,7 +255,7 @@ arithmetic and this page is the summary of it.
 | Gate | After | Criterion | If it fails |
 | --- | --- | --- | --- |
 | **G0** | 1.x offsets trust chain (H2) | A malicious-bundle corpus is rejected with a distinct error each; on-disk tampering with the cached bundle is rejected as far as the validator can catch it, proving validation at load and not only at download; the validator accepts all 81 real upstream files unchanged; the embedded floor holds with the mirror unreachable, and the client says which bundle it is using; a bundle is published within 6 hours of a real Among Us update | P2+ does not start its offsets work |
-| **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame | Bug; fix and retry |
+| **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame. Exact is still exact — one divergence fails it. Since 2026-08-27 the *coverage* of the corpus is not a release gate: five situations need four people in an online round, and 2.0 does not wait on scheduling them | Bug; fix and retry |
 | **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss (the `i686-pc-windows-msvc` build criterion was struck on 2026-08-24 with the target) | **Stop the port** |
 | ~~**G3**~~ | Transport | **Struck 2026-08-25.** It asked that a 1.0.2 Electron client and a Rust client hear each other in the same lobby, direct and via TURN; the same call under each impairment profile; and a three-client mixed-generation lobby with one client leaving and rejoining | Was *no staged rollout; reconsider scope*. That is now the standing position rather than a contingency |
 | **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64 update from a staging feed to the bridge, silently. Narrowed from three legs on 2026-08-25: ia32 went with the Windows 11 floor and Linux with its support | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |

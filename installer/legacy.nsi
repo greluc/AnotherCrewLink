@@ -19,22 +19,28 @@
 ; IT INSTALLS WHERE 1.x ALREADY IS.
 ;
 ; `APP_DIRECTORY` is `AnotherCrewLink` here and `ACL` in the other two. That is not drift:
-; 1.0.2 installs to `%LOCALAPPDATA%\Programs\AnotherCrewLink` and its updater passes that
+; 1.x installs to `%LOCALAPPDATA%\Programs\AnotherCrewLink` and its updater passes that
 ; path back as `/D=`, so an update lands in the right place either way -- but somebody
-; installing 1.0.3 fresh must land there too, or they end up with two 1.x installations.
+; installing this fresh must land there too, or they end up with two 1.x installations.
 ; `installer_contract.rs` checks the *other* two against `acl_core::paths::APP_DIRECTORY`
 ; and this one against 1.x's, because they are answering different questions.
 ;
 ; IT IS x64-ONLY, AND THAT IS THE DECISION SHOWING UP EARLY.
 ;
-; `electron-builder.yml` has had no ia32 target since 2026-08-25, so a 1.0.3 built from this
-; tree is x64. A 32-bit 1.0.2 client whose updater fetches it would be handed x64 binaries --
-; the same failure the bridge would cause, arriving one release sooner. The guard in
-; `common.nsh` refuses it, and the message here says what is true for a 1.x user rather than
-; talking about 2.0: for them this release is where updates stop.
+; `electron-builder.yml` has had no ia32 target since 2026-08-25, so a 1.0.6 built from this
+; tree is x64. A 32-bit client whose updater fetches it would be handed x64 binaries -- the
+; same failure the bridge would cause, arriving earlier. The guard in `common.nsh` refuses
+; it, and the message here says what is true for a 1.x user rather than talking about 2.0.
+;
+; This is already written down where it counts. `CHANGELOG.md`'s 1.0.6 entry announces both
+; removals in the register that file is written in -- what changed, what the user sees, what
+; their options are. The guard is the mechanism; that entry is the telling.
 
+; 1.0.6: the next ordinary 1.x release, already drafted in CHANGELOG.md and not yet
+; shipped. Making it the one that goes out through this script is what §4.9 asks for,
+; and it costs no extra release.
 !ifndef VERSION
-  !define VERSION "1.0.3"
+  !define VERSION "1.0.6"
 !endif
 ; What `electron-builder --dir` produces. Not `target/release`: this carries the Electron
 ; client, not the Rust one.
@@ -50,7 +56,10 @@
 !define APP_DIRECTORY "AnotherCrewLink"
 !define REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_DIRECTORY}"
 !define DESCRIPTION "${PRODUCT} installer"
-!define ARCH_REFUSAL "AnotherCrewLink needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows. Version 1.0.2 is the last release that supports it and keeps working; nothing here has been changed."
+; No version number, for the reason the other two carry: one here goes stale every
+; release. What a 1.x user needs to know is that nothing was touched and that this is
+; where updates stop for them -- `CHANGELOG.md`'s 1.0.6 entry is where the rest is said.
+!define ARCH_REFUSAL "AnotherCrewLink needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, and this is the last release for it. Your installation has not been changed and keeps working; there will be no further updates."
 
 !include "common.nsh"
 
@@ -119,7 +128,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT}.lnk"
   DeleteRegKey HKCU "${REGISTRY_KEY}"
 
-  ; `%APPDATA%\AnotherCrewLink` is left alone, exactly as 1.0.2's own uninstaller leaves it:
+  ; `%APPDATA%\AnotherCrewLink` is left alone, exactly as 1.x's own uninstaller leaves it:
   ; it is the settings, and it is also what `acl_core::paths::import` reads forward when 2.x
   ; first runs. An uninstall that removed it would quietly cost somebody their settings on a
   ; migration they had not made yet.

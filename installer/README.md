@@ -49,7 +49,7 @@ against real 1.x updaters before it carries anything important."*
 ## It is unsigned
 
 §4.9 item 2. Every user sees the unknown-publisher warning on every install, exactly as they
-do with 1.0.2 today. SmartScreen reputation is never accumulated, so the warning stays
+do with 1.x today. SmartScreen reputation is never accumulated, so the warning stays
 forever rather than fading; enterprise allow-listing by publisher is unavailable. What
 protects the *update* path instead is the minisign signature over the manifest
 (`acl_updater::manifest`), and what protects a first download is TLS and nothing else.

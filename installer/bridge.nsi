@@ -63,7 +63,7 @@ Function .onInit
   ; This is the guard that will actually meet a 32-bit machine: the fleet is *sent* here by
   ; its own updater rather than choosing to come. And the ordering matters more than it does
   ; anywhere else -- the section below renames the 1.x installation, and `.onInit` runs
-  ; before it, so a refused user still has a working 1.0.2 rather than having traded it for
+  ; before it, so a refused user still has a working 1.x rather than having traded it for
   ; binaries their machine cannot execute.
   !insertmacro ACL_ARCHITECTURE_GUARD
 FunctionEnd

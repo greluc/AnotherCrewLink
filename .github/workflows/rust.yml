@@ -193,9 +193,9 @@ jobs:
           # And the one that carries an ordinary 1.0.x release -- §4.9's way of proving the
           # contract against real updaters. Its payload is a tree, not three named files, so
           # compiling it exercises a path the other two do not have.
-          "$makensis" -DVERSION=1.0.3 -DSOURCE_DIR=../unpacked \
-            -DOUT_FILE=AnotherCrewLink-Setup-1.0.3.exe installer/legacy.nsi
-          test -s installer/AnotherCrewLink-Setup-1.0.3.exe
+          "$makensis" -DVERSION=1.0.6 -DSOURCE_DIR=../unpacked \
+            -DOUT_FILE=AnotherCrewLink-Setup-1.0.6.exe installer/legacy.nsi
+          test -s installer/AnotherCrewLink-Setup-1.0.6.exe
 
       # The silent switches are a contract with 1.x's updater, which spawns
       # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that

@@ -787,6 +787,27 @@ fixtures.
 > Non-negotiable: this is a lossless, purely mechanical transformation, so
 > anything less than exact means a bug, not a tolerance.
 >
+> **Amended 2026-08-27: exactness stays non-negotiable, coverage does not gate 2.0.**
+> The two were being run together. Every frame the corpus reaches must still match exactly
+> and the gate fails on a single divergence — that has not moved. What is decided is the
+> other question: 2.0 does not wait for a corpus that reaches the meeting HUD, cameras,
+> doors, comms sabotage, or `isDead`/`lightRadius` under a lights sabotage.
+>
+> Those need four people in an online round, because all of them are read inside
+> `if (state === GameState.TASKS)` and freeplay never enters it. Blocking a release on
+> scheduling four players is a release that slips for a reason no amount of work here can
+> resolve.
+>
+> What the decision costs, stated rather than glossed: if the Rust reader diverges in one of
+> those branches, the players find it. The fourth recording session found 23 divergences in
+> branches nobody had reached before, so the rate is not zero. Against that, both readers
+> skip these fields identically today, and 1.x has been shipping the same code paths for
+> years.
+>
+> So: [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10) stays open, the
+> release notes say which situations are unproven, and the first recorded round after 2.0
+> ships is still worth doing — it is just not a gate.
+>
 > Unchanged by the hardening track, with one addition: G1 must pass byte-for-byte
 > using the embedded bundle, which proves the bundle format lost nothing that
 > `lookup.json` carried.

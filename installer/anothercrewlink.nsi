@@ -26,7 +26,10 @@
 !define APP_DIRECTORY "ACL"
 !define REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_DIRECTORY}"
 !define DESCRIPTION "${PRODUCT} installer"
-!define ARCH_REFUSAL "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
+; No version number in this sentence. It named 1.0.2 until 2026-08-27, by which point
+; 1.0.5 had shipped and 1.0.6 was drafted -- a number here is a number that goes stale
+; every release, in a message only the people already having a bad day will read.
+!define ARCH_REFUSAL "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. The last 1.x release that supports it keeps working."
 
 !include "common.nsh"
 
