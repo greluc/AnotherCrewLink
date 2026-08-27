@@ -190,6 +190,9 @@ jobs:
       - name: Which instruction does not return
         shell: bash
         run: |
+          # Actions runs bash with -e, and `wait` on a process this killed returns
+          # non-zero -- which ended the step after the first probe.
+          set +e
           makensis="/c/Program Files (x86)/NSIS/makensis.exe"
           probe() {
             name=$1; shift
