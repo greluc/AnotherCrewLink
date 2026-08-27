@@ -70,6 +70,10 @@ windows-sys = { version = "0.61", features = [
 # than an invented payload: the track is negotiated as Opus, and a packetizer handed
 # something else is a packetizer whose behaviour nobody has looked at.
 acl-audio.workspace = true
+# So `start_game` can check its plan against the real store identifiers rather than against
+# copies of them. The module itself does not need the crate -- it takes the four fields a
+# platform is described by, because a custom platform has no `Platform` to be.
+acl-types.workspace = true
 # For `tests/session_conformance.rs`, which drives two sessions against a real server.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net"] }
 

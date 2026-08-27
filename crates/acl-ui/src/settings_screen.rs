@@ -393,6 +393,33 @@ const OVERLAY: &[Control] = &[
     .gated_by("enableOverlay"),
 ];
 
+/// Where the game is started from.
+///
+/// The three the client knows how to start. A custom entry is chosen by its own title and
+/// cannot be listed here, because the list is a compile-time constant and those are not —
+/// see `waiting_for_the_game`, which starts one that is already stored.
+const LAUNCH: &[Control] = &[Control::of(
+    "launchPlatform",
+    Some("game.open"),
+    Kind::Choice(&[
+        // The stored values are the shipped client's, upper case and not tidied: they are
+        // `Platform::key`, which has a test comparing it against `GamePlatform.ts`. Writing
+        // them in lower case would move an existing setting to a platform nobody chose.
+        Choice {
+            value: Default_::Text("STEAM"),
+            label: "platform.steam",
+        },
+        Choice {
+            value: Default_::Text("EPIC"),
+            label: "platform.epicgames",
+        },
+        Choice {
+            value: Default_::Text("MICROSOFT"),
+            label: "platform.microsoft",
+        },
+    ]),
+)];
+
 /// The network, and the server.
 const ADVANCED: &[Control] = &[
     Control::toggle("natFix", "settings.advanced.nat_fix")
@@ -480,6 +507,13 @@ pub const SECTIONS: &[Section] = &[
         title: Some("settings.overlay.title"),
         scope: Scope::Client,
         controls: OVERLAY,
+    },
+    Section {
+        // `game.open` is "Open via", which is the phrase the launch button uses. The
+        // section borrows it rather than inventing a heading no translator has.
+        title: Some("game.open"),
+        scope: Scope::Client,
+        controls: LAUNCH,
     },
     Section {
         title: Some("settings.advanced.title"),

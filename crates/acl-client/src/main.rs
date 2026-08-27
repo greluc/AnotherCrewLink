@@ -888,6 +888,11 @@ struct Client {
     /// messages for the one that matters. `None` until the first frame, which is what makes
     /// the setting take effect on the way up as well as when it is changed.
     on_top: Option<bool>,
+    /// Why the game would not start, if somebody pressed the button and it did not.
+    ///
+    /// Kept rather than shown once: the button is on a screen that repaints five times a
+    /// second, and a message drawn only on the frame of the click is one nobody reads.
+    launch_trouble: Option<String>,
     /// The last public-lobby listing sent, so it is sent only when it changes.
     ///
     /// The server rate-limits this handler, and the listing is derived from a frame that
@@ -950,6 +955,7 @@ impl Client {
             reader,
             last_seen: None,
             overlay_shown: false,
+            launch_trouble: None,
             listed: None,
             on_top: None,
             watching_lobbies: false,
@@ -2022,6 +2028,82 @@ impl Client {
 }
 
 impl Client {
+    /// What the window shows while there is no game.
+    ///
+    /// `Menu.tsx`: the sentence, and under it a way to start the game. Until 2026-08-27
+    /// this was one label. `acl_types::platform` had carried the store identifiers since
+    /// the port began, with a test comparing every string against `GamePlatform.ts`, and
+    /// nothing used them — the client could tell you it was waiting and could not do the one
+    /// thing that would end the wait.
+    ///
+    /// The platform is `launchPlatform`, the same key in the same file 1.x writes, so
+    /// somebody who chose Epic there is still on Epic here.
+    fn waiting_for_the_game(&mut self, ui: &mut egui::Ui) {
+        // Translated up front rather than through a closure that borrows `self`: pressing
+        // the button needs `self` mutably, and the two cannot overlap.
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let waiting = say("game.waiting");
+        let no_platform = say("game.error_platform");
+        let open_via = say("game.open");
+        let open_error = say("game.open_error");
+        ui.label(waiting);
+
+        let stored = self.settings.config().text_at("launchPlatform");
+        let Some(platform) = acl_types::platform::Platform::from_key(&stored) else {
+            // No platform, or one this build does not know. `Menu.tsx` says exactly this
+            // rather than offering a button that cannot work.
+            ui.label(no_platform);
+            return;
+        };
+        let name = say(platform.translate_key());
+
+        let mut pressed = false;
+        ui.horizontal(|ui| {
+            ui.label(open_via);
+            pressed = ui.button(name).clicked();
+        });
+        // Outside the closure, which borrows `self` for the translator above.
+        if pressed {
+            self.launch_trouble = None;
+            self.start_the_game(platform);
+        }
+        if let Some(why) = self.launch_trouble.clone() {
+            ui.colored_label(egui::Color32::from_rgb(230, 140, 90), why);
+            ui.label(open_error);
+        }
+    }
+
+    /// Starts the game on a platform, and says so either way.
+    ///
+    /// The Microsoft Store entry is a program rather than a URI and its path is `none`
+    /// until somebody sets one, so this can refuse — and refusing has to be visible.
+    /// `Menu.tsx` shows `game.open_error`, which tells the player to start it themselves,
+    /// and that is better than a button that appears to do nothing.
+    fn start_the_game(&mut self, platform: acl_types::platform::Platform) {
+        let execute: Vec<String> = platform
+            .executable()
+            .map(|name| vec![name.to_owned()])
+            .unwrap_or_default();
+        let described = acl_core::start_game::Described {
+            run_path: platform.run_path(),
+            is_uri: matches!(platform.run_type(), acl_types::platform::RunType::Uri),
+            execute: &execute,
+        };
+        let outcome = acl_core::start_game::plan(described)
+            .and_then(|what| acl_core::start_game::start(&what));
+        match outcome {
+            Ok(()) => acl_core::log_info!("game", "asked {platform:?} to start Among Us"),
+            Err(why) => {
+                acl_core::log_warn!("game", "could not start Among Us on {platform:?}: {why}");
+                self.launch_trouble = Some(why.to_string());
+            }
+        }
+    }
+
     /// The lobby's code and what the game is doing, as one line.
     ///
     /// `hideCode` is applied here: `Voice.tsx` line 277 replaces the code with the word
@@ -2352,7 +2434,7 @@ impl eframe::App for Client {
 
             ui.separator();
             let Some(state) = reader.latest() else {
-                ui.label("No frame yet. Waiting for Among Us.");
+                self.waiting_for_the_game(ui);
                 return;
             };
 

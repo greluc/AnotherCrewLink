@@ -56,6 +56,7 @@ dependencies = [
  "acl-game",
  "acl-ipc",
  "acl-net",
+ "acl-types",
  "async-trait",
  "bytes",
  "postcard",
