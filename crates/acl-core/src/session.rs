@@ -527,10 +527,29 @@ impl Lobby {
         });
     }
 
+    /// Reads the server's `VAD`.
+    ///
+    /// **One object, not two positional arguments — corrected 2026-08-27.** This read
+    /// `args[0]` as a socket id string and `args[1]` as a boolean, which is a shape the
+    /// server has never sent. `src/socket.rs` builds
+    /// `{"activity": bool, "client": i64, "socketId": String}` and delivers that.
+    ///
+    /// So every relayed `VAD` became `Event::Ignored` and no speaking indicator ever lit up.
+    /// Nothing failed: an ignored event is an ordinary outcome, the tests here asserted the
+    /// shape this code invented, and the only way to find it was to put two clients either
+    /// side of the real server and watch one fail to see the other.
+    ///
+    /// `client` is in the payload and is not read. The socket id is what every other event
+    /// keys on and what `Link` already maps to a client id; taking the server's `client`
+    /// here would be a second route to the same answer, and two routes disagree eventually.
     fn on_voice_activity(args: &[Value], events: &mut Vec<Event>) {
+        let Some(payload) = args.first() else {
+            events.push(Event::Ignored("VAD with no payload".to_owned()));
+            return;
+        };
         match (
-            args.first().and_then(Value::as_str),
-            args.get(1).and_then(Value::as_bool),
+            payload.get("socketId").and_then(Value::as_str),
+            payload.get("activity").and_then(Value::as_bool),
         ) {
             (Some(socket_id), Some(speaking)) => events.push(Event::VoiceActivity {
                 socket_id: socket_id.to_owned(),
@@ -654,6 +673,27 @@ impl Session {
             .emit("join_lobby", vec![json!(id)], true)
             .await
             .map(drop)
+    }
+
+    /// Tells the lobby whether this player is speaking.
+    ///
+    /// The other half of `Event::VoiceActivity`, which this session has parsed since it was
+    /// written and nothing could produce. A client that only listens sees everyone else's
+    /// speaking indicator and lights up nobody else's, which looks like everybody else being
+    /// quiet rather than like a missing feature.
+    ///
+    /// # Not sent per frame
+    ///
+    /// The caller sends this on a *transition*. Speech is fifty frames a second and this is
+    /// a socket message to every peer in the lobby; at that rate it would be more traffic
+    /// than the audio. `Vad`'s hangover is what turns a level into something with edges
+    /// worth reporting.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn voice_activity(&mut self, speaking: bool) -> Result<(), TransportError> {
+        self.emit("VAD", vec![json!(speaking)]).await
     }
 
     /// Leaves the lobby, staying connected.
@@ -1070,6 +1110,47 @@ mod tests {
         let mut lobby = Lobby::new();
         let events = lobby.interpret(event("somethingNewer", vec![json!([])]));
         assert_eq!(events, vec![Event::Ignored("somethingNewer".to_owned())]);
+    }
+
+    /// The `VAD` the server actually sends, in the shape it actually sends it.
+    ///
+    /// Built from `src/socket.rs` in the server repository rather than from what this side
+    /// expected. That distinction is the whole of this test: the parser read two positional
+    /// arguments until 2026-08-27 and the server has always sent one object, so every
+    /// relayed `VAD` became `Ignored` — an ordinary outcome, no error anywhere, and a
+    /// speaking indicator that never lit up for anybody in either window.
+    ///
+    /// The tests around it all passed, because they asserted the shape this code invented.
+    /// It took two clients either side of a real server, watching one fail to see the other.
+    #[test]
+    fn the_vad_the_server_sends_is_understood() {
+        let mut lobby = Lobby::new();
+        let events = lobby.interpret(event(
+            "VAD",
+            vec![json!({"activity": true, "client": 42, "socketId": "abc123"})],
+        ));
+        assert_eq!(
+            events,
+            vec![Event::VoiceActivity {
+                socket_id: "abc123".to_owned(),
+                speaking: true,
+            }]
+        );
+
+        // And the other edge, which is the one that matters more: a level that only ever
+        // arrives leaves an indicator on for the rest of the lobby, which reads as a peer
+        // whose microphone is stuck open.
+        let events = lobby.interpret(event(
+            "VAD",
+            vec![json!({"activity": false, "client": 42, "socketId": "abc123"})],
+        ));
+        assert_eq!(
+            events,
+            vec![Event::VoiceActivity {
+                socket_id: "abc123".to_owned(),
+                speaking: false,
+            }]
+        );
     }
 
     /// And everything the server sends is handled, which is what says the `Ignored` arm is

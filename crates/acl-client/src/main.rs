@@ -578,6 +578,11 @@ struct Client {
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
     portraits: Portraits,
+    /// Whether this player is speaking, as this end's own detector last said.
+    ///
+    /// Kept here because the detector reports *changes* and the window paints levels: a
+    /// frame that saw no transition still has to draw the indicator it had.
+    local_talking: bool,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -625,6 +630,7 @@ impl Client {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
             portraits: Portraits::default(),
+            local_talking: false,
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -679,12 +685,19 @@ impl Client {
             return;
         };
 
+        // Every one of these was a stub until 2026-08-27, so the overlay showed everybody
+        // connected, nobody audible and nobody speaking -- a strip of crewmates that never
+        // changed. The main window had two of them wired and the overlay had none, which is
+        // the same lobby described two ways on one screen.
+        let link = &self.link;
+        let heard = &self.speaking;
+        let local_talking = self.local_talking;
         let voice = Voice {
-            talking: &|_| false,
+            talking: &|client_id| link.talking(client_id),
             dead: &|_| false,
-            connected: &|_| true,
-            audible: &|_| false,
-            local_talking: false,
+            connected: &|client_id| link.hears(client_id),
+            audible: &|client_id| heard.contains(&client_id),
+            local_talking,
             local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
             impostor_radio: None,
             local_is_impostor: false,
@@ -1485,6 +1498,15 @@ impl eframe::App for Client {
         // for its whole body, and building artwork needs `&mut` on the loader and the cache
         // -- so this happens first and the closure reads the answer.
         let dressed = self.dress_portraits(&ctx);
+        // Whether this player started or stopped speaking, out to everybody else's
+        // indicator. Only on a transition -- the detector's hangover is what makes that a
+        // handful of messages a minute rather than fifty a second.
+        // Held as well as sent: the local player's own row reads it, and the detector
+        // reports transitions rather than a level, so nothing else remembers it.
+        if let Some(speaking) = self.audio.take_voice_activity() {
+            self.local_talking = speaking;
+            self.link.say_speaking(speaking);
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
             Self::title_bar(ui, &ctx, &mut page);
@@ -1569,14 +1591,19 @@ impl eframe::App for Client {
             // waits on audio moving.
             let link = &self.link;
             let speaking = &self.speaking;
+            // This end's own detector, which `roster` folds into the local player's row.
+            let local_talking = self.local_talking;
             let voice = Voice {
-                // `talking` is the game's own idea of who is speaking and still has no
-                // source; `audible` is this end's, and audio arriving is exactly it.
-                talking: &|_| false,
+                // Two different questions, and they used to be one. `talking` is whether a
+                // peer's stream carries speech, which is the `VAD` the server relays;
+                // `audible` is whether audio is arriving at all. A peer can be audible and
+                // silent -- that is most of a lobby, most of the time -- and one can be
+                // talking with nothing arriving, which is the shape of a broken connection.
+                talking: &|client_id| link.talking(client_id),
                 dead: &|_| false,
                 connected: &|client_id| link.hears(client_id),
                 audible: &|client_id| speaking.contains(&client_id),
-                local_talking: false,
+                local_talking,
                 local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
                 impostor_radio: None,
                 local_is_impostor: false,
