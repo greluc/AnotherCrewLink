@@ -148,6 +148,7 @@ jobs:
         run: |
           gh release create "v${{ steps.version.outputs.version }}" \
             --draft \
+            --target "$GITHUB_SHA" \
             --title "AnotherCrewLink ${{ steps.version.outputs.version }}" \
             --notes "Draft. Read CHANGELOG.md for the notes, then publish.
 
