@@ -63,22 +63,52 @@ ACL_RELEASE_KEY_PASSWORD='...' \
   --manifest release.json --key <somewhere safe>/release.key --public <somewhere safe>/release.pub
 ```
 
-An encrypted key works too: set `ACL_RELEASE_KEY_PASSWORD`. Not an argument, because a
-passphrase on a command line is a passphrase in the shell's history and in every process
-listing on the machine while it runs.
-
 Publish `release.json` and `release.json.minisig` side by side. The updater derives the
 second name from the first rather than accepting one, so a feed cannot point at a manifest
 in one place and a signature somewhere else.
 
-## What is still yours to decide
+## Releasing 1.0.6, which comes first
 
-**Shipping an ordinary 1.0.x release through the new installer first.** §4.9's own
-instruction, and it is the only thing that tests the CLI contract against real 1.x
-updaters. `crates/acl-updater/tests/installer_contract.rs` checks the script still *claims*
-to honour it; nothing here can check that it does.
+§4.9: "Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so its
+CLI contract is tested against real 1.x updaters before it carries anything important."
+Decided 2026-08-27; 1.0.6 is that release, and `CHANGELOG.md` already carries its notes.
 
-**The three manual checks in `installer/README.md`**, on a machine, once.
+`.github/workflows/release.yml` does all of it — `electron-builder --dir`, then
+`installer/legacy.nsi`, then a silent install and uninstall of what it produced, then
+`latest.yml`, then a **draft** release. Run it from the Actions tab.
 
-**Whether the build is good.** The release workflow drafts rather than publishes, because a
+The manual equivalent, if you would rather watch it happen:
+
+```bash
+npm run compile && npx electron-builder --win --x64 --dir
+makensis -DVERSION=1.0.6 -DSOURCE_DIR=../dist/win-unpacked installer/legacy.nsi
+
+# latest.yml, which electron-builder used to write and no longer does. The digest and the
+# size are read off the artefact; the date is passed in so two builds of one commit agree.
+cargo run -p acl-updater --features ceremony --bin acl-release -- feed \
+  --version 1.0.6 \
+  --artefact installer/AnotherCrewLink-Setup-1.0.6.exe \
+  --released "$(git log -1 --format=%cI)" \
+  --into latest.yml
+```
+
+**Publishing the draft is what moves the fleet.** Every 1.x install polls for `latest.yml`
+and runs whatever version it names. Nothing before that step is visible to anybody, and
+nothing after it is reversible — a release can be deleted, but not un-downloaded. So the
+workflow drafts and stops, and a person presses the button.
+
+`acl-release feed` refuses a 2.x version, because a 1.x feed announcing 2.0.0 migrates the
+entire installed base the moment it goes up. That is §4.12's bridge, which announces itself
+as 1.1.0 and has a staged rollout; it is not something to reach by mistyping a version here.
+
+## What is still yours
+
+**The keys, and the passphrase.** Nothing can do that step for you, and nothing should:
+what protects the key is where it is kept and where the passphrase is not.
+
+**The three manual checks in `installer/README.md`**, on a machine, once. CI compiles all
+three scripts and runs an install and uninstall on a clean runner, which catches a script
+NSIS will not accept. It cannot catch a machine with an installation already on it.
+
+**Whether the build is good.** Both release workflows draft rather than publish, because a
 release that publishes itself is one nobody looked at.

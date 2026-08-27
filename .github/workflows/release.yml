@@ -30,18 +30,105 @@ jobs:
         shell: bash
         run: npm ci || (echo "npm ci failed, retrying once" && npm ci)
 
-      - name: Build App
-        run: npm run publish
-        env:
-          # The workflow's own token already carries contents: write for this
-          # repository, so publishing needs no separately configured secret.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `--dir` and nothing else. Since 2026-08-27 this release is packaged by this
+      # project's own NSIS script rather than by electron-builder's, which is §4.9's
+      # instruction: "Prove the new NSIS script by shipping an **ordinary 1.0.x release**
+      # with it, so its CLI contract is tested against real 1.x updaters before it carries
+      # anything important."
+      #
+      # It used to be `--publish always`, which built the installer, wrote `latest.yml` and
+      # uploaded both. All three of those are now done below, deliberately and in order,
+      # because the last of them is what moves the fleet.
+      - name: Build the application, unpacked
+        run: npm run compile && npx electron-builder --win --x64 --dir
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      # The tag and package.json have to agree, or the feed announces a version nobody can
+      # find. Checked rather than trusted: the failure is silent until a client tries.
+      - name: The tag matches package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$tag" != "${{ steps.version.outputs.version }}" ]; then
+            echo "package.json says ${{ steps.version.outputs.version }}, the tag says $tag"
+            exit 1
+          fi
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress --yes
+
+      # `installer/legacy.nsi`, the same script `rust.yml` compiles and runs on every push.
+      # `-DOUT_FILE` is not passed: the default is the name 1.x has always published under,
+      # and `findFile` picks the single `.exe` in the release by extension.
+      - name: Package it with this project's own installer
+        shell: bash
+        run: |
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          "$makensis" -DVERSION=${{ steps.version.outputs.version }} \
+            -DSOURCE_DIR=../dist/win-unpacked installer/legacy.nsi
+          mv installer/AnotherCrewLink-Setup-*.exe dist/
+          ls -l dist/AnotherCrewLink-Setup-*.exe
+
+      # What it produced, installed and removed again before anybody is offered it. The same
+      # command line 1.x's updater will use -- `//S` and not `/S`, because Git Bash rewrites
+      # an argument that looks like a POSIX path before the program sees it, and the
+      # installer would not be silent.
+      - name: It installs and uninstalls silently
+        shell: bash
+        run: |
+          set +e
+          ./dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe --updated //S \
+            /D=$(cygpath -w "$PWD/proof") </dev/null >install.log 2>&1 &
+          installer=$!
+          for _ in $(seq 60); do kill -0 $installer 2>/dev/null || break; sleep 1; done
+          if kill -0 $installer 2>/dev/null; then
+            kill -9 $installer 2>/dev/null; wait $installer 2>/dev/null
+            echo "::error::the installer did not exit under /S; the fleet's updater would hang"
+            exit 1
+          fi
+          wait $installer
+          set -e
+          test -f proof/AnotherCrewLink.exe
+          test -f proof/resources/app.asar
+          ./proof/Uninstall.exe //S _?=$(cygpath -w "$PWD/proof") </dev/null >/dev/null 2>&1
+          for _ in $(seq 30); do [ -f proof/AnotherCrewLink.exe ] || break; sleep 1; done
+          test ! -f proof/AnotherCrewLink.exe
+
+      - name: Build the feed generator
+        run: cargo build --locked --release --features ceremony -p acl-updater --bin acl-release
+
+      # `latest.yml`, which electron-builder used to write and no longer does. The digest and
+      # size are read off the artefact; the date is passed in rather than taken from the
+      # clock, so two builds of the same commit produce the same file.
+      - name: Describe the release to the 1.x fleet
+        shell: bash
+        run: |
+          ./target/release/acl-release feed \
+            --version ${{ steps.version.outputs.version }} \
+            --artefact dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+            --released "$(git log -1 --format=%cI)" \
+            --into dist/latest.yml
+          cat dist/latest.yml
+
+      - name: Attest the installer
+        uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
+        with:
+          subject-path: dist/AnotherCrewLink-Setup-*.exe
 
       - name: Upload Installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: AnotherCrewLink Installer Windows
-          path: 'dist/AnotherCrewLink Setup*.exe'
+          path: |
+            dist/AnotherCrewLink-Setup-*.exe
+            dist/latest.yml
           if-no-files-found: error
 
       - name: Upload Unpacked 64bit
@@ -49,3 +136,28 @@ jobs:
         with:
           name: AnotherCrewLink Unpacked 64bit
           path: 'dist/win-unpacked'
+
+      # Drafted, never published, and `latest.yml` is what makes that distinction matter.
+      # Publishing a release containing it is the act that moves every installed 1.x client;
+      # a workflow that did it automatically would be a fleet migration that happened because
+      # somebody clicked "Run workflow". So a person opens the draft and presses the button.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --draft \
+            --title "AnotherCrewLink ${{ steps.version.outputs.version }}" \
+            --notes "Draft. Read CHANGELOG.md for the notes, then publish.
+
+          This release was packaged by \`installer/legacy.nsi\` rather than by
+          electron-builder — §4.9's instruction, to test the 2.x installer's CLI contract
+          against real 1.x updaters before the bridge depends on it.
+
+          \`latest.yml\` is attached. **Publishing this release is what moves the fleet.**" \
+            dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+            dist/latest.yml || \
+          gh release upload "v${{ steps.version.outputs.version }}" \
+            dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+            dist/latest.yml --clobber

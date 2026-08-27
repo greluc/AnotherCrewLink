@@ -98,6 +98,60 @@ mod tests {
 
     use super::LegacyRelease;
 
+    /// The document electron-builder actually published for 1.0.5, reproduced.
+    ///
+    /// This is the strongest check available without a fleet. `test/fixtures/latest-1.0.5.yml`
+    /// is the real file from the v1.0.5 release — written by the tool this generator replaces,
+    /// read by the updaters this generator has to satisfy. If the two agree byte for byte on the
+    /// same inputs, the format is right for reasons that have nothing to do with what anybody
+    /// here believed about it.
+    ///
+    /// It also settles `there_is_no_blockmap` from the other direction: electron-builder's own
+    /// 1.0.5 feed has no blockmap entry either, so omitting one is matching it rather than
+    /// departing from it.
+    #[test]
+    fn it_reproduces_the_feed_electron_builder_published() {
+        use base64::Engine as _;
+
+        let real = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test/fixtures/latest-1.0.5.yml"),
+        )
+        .expect("the vendored 1.0.5 feed");
+
+        // Read back out of the fixture rather than retyped, so this cannot drift from it.
+        let digest = real
+            .lines()
+            .find_map(|line| line.strip_prefix("sha512: "))
+            .expect("a top-level digest");
+        let size = real
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("size: "))
+            .expect("a size")
+            .parse()
+            .expect("a number");
+        let released = real
+            .lines()
+            .find_map(|line| line.strip_prefix("releaseDate: '")?.strip_suffix('\''))
+            .expect("a release date");
+
+        let ours = LegacyRelease {
+            version: "1.0.5".to_owned(),
+            file_name: "AnotherCrewLink-Setup-1.0.5.exe".to_owned(),
+            sha512: base64::engine::general_purpose::STANDARD
+                .decode(digest)
+                .expect("the digest is base64"),
+            size,
+            released: released.to_owned(),
+        }
+        .to_yaml();
+
+        assert_eq!(
+            ours, real,
+            "the generated feed differs from the one the fleet was actually served"
+        );
+    }
+
     fn release() -> LegacyRelease {
         use sha2::Digest as _;
 

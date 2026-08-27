@@ -257,3 +257,105 @@ fn the_key_on_disk_needs_the_passphrase() {
         "the right passphrase did not open it"
     );
 }
+
+/// The 1.x feed, written from the artefact rather than from arguments.
+///
+/// `latest.yml` is the file that moves the fleet: every 1.x install polls for it and runs
+/// whatever version it names. `acl_updater::legacy_feed` had produced this document since it
+/// was written and had no caller until 2026-08-27 — a generator nothing calls is a generator
+/// whose output nobody has seen.
+#[test]
+fn the_feed_describes_the_artefact_it_was_given() {
+    let directory = scratch("feed");
+    let artefact = directory.join("AnotherCrewLink-Setup-1.0.6.exe");
+    std::fs::write(&artefact, b"pretend this is an installer").expect("an artefact");
+    let feed = directory.join("latest.yml");
+
+    run(&[
+        "feed",
+        "--version",
+        "1.0.6",
+        "--artefact",
+        &artefact.to_string_lossy(),
+        "--released",
+        "2026-08-27T06:00:00.000Z",
+        "--into",
+        &feed.to_string_lossy(),
+    ]);
+
+    let document = std::fs::read_to_string(&feed).expect("the feed");
+    assert!(document.contains("version: 1.0.6"), "{document}");
+    assert!(document.contains("size: 28"), "{document}");
+    // The name comes off the path, so a feed cannot name a file that was never built.
+    assert!(
+        document.contains("path: AnotherCrewLink-Setup-1.0.6.exe"),
+        "{document}"
+    );
+    // Base64, which is what electron-updater reads. Hex is what the 2.x manifest uses, and
+    // a digest in the wrong encoding is a fleet that refuses every download.
+    assert!(
+        !document.contains("sha512: 0")
+            && document
+                .lines()
+                .any(|line| line.starts_with("sha512: ") && line.contains('=')),
+        "the digest does not look like base64: {document}"
+    );
+
+    // And it changes when the file does.
+    std::fs::write(&artefact, b"a different installer entirely").expect("a second artefact");
+    let second = directory.join("second.yml");
+    run(&[
+        "feed",
+        "--version",
+        "1.0.6",
+        "--artefact",
+        &artefact.to_string_lossy(),
+        "--released",
+        "2026-08-27T06:00:00.000Z",
+        "--into",
+        &second.to_string_lossy(),
+    ]);
+    assert_ne!(
+        document,
+        std::fs::read_to_string(&second).expect("the second feed"),
+        "two different artefacts produced the same feed"
+    );
+}
+
+/// It refuses to announce a 2.x version to the 1.x fleet.
+///
+/// Every 1.x client takes what it considers newer than what it is running, so a `latest.yml`
+/// saying `2.0.0` migrates the entire installed base the moment it is published. That is
+/// §4.12's act, with §4.12's blast radius and its staged rollout — not something that should
+/// be reachable by mistyping a version at a release.
+#[test]
+fn the_feed_will_not_move_the_fleet_to_two_x() {
+    let directory = scratch("feed-2x");
+    let artefact = directory.join("AnotherCrewLink-Setup-2.0.0.exe");
+    std::fs::write(&artefact, b"the 2.x installer").expect("an artefact");
+
+    let output = Command::new(tool())
+        .args([
+            "feed",
+            "--version",
+            "2.0.0",
+            "--artefact",
+            &artefact.to_string_lossy(),
+            "--released",
+            "2026-08-27T06:00:00.000Z",
+            "--into",
+            &directory.join("latest.yml").to_string_lossy(),
+        ])
+        .env("ACL_RELEASE_KEY_PASSWORD", PASSPHRASE)
+        .output()
+        .expect("the tool runs");
+
+    assert!(
+        !output.status.success(),
+        "it wrote a 1.x feed announcing 2.0.0, which moves every installed client"
+    );
+    assert!(
+        !directory.join("latest.yml").exists(),
+        "it refused and wrote the feed anyway"
+    );
+}

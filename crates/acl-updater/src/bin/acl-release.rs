@@ -40,6 +40,7 @@ fn main() -> std::process::ExitCode {
         Some("keys") => keys(&arguments),
         Some("write") => write(&arguments),
         Some("sign") => sign(&arguments),
+        Some("feed") => feed(&arguments),
         _ => Err(usage()),
     };
     match outcome {
@@ -58,7 +59,8 @@ fn usage() -> String {
     "usage:\n  \
      acl-release keys  --into <directory>          (ACL_RELEASE_KEY_PASSWORD required)\n  \
      acl-release write --version <v> --url <u> --artefact <path> --into <path>\n  \
-     acl-release sign  --manifest <path> --key <path> [--public <path>]\n\
+     acl-release sign  --manifest <path> --key <path> [--public <path>]\n  \
+     acl-release feed  --version <v> --artefact <path> --released <date> --into <path>\n\
      \n\
      The passphrase is read from ACL_RELEASE_KEY_PASSWORD, never from an argument."
         .to_owned()
@@ -270,4 +272,79 @@ fn signature_path(manifest: &Path) -> PathBuf {
     let mut name = manifest.as_os_str().to_owned();
     name.push(".minisig");
     PathBuf::from(name)
+}
+
+/// Writes `latest.yml`, the document the **1.x** fleet's updater follows.
+///
+/// Not the same file as `write` produces, and the difference matters. `write` makes the
+/// minisign manifest 2.x verifies; this makes the electron-updater feed 1.x polls. A release
+/// that goes out through `legacy.nsi` needs this one, because electron-builder is no longer
+/// the thing packaging it -- and electron-builder was what used to write this file.
+///
+/// `acl_updater::legacy_feed` has done the hard part since it was written and had no caller
+/// until 2026-08-27. A generator nothing calls is a generator whose output nobody has seen.
+///
+/// # This is the file that moves the fleet
+///
+/// Publishing it is the act. Every 1.x install polls for it, and whatever version it names
+/// is what they download and run. So the digest and the size are read off the artefact here
+/// rather than accepted as arguments: a feed whose digest was typed is one that either
+/// describes a file nobody has, or -- worse -- passes.
+fn feed(arguments: &[String]) -> Result<String, String> {
+    let version = option(arguments, "--version").ok_or_else(usage)?;
+    let artefact = PathBuf::from(option(arguments, "--artefact").ok_or_else(usage)?);
+    // Passed in, never read from the clock. This runs in a release job whose output should
+    // be a function of its inputs, and a timestamp taken here differs between two builds of
+    // the same commit.
+    let released = option(arguments, "--released").ok_or_else(usage)?;
+    let into = PathBuf::from(option(arguments, "--into").ok_or_else(usage)?);
+
+    let parsed = semver::Version::parse(&version).map_err(|error| format!("--version: {error}"))?;
+    // A 1.x updater takes what it considers newer than what it is running. A feed announcing
+    // 2.0.0 would be taken by every 1.x client -- which is the fleet migration, and that is
+    // §4.12's act with §4.12's blast radius, not something to do by mistyping a version.
+    if parsed.major != 1 {
+        return Err(format!(
+            "{version} is not a 1.x version.\n\
+             This file is what the 1.x fleet follows: publishing a 2.x version here moves \
+             every installed client at once. If that is the intention, it is §4.12's bridge \
+             and it announces itself as 1.1.0."
+        ));
+    }
+
+    let bytes =
+        std::fs::read(&artefact).map_err(|error| format!("{}: {error}", artefact.display()))?;
+    if bytes.is_empty() {
+        return Err(format!("{} is empty", artefact.display()));
+    }
+    let file_name = artefact
+        .file_name()
+        .ok_or_else(|| format!("{} has no file name", artefact.display()))?
+        .to_string_lossy()
+        .into_owned();
+
+    let digest = {
+        use sha2::Digest as _;
+
+        sha2::Sha512::digest(&bytes).to_vec()
+    };
+    let document = acl_updater::legacy_feed::LegacyRelease {
+        version,
+        file_name: file_name.clone(),
+        sha512: digest,
+        size: bytes.len() as u64,
+        released,
+    }
+    .to_yaml();
+    std::fs::write(&into, &document).map_err(|error| error.to_string())?;
+
+    Ok(format!(
+        "wrote {} for {} ({} bytes)\n\n\
+         Publish it beside the installer, in the same release. Every 1.x client polls for \
+         this file and runs what it names -- so it goes up last, after the artefact it \
+         describes is already downloadable.",
+        into.display(),
+        file_name,
+        bytes.len(),
+    ))
 }
