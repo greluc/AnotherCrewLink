@@ -590,6 +590,13 @@ struct Client {
     /// Kept so the claim is made on the *transition*. `setHost` every frame would be a
     /// message a second to a server that already agrees.
     claimed_host: bool,
+    /// Who the voice layer believes is dead, by client id.
+    ///
+    /// Not the game's `is_dead`, and the difference is the whole point. See
+    /// [`Self::follow_deaths`].
+    dead: std::collections::BTreeMap<i64, bool>,
+    /// The game state the death map was last updated for.
+    last_game_state: Option<acl_game::GameState>,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -640,6 +647,8 @@ impl Client {
             local_talking: false,
             hearable: std::collections::BTreeSet::new(),
             claimed_host: false,
+            dead: std::collections::BTreeMap::new(),
+            last_game_state: None,
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -702,13 +711,14 @@ impl Client {
         let heard = &self.speaking;
         let local_talking = self.local_talking;
         let hearable = &self.hearable;
+        let believed_dead = &self.dead;
         let can_hear = |client_id: i64| {
             link.socket_of(client_id)
                 .is_some_and(|socket| hearable.contains(socket))
         };
         let voice = Voice {
             talking: &|client_id| link.talking(client_id) && can_hear(client_id),
-            dead: &|_| false,
+            dead: &|client_id| believed_dead.get(&client_id).copied().unwrap_or(false),
             connected: &|client_id| link.hears(client_id),
             audible: &|client_id| heard.contains(&client_id),
             local_talking,
@@ -1467,6 +1477,63 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Everything the frame needs settled before anything is painted.
+    ///
+    /// It is here rather than inside the panel because of borrowing, not tidiness: the
+    /// closure that draws holds `self.reader` for its whole body, and each of these wants
+    /// `&mut` on a different field. Hoisting them makes the borrows disjoint by being
+    /// sequential.
+    ///
+    /// Returns the crewmate textures, keyed by the player's index in the state.
+    fn before_painting(
+        &mut self,
+        context: &egui::Context,
+    ) -> std::collections::BTreeMap<usize, egui::TextureId> {
+        if let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest())
+            .cloned()
+        {
+            self.follow_deaths(&state);
+        }
+        // Held as well as sent: the local player's own row reads it, and the detector
+        // reports transitions rather than a level, so nothing else remembers it. Only on a
+        // transition -- its hangover is what makes that a handful of messages a minute
+        // rather than fifty a second.
+        if let Some(speaking) = self.audio.take_voice_activity() {
+            self.local_talking = speaking;
+            self.link.say_speaking(speaking);
+        }
+        self.dress_portraits(context)
+    }
+
+    /// Updates who the voice layer believes is dead.
+    ///
+    /// The rule and its reason are `acl_ui::roster::follow_deaths`, which is tested without
+    /// a game. What is here is the two things only this side knows: which of the reader's
+    /// five states each of its three phases is, and that the whole thing runs on the
+    /// transition rather than per frame.
+    fn follow_deaths(&mut self, state: &acl_game::AmongUsState) {
+        if self.last_game_state == Some(state.game_state) {
+            return;
+        }
+        self.last_game_state = Some(state.game_state);
+
+        // `Menu` and `Unknown` are `Elsewhere` deliberately: leaving a game is a moment when
+        // what was secret stops being secret, and a map left standing would follow into the
+        // next lobby.
+        let phase = match state.game_state {
+            acl_game::GameState::Lobby => acl_ui::roster::Phase::Lobby,
+            acl_game::GameState::Tasks => acl_ui::roster::Phase::Round,
+            _ => acl_ui::roster::Phase::Elsewhere,
+        };
+        let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
+        acl_ui::roster::follow_deaths(phase, &seats, &mut self.dead);
+    }
+}
+
 impl eframe::App for Client {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(reader) = self.reader.as_mut() {
@@ -1540,19 +1607,7 @@ impl eframe::App for Client {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Before the panel, not inside it. The closure below holds `self.reader` borrowed
-        // for its whole body, and building artwork needs `&mut` on the loader and the cache
-        // -- so this happens first and the closure reads the answer.
-        let dressed = self.dress_portraits(&ctx);
-        // Whether this player started or stopped speaking, out to everybody else's
-        // indicator. Only on a transition -- the detector's hangover is what makes that a
-        // handful of messages a minute rather than fifty a second.
-        // Held as well as sent: the local player's own row reads it, and the detector
-        // reports transitions rather than a level, so nothing else remembers it.
-        if let Some(speaking) = self.audio.take_voice_activity() {
-            self.local_talking = speaking;
-            self.link.say_speaking(speaking);
-        }
+        let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
             Self::title_bar(ui, &ctx, &mut page);
@@ -1640,6 +1695,7 @@ impl eframe::App for Client {
             // This end's own detector, which `roster` folds into the local player's row.
             let local_talking = self.local_talking;
             let hearable = &self.hearable;
+            let believed_dead = &self.dead;
             // `Voice.tsx` line 1598, and the reason is in the comment where `hearable` is
             // filled: a peer is shown as speaking only if this client can hear them.
             let can_hear = |client_id: i64| {
@@ -1653,7 +1709,7 @@ impl eframe::App for Client {
                 // silent -- that is most of a lobby, most of the time -- and one can be
                 // talking with nothing arriving, which is the shape of a broken connection.
                 talking: &|client_id| link.talking(client_id) && can_hear(client_id),
-                dead: &|_| false,
+                dead: &|client_id| believed_dead.get(&client_id).copied().unwrap_or(false),
                 connected: &|client_id| link.hears(client_id),
                 audible: &|client_id| speaking.contains(&client_id),
                 local_talking,

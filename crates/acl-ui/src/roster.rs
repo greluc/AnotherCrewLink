@@ -215,7 +215,83 @@ fn link_for<P: Roster>(player: &P, voice: &Voice<'_>) -> Link {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Link, Roster, Shown, Voice, main_view, overlay};
+    use super::{Link, Phase, Roster, Shown, Voice, follow_deaths, main_view, overlay};
+
+    /// A player the game says is dead, with the given client id.
+    fn dead(client_id: i64) -> Player {
+        Player {
+            client_id,
+            is_dead: true,
+            ..Player::default()
+        }
+    }
+
+    /// And one it says is not.
+    fn alive(client_id: i64) -> Player {
+        Player {
+            client_id,
+            ..Player::default()
+        }
+    }
+
+    /// A round in progress teaches this nothing, and that is the point.
+    ///
+    /// The game knows who has died. Acting on it would cut a player's voice the instant
+    /// they were killed across the map -- which announces a body, to everybody, before
+    /// anybody has found it. `Voice.tsx` guards this by not looking; so does this.
+    #[test]
+    fn nobody_learns_of_a_death_during_the_round() {
+        let players = [dead(1), alive(2)];
+        let mut believed = std::collections::BTreeMap::new();
+        follow_deaths(Phase::Round, &players, &mut believed);
+        assert!(
+            believed.is_empty(),
+            "the round leaked who is dead: {believed:?}"
+        );
+
+        // And it does not un-learn either: a map built at the last meeting survives into
+        // the round, or every round would begin by forgetting who the ghosts are.
+        believed.insert(1, true);
+        follow_deaths(Phase::Round, &players, &mut believed);
+        assert_eq!(believed.get(&1), Some(&true));
+    }
+
+    /// Leaving the round is when it becomes public, so that is when this reads it.
+    #[test]
+    fn a_meeting_is_where_the_deaths_are_learned() {
+        let players = [dead(1), alive(2)];
+        let mut believed = std::collections::BTreeMap::new();
+        follow_deaths(Phase::Elsewhere, &players, &mut believed);
+        assert_eq!(believed.get(&1), Some(&true));
+        assert_eq!(believed.get(&2), Some(&false));
+    }
+
+    /// A new lobby starts with everybody alive.
+    ///
+    /// Without this the ghosts of the last round carry into the next one, and the players
+    /// who were dead cannot be heard by anybody for a game they are alive in.
+    #[test]
+    fn the_lobby_forgets_the_last_round() {
+        let players = [dead(1)];
+        let mut believed = std::collections::BTreeMap::new();
+        believed.insert(1, true);
+        follow_deaths(Phase::Lobby, &players, &mut believed);
+        assert!(believed.is_empty(), "{believed:?}");
+    }
+
+    /// Somebody who left counts as dead.
+    ///
+    /// `player.isDead || player.disconnected` in `Voice.tsx`. They cannot be heard from, and
+    /// treating them as alive leaves a silent living player in the list -- which reads as a
+    /// broken connection rather than as somebody who has gone.
+    #[test]
+    fn a_player_who_left_counts_as_dead() {
+        let mut gone = alive(3);
+        gone.disconnected = true;
+        let mut believed = std::collections::BTreeMap::new();
+        follow_deaths(Phase::Elsewhere, &[gone], &mut believed);
+        assert_eq!(believed.get(&3), Some(&true));
+    }
 
     // Five booleans, because the trait has five and a test double that summarised them
     // would be testing a summary.
@@ -473,5 +549,57 @@ mod tests {
             !shown[1].alive,
             "they are dead as far as the voice layer knows"
         );
+    }
+}
+
+/// Where the game is, as the death rule cares about it.
+///
+/// Three cases rather than the reader's five: this rule asks one question — is the round
+/// running, is it over, or has a new one not started — and mapping the states onto it at the
+/// call site keeps this crate free of the reader's enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Before a round. Everybody is alive again.
+    Lobby,
+    /// A round in progress.
+    Round,
+    /// A meeting, the end of a round, the menu — anywhere the deaths are already public.
+    Elsewhere,
+}
+
+/// Updates who the voice layer believes is dead.
+///
+/// # This is a rule about information, not about bookkeeping
+///
+/// `Voice.tsx` lines 847-860. During a round the map is **not touched**: the game knows who
+/// has died and this client must not act on it, or a player's voice would cut out the
+/// instant they were killed across the map — announcing a body before anybody found it, to
+/// everybody, every time.
+///
+/// What it learns from is leaving the round. A meeting is called or the game ends, and at
+/// that point the deaths are public knowledge anyway. [`Phase::Lobby`] clears the map,
+/// because the next round starts with everybody alive.
+///
+/// `disconnected` counts as dead, exactly as it does there: somebody who has left cannot be
+/// heard from, and treating them as alive leaves a silent living player in the list.
+///
+/// Call it on the state *transition*. Every frame would be the same answer recomputed sixty
+/// times a second, and during a round it is the thing that must not happen at all.
+pub fn follow_deaths<P: Roster>(
+    phase: Phase,
+    players: &[P],
+    believed: &mut std::collections::BTreeMap<i64, bool>,
+) {
+    match phase {
+        Phase::Lobby => believed.clear(),
+        Phase::Round => {}
+        Phase::Elsewhere => {
+            for player in players {
+                believed.insert(
+                    player.client_id(),
+                    player.is_dead() || player.disconnected(),
+                );
+            }
+        }
     }
 }
