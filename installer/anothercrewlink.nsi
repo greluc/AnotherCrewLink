@@ -117,9 +117,7 @@ Function .onInit
     ; never sees a window, so a message box there is a hang rather than an explanation --
     ; the exit code is the only thing it can read.
     IfSilent refuse
-    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$$
-$$
-This machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
+    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
   refuse:
     SetErrorLevel 1
     Abort

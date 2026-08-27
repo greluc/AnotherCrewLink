@@ -102,9 +102,7 @@ Function .onInit
     ; No dialog under /S: the 1.x updater spawned this and is waiting on the process. See
     ; `the_bridge_opens_no_window_at_all` -- an error path is still a path.
     IfSilent refuse
-    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$$
-$$
-This machine is running 32-bit Windows, which this version no longer supports. Your existing installation has not been changed and keeps working."
+    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$\r$\n$\r$\nThis machine is running 32-bit Windows, which this version no longer supports. Your existing installation has not been changed and keeps working."
   refuse:
     SetErrorLevel 1
     Abort
