@@ -1,5 +1,54 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.1
+
+**This is the rewrite, and it is an alpha in the honest sense: nobody has yet used it to
+talk to anybody.** It installs alongside 1.x rather than over it — a different directory, a
+different settings file, its own entry in Add/Remove Programs — so trying it costs you
+nothing and 1.x keeps working exactly as it does today. Nothing updates you to this. You
+have to come and get it.
+
+If you are looking for a working client, use 1.0.6. If you are willing to help find out
+whether this one works, read on.
+
+### What this is
+
+AnotherCrewLink rewritten from Electron to Rust: one 30 MB program instead of a browser,
+a fraction of the memory, and an overlay that draws itself rather than running a second
+Chromium to do it. The voice rules are ported unchanged — the same distances, the same
+walls, the same behaviour when you are dead, in a vent, or in a meeting — and they are
+checked frame for frame against the old reader on twelve and a half thousand recorded
+frames of real games.
+
+### What has actually been proven
+
+- The game reader agrees with 1.x exactly, on every recorded frame of four real sessions.
+- Two clients find each other through a real server, and a tone sent by one is heard —
+  and *recognised* — by the other.
+- The installer installs and uninstalls silently, and 1.0.6 shipped through the same
+  installer machinery before this did.
+
+### What has not
+
+- **Two people, on two machines, hearing each other.** Every piece is tested and the whole
+  has never been used. This is the one thing an alpha is for.
+- **Five game situations** the recordings never reached: meetings, cameras, doors, comms
+  sabotage, and what the lights do to how far you can see. They need four people in a real
+  round, and until somebody plays one, the reader is unproven there.
+- **Updating.** There is no update path yet. You will have to download the next one too.
+
+### Known to be missing
+
+- The impostor radio. It works over a channel 1.x uses and this client deliberately does
+  not have, and moving it would break 1.x players in the same lobby.
+- 32-bit Windows and Linux. There is no build, and there will not be one — the installer
+  says so rather than laying down files that cannot run.
+
+### If it goes wrong
+
+It cannot damage your 1.x installation; they share nothing but your settings, which this
+one reads and never writes back. Uninstalling leaves your settings where 1.x expects them.
+
 ## v1.0.6
 
 This release drops Linux and raises the minimum Windows to 11. If you run AnotherCrewLink

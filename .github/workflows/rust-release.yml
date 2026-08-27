@@ -135,11 +135,27 @@ jobs:
       # Draft, always. A release that publishes itself is a release nobody looked at, and
       # §4.9's own instruction for this script is to prove it by shipping an ordinary
       # release with it first.
+      # From CHANGELOG.md, at creation, for the reason `release.yml` carries: a draft with
+      # placeholder notes is a draft somebody edits afterwards, and `gh release edit` clears
+      # the draft flag as a side effect. That published 1.0.6 mid-sentence on 2026-08-27.
+      - name: The notes for this version
+        if: startsWith(github.ref, 'refs/tags/v2.')
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="## v$version" '$0 == v {f=1; next} /^## v/ {f=0} f' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no entry for v$version. Write the notes before           cutting the release, not after."
+            exit 1
+          fi
+          cat notes.md
+
       - name: Draft the release
         if: startsWith(github.ref, 'refs/tags/v2.')
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           draft: true
+          body_path: notes.md
           files: |
             installer/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe
             THIRD-PARTY.html
