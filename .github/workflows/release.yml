@@ -168,24 +168,40 @@ jobs:
       # Publishing a release containing it is the act that moves every installed 1.x client;
       # a workflow that did it automatically would be a fleet migration that happened because
       # somebody clicked "Run workflow". So a person opens the draft and presses the button.
+      # The notes come from CHANGELOG.md, at creation, and that is not tidiness.
+      #
+      # 1.0.6 was published by accident on 2026-08-27: the draft went up with a placeholder,
+      # somebody ran `gh release edit --notes-file` to put the real notes in, and `gh release
+      # edit` clears the draft flag as a side effect of editing. The release went live
+      # mid-sentence, `latest.yml` with it, and immutable releases meant there was no taking
+      # it back.
+      #
+      # The fix is not "remember to pass --draft to edit". It is to leave no edit step: the
+      # notes a release needs are the ones in CHANGELOG.md, which is written before the
+      # release rather than after it, so there is nothing to fill in later.
       - name: Draft the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
+          version="${{ steps.version.outputs.version }}"
+          # Everything between this version's heading and the next one.
+          awk -v v="## v$version" '$0 == v {f=1; next} /^## v/ {f=0} f' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no entry for v$version. Write the notes before \
+          cutting the release, not after -- after is where the accident lives."
+            exit 1
+          fi
+          printf '\n---\n\nPackaged by `installer/legacy.nsi`, not by electron-builder.\n' \
+            >> notes.md
+
+          gh release create "v$version" \
             --draft \
             --target "$GITHUB_SHA" \
-            --title "AnotherCrewLink ${{ steps.version.outputs.version }}" \
-            --notes "Draft. Read CHANGELOG.md for the notes, then publish.
-
-          This release was packaged by \`installer/legacy.nsi\` rather than by
-          electron-builder — §4.9's instruction, to test the 2.x installer's CLI contract
-          against real 1.x updaters before the bridge depends on it.
-
-          \`latest.yml\` is attached. **Publishing this release is what moves the fleet.**" \
-            dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+            --title "AnotherCrewLink $version" \
+            --notes-file notes.md \
+            "dist/AnotherCrewLink-Setup-$version.exe" \
             dist/latest.yml || \
-          gh release upload "v${{ steps.version.outputs.version }}" \
-            dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+          gh release upload "v$version" \
+            "dist/AnotherCrewLink-Setup-$version.exe" \
             dist/latest.yml --clobber

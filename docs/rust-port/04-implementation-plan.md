@@ -1961,6 +1961,35 @@ Prove the new NSIS script by shipping an **ordinary 1.0.x release** with it, so
 its CLI contract is tested against real 1.x updaters before it carries anything
 important.
 
+> **Done, 2026-08-27: 1.0.6 shipped through `installer/legacy.nsi`.** The instruction is
+> carried out, and the thing it was protecting against did not happen.
+>
+> What the release job proved on the way, on a clean runner: the installer runs silently
+> under the exact command line `NsisUpdater` spawns and *exits* — the failure mode that
+> hangs an updater forever; **200 of 200 packaged files arrived**, compared tree against
+> tree rather than spot-checked; and the uninstaller removed `resources` and `locales`
+> rather than only the executable.
+>
+> What no runner could prove, and the maintainer did: **the update from 1.0.5 on a real
+> installation, with a real profile, works.** That is the sentence §4.9 was asking for.
+>
+> Verified independently afterwards: the SHA-512 and size in the published `latest.yml`
+> recomputed from the artefact GitHub actually serves, and the feed's shape compared with
+> `test/fixtures/latest-1.0.5.yml`, the last one electron-builder wrote.
+>
+> Three rehearsals were needed first, and each found something a test here could not:
+> missing `id-token`/`attestations` permissions; `releaseDate` in a local offset where
+> every previous feed used UTC with a `Z`; and an install check that looked for two files
+> where the payload is a tree of two hundred.
+>
+> **And one thing went wrong.** The release was published by accident: the draft went up
+> with placeholder notes, `gh release edit --notes-file` was run to put the real ones in,
+> and that command clears the draft flag as a side effect. It went live mid-edit, with
+> `latest.yml`, and immutable releases meant there was no taking it back. The content was
+> correct and the update had already been verified, so it stands — but the fix is in
+> `release.yml` rather than in anybody's memory: the notes now come from `CHANGELOG.md` at
+> creation, so there is no edit step to have this accident in.
+
 **Rollout.** The 2.0 build goes out first as a
 parallel install — different appId, different directory, config read forward,
 opt-in by download only — and sits there for a full release cycle while 1.x keeps
