@@ -723,8 +723,21 @@ impl Client {
             audible: &|client_id| heard.contains(&client_id),
             local_talking,
             local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+            // `impostor_radio` is §4.13's one genuinely blocked item, and this is where
+            // it shows. 1.x claims the radio over the *data channel* -- `Voice.tsx` 913 and
+            // 1290 -- and this client has none by design: `the_offer_carries_audio_and_no_
+            // data_channel` asserts the SDP has no `m=application`. Moving the claim to the
+            // socket is the change §4.12's rollout forbids while both generations share a
+            // lobby, so it stays `None` until 1.x is switched off.
+            //
+            // `local_is_impostor` is not blocked and is read from the game. On its own it
+            // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
+            // available is a line that stops looking like a stub.
             impostor_radio: None,
-            local_is_impostor: false,
+            local_is_impostor: state
+                .players
+                .iter()
+                .any(|player| player.is_local && player.is_impostor),
         };
         let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
         let shown = overlay(&seats, &voice, compact);
@@ -1714,8 +1727,21 @@ impl eframe::App for Client {
                 audible: &|client_id| speaking.contains(&client_id),
                 local_talking,
                 local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+                // `impostor_radio` is §4.13's one genuinely blocked item, and this is where
+                // it shows. 1.x claims the radio over the *data channel* -- `Voice.tsx` 913 and
+                // 1290 -- and this client has none by design: `the_offer_carries_audio_and_no_
+                // data_channel` asserts the SDP has no `m=application`. Moving the claim to the
+                // socket is the change §4.12's rollout forbids while both generations share a
+                // lobby, so it stays `None` until 1.x is switched off.
+                //
+                // `local_is_impostor` is not blocked and is read from the game. On its own it
+                // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
+                // available is a line that stops looking like a stub.
                 impostor_radio: None,
-                local_is_impostor: false,
+                local_is_impostor: state
+                    .players
+                    .iter()
+                    .any(|player| player.is_local && player.is_impostor),
             };
             let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
             let portraits: Vec<Portrait<'_>> = main_view(&seats, &voice)

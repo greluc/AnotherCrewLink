@@ -383,8 +383,22 @@ fn within(
 ///
 /// `try_wait` in a loop rather than `wait`: a helper that never exits would otherwise take
 /// the whole test run down with it, and a test that hangs reports nothing at all.
+///
+/// # Thirty seconds, not five
+///
+/// Five seconds for a process to be scheduled, notice a closed pipe and exit is a bound on
+/// the machine's load rather than on the helper's behaviour. The longer one costs nothing
+/// when the test passes, because this returns as soon as the child is gone; it costs
+/// twenty-five extra seconds on a real failure, which is the moment to be patient.
+///
+/// **This is not a fix for anything observed, and should not be read as one.** These tests
+/// failed three times in a row on 2026-08-27 during `cargo test --workspace`, each time
+/// straight after a recompile, and have passed sixteen times since — six alone and ten in a
+/// workspace run — with no change that could explain it. The failure was reported against
+/// `the_link_starts_the_helper_and_keeps_it`, which does not call this function at all, so
+/// whatever it was is still there. Recorded here because this is where somebody will look.
 fn wait_briefly(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
-    for _ in 0..100 {
+    for _ in 0..600 {
         if let Some(status) = child.try_wait().expect("the child is waitable") {
             return Some(status);
         }
