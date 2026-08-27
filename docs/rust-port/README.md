@@ -167,11 +167,29 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > and file), lobby browser end to end, overlay view with its seven positions and the
 > meeting table, and the GPU fallback chain — which lost a rung to measurement.
 >
-> `P7+` is built, and its ceremony is a command: `acl-release keys | write | sign`, with a
-> runbook beside it. What it cannot do is *be performed* — the maintainer generates and
-> keeps the keys, and ships an ordinary 1.0.x release through the new installer first,
-> which is §4.9's own instruction and the only thing that tests the CLI contract against
-> real 1.x updaters.
+> `P7+` is built **and performed**, both halves, on 2026-08-27.
+>
+> The ceremony ran: two keys exist, encrypted, in two places, and both public halves are in
+> `manifest::PUBLIC_KEYS`. `there_are_two_keys` fails on one as well as on none, because one
+> key is the state where somebody did half a ceremony and moved on, and reading the file
+> does not distinguish it from the finished state. `acl-release check` answers the question
+> `sign` never could — whether the shipped build trusts a key, rather than whether two halves
+> on a disk agree — which matters for the recovery key, whose entry is only ever exercised on
+> the day the other one is gone.
+>
+> And §4.9's own instruction is carried out: **1.0.6 shipped through
+> `installer/legacy.nsi`**, and the update from 1.0.5 was confirmed working on a real
+> installation. CI proved the rest on a clean runner — the installer exits under the
+> updater's own command line, 200 of 200 packaged files arrive, the uninstaller takes the
+> tree with it — and `latest.yml`'s digest was recomputed afterwards from the artefact
+> GitHub actually serves.
+>
+> Three rehearsals were needed and each found something no test here would have: missing
+> attestation permissions, a `releaseDate` in a local offset where every previous feed used
+> UTC, and an install check that looked for two files where the payload is a tree of two
+> hundred. The release then published itself when its notes were edited — `gh release edit`
+> clears the draft flag — so the workflow now writes them from `CHANGELOG.md` at creation and
+> there is no edit step left to have that accident in.
 >
 > `P8`'s mechanism is built: `latest.yml`, the bridge installer that renames rather than
 > deletes, the switch-off message. What is left of it is not code — three staged releases,

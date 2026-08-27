@@ -1388,10 +1388,16 @@ will otherwise reintroduce them:
 
 ## 4.7 Phase 5 — Platform layer (6 weeks)
 
-> **Status, 2026-08-26. Four of the platform calls exist; the two processes do not.**
+> **Status, 2026-08-27: built.** `acl-core` carries 121 tests, `acl-ipc` 18 and
+> `acl-helper` 16, and the table below is every item this phase asked for.
 >
-> This phase's shape was "the decision logic stands and is tested; the platform calls are
-> missing entirely", and four of them were one call each.
+> The heading here said "four of the platform calls exist; the two processes do not"
+> until 2026-08-27, by which point the table under it listed both processes as built. A
+> heading that contradicts its own table is worse than no heading: it is the line
+> somebody reads when they are deciding what to work on next.
+>
+> The phase's shape was "the decision logic stands and is tested; the platform calls are
+> missing entirely", and four of them turned out to be one call each.
 >
 > | Built | Where |
 > | --- | --- |
@@ -2070,10 +2076,10 @@ from the client even after our own 1.x support ends.
 | P2+ Game reader | 6.0 | built, G1 met | with P3+ |
 | P3+ Audio engine | 10.0 | built, G2 met | critical path |
 | P4+ Transport | 10.5 | built | critical path |
-| P5+ Platform | 6.0 | partly built | with P4+ |
-| P6+ GUI | 11.5 | planned | after P5+ |
-| P7+ Packaging | 9.5 | planned | partly with P6+ |
-| P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
+| P5+ Platform | 6.0 | built | with P4+ |
+| P6+ GUI | 11.5 | built | after P5+ |
+| P7+ Packaging | 9.5 | built, proved by 1.0.6 | partly with P6+ |
+| P8 Bridge and sunset → G4 | 4.0 | built; the rollout is an act, not code | before the 2.0 release, not after |
 | **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
 | **Two developers** | not half | | P3+ and P4+ are both on the critical path, and P7+ waits on both |
 | P9 Post-1.x cleanup | 3.0 | planned | outside the 2.0 budget |
@@ -2100,6 +2106,39 @@ from the client even after our own 1.x support ends.
 > reports, offering to newcomers, routing signals, and reporting which peers are reachable,
 > with two clients meeting through a real server to prove it. No audio moves yet, so "mesh
 > wired, audio not" is the honest form.
+
+> **Corrected a third time, 2026-08-27, and this note is now longer than the table it is
+> about.** The column above still read "partly built" for P5+ and "planned" for P6+, P7+ and
+> P8 — after the note directly above had said, the previous evening, that P5+ and P6+ were
+> finished. The prose was updated and the table was not, which is the same failure the note
+> was written to fix, in the same file, one screen apart.
+>
+> So: **the notes are the record and the column is a summary of them.** When the two
+> disagree, the notes are right and the column is stale — that has been true every time so
+> far. The column now reads built for P5+, P6+, P7+ and P8, and §4.7's own heading has
+> stopped claiming its two processes do not exist while the table beneath it lists both.
+>
+> Two other sentences here have expired. "No audio moves yet" was true when it was written
+> and stopped being true when `a_tone_sent_by_one_is_heard_by_the_other` started passing: a
+> 440 Hz tone goes through the real encoder, a real track and a real server and is decoded
+> on the far side, and the test asks whether what came out is the sound that went in rather
+> than whether bytes arrived. And P7+ is no longer "built but unproven" — 1.0.6 shipped
+> through `installer/legacy.nsi` on 2026-08-27 and the update from 1.0.5 was confirmed
+> working on a real installation, which is §4.9's own instruction carried out.
+>
+> **What is left, stated once so the next reader does not have to derive it.** Nothing on
+> this table is waiting for code. What remains is four acts, and every one of them needs
+> people or machines this repository does not have:
+>
+> * **P8's staged rollout.** The bridge is built and the feed generator is wired and proved
+>   against the real 1.0.5 document. Publishing it in stages is an act.
+> * **`G4`**, which is a one-leg gate as of 2026-08-27 — see §9. It rehearses on real
+>   installs, and 1.0.6 has now rehearsed most of its mechanism by accident.
+> * **`G1`'s five situations**, which need four people in an online round and, since
+>   2026-08-27, do not gate the release.
+> * **Two people on two machines hearing each other.** The tone test rules out the silent
+>   failure — every piece working and the whole saying nothing — and does not stand in for a
+>   round.
 
 **What moved, against the 77 written before these decisions.** H2 −1.0 (no key
 ceremony, no signing xtask, no minisign parser in TypeScript, no revocation
