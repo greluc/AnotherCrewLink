@@ -12,6 +12,14 @@ jobs:
 
     permissions:
       contents: write
+      # `github-attestations` from §4.9 item 1, the same two `rust-release.yml` grants for
+      # the same action. With no code signing, this is what answers "prove this binary came
+      # from this commit" — and it answers it better than a certificate proves who built it.
+      #
+      # Missing here until the first rehearsal, because the attestation step was added at
+      # the same time as everything above it and the job had only ever needed `contents`.
+      id-token: write
+      attestations: write
 
     steps:
       - name: Check out Git repository
