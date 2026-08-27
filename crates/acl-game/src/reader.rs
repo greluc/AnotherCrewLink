@@ -10,7 +10,6 @@
 
 use acl_types::map::MapType;
 
-use crate::dotnet::read_string;
 use crate::memory::{ProcessMemory, ReadError, read_pointer, resolve_chain};
 use crate::mods::Mod;
 use crate::offsets::Offsets;
@@ -576,15 +575,17 @@ fn read_player(
     )
     .ok()?;
 
-    // A build with a direct name pointer uses it; the rest read the name off outfit zero.
-    let name = match player_chain(offsets, "nameText") {
-        Some(chain) if !chain.is_empty() => follow(memory, object_ptr, Some(chain))
-            .ok()
-            .and_then(|at| read_pointer(memory, at).ok())
-            .and_then(|pointer| read_string(memory, pointer, 1000).ok())
-            .unwrap_or_else(|| outfit.name.clone()),
-        _ => outfit.name.clone(),
-    };
+    // The name comes off the outfit, and only off the outfit.
+    //
+    // The bundle also carries a `player.nameText` chain and this used to prefer it. **The
+    // Electron reader does not**: `GameReader.ts:1006-1009` is commented out, and even as
+    // written it applied only to one mod and only to a player whose colour had not
+    // resolved. Following it unconditionally on Among Us 17.4.0 x86 read the same
+    // non-string for every player -- five identical pages of mojibake where five names
+    // should have been -- because the chain does not land on a name on a stock build.
+    //
+    // If a mod ever needs it back, it needs the two conditions with it.
+    let name = outfit.name.clone();
 
     let role_team = read_u32_at(memory, role_ptr, first_player_offset(offsets, "roleTeam"));
 

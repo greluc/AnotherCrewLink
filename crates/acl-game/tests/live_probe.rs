@@ -70,18 +70,36 @@ fn what_the_reader_sees_right_now() {
     let mut context = acl_game::reader::ReadContext::new(module.base, acl_game::mods::Mod::None);
     for round in 0..3 {
         match acl_game::reader::read_state(&process, &resolved, &mut context) {
-            Ok(state) => eprintln!(
-                "[{round}] state={:?} code={:?} map={:?} players={} local={}",
-                state.game_state,
-                state.lobby_code,
-                state.map,
-                state.players.len(),
-                state
-                    .players
-                    .iter()
-                    .filter(|player| player.is_local)
-                    .count(),
-            ),
+            Ok(state) => {
+                // The first frame in full, because a wrong *name* or a wrong colour is
+                // invisible in the counts and is exactly what a mis-walked chain produces.
+                if round == 0 {
+                    for player in &state.players {
+                        eprintln!(
+                            "    name={:?} colour={} hat={:?} skin={:?} visor={:?} dead={} local={}",
+                            player.name,
+                            player.color_id,
+                            player.hat_id,
+                            player.skin_id,
+                            player.visor_id,
+                            player.is_dead,
+                            player.is_local,
+                        );
+                    }
+                }
+                eprintln!(
+                    "[{round}] state={:?} code={:?} map={:?} players={} local={}",
+                    state.game_state,
+                    state.lobby_code,
+                    state.map,
+                    state.players.len(),
+                    state
+                        .players
+                        .iter()
+                        .filter(|player| player.is_local)
+                        .count(),
+                );
+            }
             Err(error) => eprintln!("[{round}] read failed: {error:?}"),
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
