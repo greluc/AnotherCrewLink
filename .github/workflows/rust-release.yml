@@ -102,10 +102,46 @@ jobs:
       - name: Build the installer
         shell: bash
         run: |
-          makensis -DVERSION=${{ steps.version.outputs.version }} \
-                   -DSOURCE_DIR=../target/release \
-                   installer/anothercrewlink.nsi
+          # The full path, because choco does not put NSIS on PATH within the same job.
+          # `rust.yml` and `release.yml` both learned this; this one did not, and found out
+          # at the first tag -- which is the moment a release workflow is least useful.
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          "$makensis" -DVERSION=${{ steps.version.outputs.version }} \
+                      -DSOURCE_DIR=../target/release \
+                      installer/anothercrewlink.nsi
           ls -l installer/*.exe
+
+      # What it produced, installed and taken away again before anybody is offered it. The
+      # 2.x installer has never met a machine with a profile on it, and this is not that --
+      # but it is the difference between shipping something that compiled and shipping
+      # something that ran.
+      #
+      # `//S` and not `/S`: Git Bash rewrites an argument that looks like a POSIX path
+      # before the program sees it, and the installer would not be silent.
+      - name: It installs and uninstalls silently
+        shell: bash
+        run: |
+          set +e
+          ./installer/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
+            --updated //S /D=$(cygpath -w "$PWD/proof") </dev/null >install.log 2>&1 &
+          installer=$!
+          for _ in $(seq 60); do kill -0 $installer 2>/dev/null || break; sleep 1; done
+          if kill -0 $installer 2>/dev/null; then
+            kill -9 $installer 2>/dev/null; wait $installer 2>/dev/null
+            echo "::error::the installer did not exit under /S"
+            exit 1
+          fi
+          wait $installer
+          set -e
+          test -f proof/anothercrewlink.exe
+          test -f proof/acl-helper.exe
+          # The locales are what the window reads at startup; without them every string is
+          # its own key.
+          test -s proof/static/locales/en/translation.json
+          ./proof/Uninstall.exe //S _?=$(cygpath -w "$PWD/proof") </dev/null >/dev/null 2>&1
+          for _ in $(seq 30); do [ -f proof/anothercrewlink.exe ] || break; sleep 1; done
+          test ! -f proof/anothercrewlink.exe
+          test ! -d proof/static
 
       - name: Attest the artefacts
         uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
