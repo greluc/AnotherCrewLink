@@ -38,6 +38,8 @@ ManifestDPIAware true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+; For ${RunningX64}, used by the architecture guard in .onInit.
+!include "x64.nsh"
 
 ; Supplied by the release job: !define VERSION, !define SOURCE_DIR, !define OUT_FILE.
 !ifndef VERSION
@@ -97,6 +99,31 @@ FunctionEnd
 
 Function .onInit
   Call ParseArguments
+
+  ; 2.x is x64-only: the 32-bit build was removed on 2026-08-25. This matters here and
+  ; not only in a build script, because of how the fleet reaches this installer.
+  ;
+  ; 1.x's updater picks an artefact with `findFile`, which prefers a file name containing
+  ; `x64` or `ia32` and otherwise takes the first `.exe` in the feed. The bridge publishes
+  ; one `.exe` and no token -- there is no 32-bit build to publish -- so a 32-bit 1.0.2
+  ; client is handed this, and runs it. NSIS installers are 32-bit themselves, so it would
+  ; run happily to the end and lay down x64 binaries that cannot start: an install that
+  ; reports success and leaves the machine with nothing that works.
+  ;
+  ; Refusing is not a fix for those users; nothing here can be. It is the difference
+  ; between a broken install they cannot diagnose and a message that says what happened.
+  ${IfNot} ${RunningX64}
+    ; No dialog under /S. The updater that spawned this is waiting on the process and
+    ; never sees a window, so a message box there is a hang rather than an explanation --
+    ; the exit code is the only thing it can read.
+    IfSilent refuse
+    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$$
+$$
+This machine is running 32-bit Windows, which this version no longer supports. Version 1.0.2 remains available and keeps working."
+  refuse:
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
 FunctionEnd
 
 Section "Install"

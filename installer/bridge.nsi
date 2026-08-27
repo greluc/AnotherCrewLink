@@ -37,6 +37,8 @@ ManifestDPIAware true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+; For ${RunningX64}, used by the architecture guard in .onInit.
+!include "x64.nsh"
 
 !ifndef VERSION
   !define VERSION "1.1.0"
@@ -86,6 +88,27 @@ FunctionEnd
 
 Function .onInit
   Call ParseArguments
+
+  ; The same guard as the plain installer, and this is the one that will actually meet a
+  ; 32-bit machine. §4.12's bridge is published into the 1.x feed, and `findFile` hands the
+  ; single `.exe` to every client regardless of architecture -- there is no 32-bit build to
+  ; prefer, because it was removed on 2026-08-25.
+  ;
+  ; Refusing here does something the plain installer's guard does not: this script renames
+  ; the 1.x installation before it writes anything. Aborting in .onInit is aborting *before*
+  ; that, so a 32-bit user who is offered the bridge keeps a working 1.0.2 rather than
+  ; losing it in exchange for binaries their machine cannot execute.
+  ${IfNot} ${RunningX64}
+    ; No dialog under /S: the 1.x updater spawned this and is waiting on the process. See
+    ; `the_bridge_opens_no_window_at_all` -- an error path is still a path.
+    IfSilent refuse
+    MessageBox MB_ICONSTOP "AnotherCrewLink 2.0 needs 64-bit Windows.$$
+$$
+This machine is running 32-bit Windows, which this version no longer supports. Your existing installation has not been changed and keeps working."
+  refuse:
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
 FunctionEnd
 
 Section "Install"

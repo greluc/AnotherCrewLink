@@ -13,16 +13,20 @@
 //! those three would fail on a large number of machines at once, at the only moment this
 //! project ever asks them all to run an installer.
 //!
-//! # Why a text check rather than a build
+//! # What this checks, and what checks the rest
 //!
-//! Building the installer needs `makensis`, which is not on a Rust CI runner and would be
-//! an install step on every job for a file that changes twice a year. Running it needs
-//! Windows and a willing victim. What is left is the contract itself, which is a property
-//! of the source — and a property of the source is exactly what a test can hold.
+//! This reads the source. It does not prove the installer works; it proves it still claims
+//! to do the things that would strand the fleet if it stopped claiming them, and it fails
+//! the moment somebody edits them out.
 //!
-//! This does not prove the installer works. It proves it still claims to do the four things
-//! that would strand the fleet if it stopped claiming them, and it fails the moment somebody
-//! edits them out. `installer/README.md` carries the manual check that a text test cannot.
+//! Since 2026-08-26 the other half exists: `rust.yml`'s `installer` job compiles the script
+//! with `makensis` on every push and then runs what it produced — a silent install with the
+//! exact command line above, a check that the files landed, and a silent uninstall. That is
+//! the part no amount of reading can do, because a script that compiles but opens a dialog
+//! under `/S` hangs the updater forever and looks fine in the source.
+//!
+//! The two are not redundant. A compile says NSIS accepted it; these say it still says what
+//! it must, which is a different question and the one that regresses quietly.
 
 use std::path::PathBuf;
 
@@ -142,6 +146,59 @@ fn the_install_needs_no_elevation() {
 /// `electron-updater`'s `findFile` picks by extension and then prefers a filename
 /// containing `x64` — 1.x published no token and one `.exe`, so any single `.exe` keeps
 /// being picked. Changing the extension is the same act as abandoning the installed base.
+/// A 32-bit machine is refused, rather than quietly given something that cannot run.
+///
+/// This is not a hypothetical. The 32-bit build was removed on 2026-08-25, and §4.12's
+/// bridge publishes into the 1.x feed, where `electron-updater`'s `findFile` prefers a name
+/// containing `x64` or `ia32` and **otherwise takes the first `.exe`**. There is no 32-bit
+/// artefact to publish, so there is no name to prefer, so a 32-bit 1.0.2 client is handed
+/// this installer. NSIS installers are themselves 32-bit, so it would run to the end and
+/// lay down x64 binaries that cannot start.
+///
+/// Refusing does not rescue those users; nothing in this repository can. It is the
+/// difference between an install that reports success and leaves nothing working, and one
+/// that says what happened.
+#[test]
+fn a_thirty_two_bit_machine_is_refused_rather_than_broken() {
+    let instructions = instructions();
+    assert!(
+        instructions.contains("${RunningX64}"),
+        "no architecture guard: a 32-bit client would install x64 binaries and succeed"
+    );
+    assert!(
+        instructions.contains("Abort"),
+        "the guard does not stop the install"
+    );
+    assert!(
+        instructions.contains("SetErrorLevel"),
+        "a silent install that aborts with exit code 0 tells the updater it worked"
+    );
+}
+
+/// And it refuses without a dialog when it was started silently.
+///
+/// The same rule as `a_silent_install_starts_nothing`, in the one place it is easiest to
+/// forget: an error path. The updater that spawned this waits on the process and never sees
+/// a window, so a message box on the way out is a hang rather than an explanation -- and it
+/// is a hang that only happens on the machines that were already going to have the worst
+/// day, which is why nobody would find it.
+#[test]
+fn the_refusal_shows_no_dialog_when_silent() {
+    let instructions = instructions();
+    let guard = instructions
+        .find("${RunningX64}")
+        .expect("the architecture guard");
+    let after = &instructions[guard..];
+    let silent = after.find("IfSilent").expect("no IfSilent in the guard");
+    // A `MessageBox` before the `IfSilent` that skips it is one every silent install runs.
+    if let Some(dialog) = after.find("MessageBox") {
+        assert!(
+            silent < dialog,
+            "the guard opens a dialog before checking whether it is allowed to"
+        );
+    }
+}
+
 #[test]
 fn the_artefact_is_still_one_exe_under_the_old_name() {
     let script = script();
@@ -329,6 +386,36 @@ mod bridge {
 
     /// The uninstaller leaves the backup. Somebody uninstalling 2.x may be doing exactly
     /// that in order to go back to 1.x.
+    /// The bridge refuses a 32-bit machine too, and refuses it before it breaks anything.
+    ///
+    /// This is the guard that will actually meet one. The plain installer is downloaded
+    /// deliberately by somebody who chose it; the bridge is *pushed* to the installed fleet
+    /// by 1.x's own updater, which hands the single `.exe` to every client because there is
+    /// no 32-bit build for `findFile` to prefer.
+    ///
+    /// And the ordering matters here in a way it does not there: this script renames the
+    /// 1.x installation before it writes. Aborting in `.onInit` is aborting before that, so
+    /// a refused user still has a working 1.0.2 — rather than having traded it for binaries
+    /// their machine cannot execute.
+    #[test]
+    fn a_thirty_two_bit_machine_keeps_the_client_it_has() {
+        let instructions = instructions_of("bridge.nsi");
+        assert!(
+            instructions.contains("${RunningX64}"),
+            "the bridge has no architecture guard, and it is the one the fleet runs"
+        );
+        let guard = instructions
+            .find("${RunningX64}")
+            .expect("the architecture guard");
+        let rename = instructions
+            .find("Rename")
+            .expect("the bridge no longer renames the 1.x installation");
+        assert!(
+            guard < rename,
+            "the guard runs after the 1.x installation has been renamed, so a refused              32-bit user loses the client that worked"
+        );
+    }
+
     #[test]
     fn uninstalling_leaves_the_way_back() {
         let bridge = bridge();
