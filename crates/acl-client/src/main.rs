@@ -71,6 +71,18 @@ fn union(
 /// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
 /// physical size, and scaling by the window would make the overlay twice as large on the
 /// larger monitor for no reason anybody asked for.
+/// The three cosmetic ids a player is wearing.
+///
+/// Named fields rather than a tuple of three `String`s: they are the same type, and nothing
+/// would catch two of them being swapped -- which shows up as a visor worn as a hat, on
+/// somebody else's screen, with no error anywhere.
+#[cfg(windows)]
+struct Wearing {
+    hat: String,
+    skin: String,
+    visor: String,
+}
+
 const OVERLAY_SPRITE: i32 = 56;
 
 fn main() -> eframe::Result<()> {
@@ -631,7 +643,7 @@ impl Client {
         // Which crewmate wears what, collected while the sprites are built and applied
         // afterwards: the artwork lives behind `&mut self` and the closure below is
         // already borrowing the reader's state.
-        let mut wearing: Vec<(usize, String, String)> = Vec::new();
+        let mut wearing: Vec<(usize, Wearing)> = Vec::new();
         let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
             .iter()
             .zip(laid.sprites.iter())
@@ -656,7 +668,14 @@ impl Client {
                 continue;
             };
             if at < sprites.len() {
-                wearing.push((at, player.hat_id.clone(), player.visor_id.clone()));
+                wearing.push((
+                    at,
+                    Wearing {
+                        hat: player.hat_id.clone(),
+                        skin: player.skin_id.clone(),
+                        visor: player.visor_id.clone(),
+                    },
+                ));
             }
         }
         Self::dress(hats, &mut sprites, &wearing);
@@ -1040,62 +1059,67 @@ impl Client {
         }
     }
 
-    /// Puts each crewmate's cosmetics on their sprite.
+    /// Paints every layer a player is wearing onto a fresh sprite.
     ///
-    /// A hat that has not been fetched yet is simply not drawn: `Loader::image` asks for it
-    /// and answers `None`, and a later frame has it. A cosmetic arriving a frame late is not
-    /// worth a stalled window.
+    /// Onto a fresh one, and that is the change of 2026-08-27. It used to composite onto the
+    /// body, which works for anything that goes *over* it and makes the hat's back
+    /// impossible -- there is nothing under a canvas. `acl_ui::worn::pieces` returns all five
+    /// layers with the body among them, so the body becomes one paste like the others.
     ///
-    /// The order is [`acl_ui::cosmetics::PAINT_ORDER`]'s, minus the layers this does not
-    /// have yet -- the back of a hat goes behind the player, which needs the base sprite
-    /// split into two passes, and the skin sits between them.
+    /// The skin was simply missing before: `AmongUsState` has carried `skin_id` all along and
+    /// the list this takes had room for two ids.
     ///
-    /// Takes the loader rather than `&self` so that the reader's borrow and the artwork's
-    /// can coexist: they are disjoint fields, and the borrow checker only knows that when
-    /// they are named separately.
+    /// Takes the loader rather than `&self` so that the reader's borrow and the artwork's can
+    /// coexist: they are disjoint fields, and the borrow checker only knows that when they
+    /// are named separately.
     #[cfg(windows)]
     fn dress(
         hats: &mut hat_store::Loader,
         sprites: &mut [(i32, i32, acl_ui::sprite::Bitmap)],
-        wearing: &[(usize, String, String)],
+        wearing: &[(usize, Wearing)],
     ) {
-        for (at, hat, visor) in wearing {
-            let Some((_, _, canvas)) = sprites.get_mut(*at) else {
+        for (at, worn) in wearing {
+            let Some((_, _, body)) = sprites.get_mut(*at) else {
                 continue;
             };
-            for id in [visor, hat] {
-                let Some(found) = hats.collection().find(id, acl_ui::hats::BASE) else {
+            let pieces = acl_ui::worn::pieces(
+                hats.collection(),
+                acl_ui::worn::Worn {
+                    hat: &worn.hat,
+                    skin: &worn.skin,
+                    visor: &worn.visor,
+                },
+                acl_types::cosmetics::HAT_COLLECTION_URL,
+                acl_ui::hats::BASE,
+            );
+            // Nothing but the body: leave it alone rather than copying it through a blank
+            // canvas for no reason. This is the common case -- most players wear nothing.
+            if pieces.len() == 1 {
+                continue;
+            }
+
+            let mut canvas = acl_ui::sprite::Bitmap::blank(body.width, body.height);
+            for piece in &pieces {
+                let Some(url) = piece.url.as_deref() else {
+                    // The body, at its own size and origin.
+                    canvas.composite(body, (0, 0), (body.width, body.height));
                     continue;
                 };
-                let geometry = found.geometry;
-                let Some(url) = found.image_url(acl_types::cosmetics::HAT_COLLECTION_URL, false)
-                else {
+                let Some(artwork) = hats.image(url) else {
+                    // Not fetched yet, or not fetchable. The layer is skipped and the rest
+                    // are drawn -- a missing hat is a player without a hat, not a player
+                    // without a body.
                     continue;
-                };
-                let Some(artwork) = hats.image(&url) else {
-                    continue;
-                };
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_precision_loss,
-                    reason = "sprite and artwork dimensions in pixels, both far below f32's                               exact integer range"
-                )]
-                let rect = {
-                    let size = OVERLAY_SPRITE as f32;
-                    let width = geometry.width * size;
-                    (
-                        (geometry.left * size) as i32,
-                        (geometry.top * size) as i32,
-                        width as i32,
-                        // The artwork is square-ish and the geometry gives only a width, so
-                        // the height follows the file's own proportions -- which is what
-                        // `width` alone means in the stylesheet this is ported from.
-                        (width * artwork.height as f32 / artwork.width.max(1) as f32) as i32,
-                    )
                 };
                 let artwork = artwork.clone();
-                canvas.composite(&artwork, (rect.0, rect.1), (rect.2, rect.3));
+                let (at, size) = acl_ui::worn::placement(
+                    piece.geometry,
+                    OVERLAY_SPRITE,
+                    (artwork.width, artwork.height),
+                );
+                canvas.composite(&artwork, at, size);
             }
+            *body = canvas;
         }
     }
 
