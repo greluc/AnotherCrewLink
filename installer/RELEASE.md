@@ -6,6 +6,33 @@ and deciding that a build is good.
 ## Once, and offline
 
 ```bash
+.\scripts\new-release-key.ps1 -Into <somewhere safe> -Role operational
+.\scripts\new-release-key.ps1 -Into <somewhere else>  -Role recovery
+```
+
+The script **generates the passphrase** and shows it once. That is deliberate: a passphrase
+somebody invents at a prompt is a passphrase they have used before, and one typed on a
+command line is in the shell's history and in every process listing while it runs. This one
+comes from the system CSPRNG, 150 bits, in six groups of five from an alphabet with no
+character that can be misread for another — it will be read off a phone screen at some
+point.
+
+It refuses to put a key anywhere inside this repository, and refuses to write the passphrase
+into the same directory as the key. The first is the one that matters: a private key in the
+working tree is one `git add -A` away from being public, permanently, and a key that has
+been pushed is a key that must be replaced.
+
+For an offline ceremony, build the tool while you still have a network and then pass it in:
+
+```bash
+cargo build --locked --release --features ceremony -p acl-updater --bin acl-release
+# ...disconnect...
+.\scripts\new-release-key.ps1 -Into E:\keys -Role operational -ToolPath .\target\release\acl-release.exe
+```
+
+Or without the script, if you would rather choose the passphrase yourself:
+
+```bash
 ACL_RELEASE_KEY_PASSWORD='...' \
   cargo run -p acl-updater --features ceremony --bin acl-release -- keys --into <somewhere safe>
 ```

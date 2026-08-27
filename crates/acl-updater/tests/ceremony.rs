@@ -359,3 +359,46 @@ fn the_feed_will_not_move_the_fleet_to_two_x() {
         "it refused and wrote the feed anyway"
     );
 }
+
+/// The key script still refuses to write into the repository.
+///
+/// A guard nobody can see failing is a guard that gets deleted in a tidy-up. This one is
+/// the difference between a private key and a published one: a key in the working tree is
+/// one `git add -A` from a push, and a pushed key must be replaced — there is no taking it
+/// back out of a clone somebody already made.
+///
+/// Text, because the behaviour needs PowerShell and a filesystem, and the five refusal
+/// paths were exercised by hand when the script was written. What this catches is the
+/// deletion, which is the realistic failure.
+#[test]
+fn the_key_script_still_refuses_the_working_tree() {
+    let script = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/new-release-key.ps1"),
+    )
+    .expect("scripts/new-release-key.ps1");
+
+    assert!(
+        script.contains("Test-Inside $target $repository"),
+        "the script no longer checks whether the key would land inside the repository"
+    );
+    assert!(
+        script.contains("Test-Inside $passphrasePath $target"),
+        "the script no longer stops the passphrase being written beside the key"
+    );
+    // Through the environment, never as an argument: an argument is in the process list
+    // for as long as the process runs.
+    assert!(
+        script.contains("$env:ACL_RELEASE_KEY_PASSWORD = $passphrase"),
+        "the passphrase no longer reaches the tool through the environment"
+    );
+    assert!(
+        !script.contains("--password") && !script.contains("-Passphrase "),
+        "the passphrase is being passed as an argument, which puts it in the process list"
+    );
+    // The alphabet has to divide 256 or the mapping is biased, and the script asserts its
+    // own size -- this checks that assertion is still there to fail.
+    assert!(
+        script.contains("-ne 32) { throw"),
+        "nothing checks the passphrase alphabet is still 32 symbols"
+    );
+}
