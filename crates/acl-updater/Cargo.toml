@@ -12,6 +12,31 @@ publish = false
 name = "acl_updater"
 path = "src/lib.rs"
 
+[[bin]]
+# The ceremony, behind its own feature. `required-features` rather than a `cfg`, so a plain
+# `cargo build` does not produce a signing tool at all.
+name = "acl-release"
+path = "src/bin/acl-release.rs"
+required-features = ["ceremony"]
+
+[[bin]]
+# Separate from the client, and that is the point: it replaces the client's files, so it
+# must not be one of them. A client updating itself in place is a client holding open the
+# handles the installer needs to write.
+name = "acl-updater"
+path = "src/main.rs"
+
+[features]
+default = ["http"]
+# The manifest and the artefact are fetched over HTTPS. Off in a build that only wants the
+# decisions -- which is every test here, because none of them touches a network.
+http = ["dep:ureq"]
+# The release ceremony: key generation and manifest signing. Off by default, and that is
+# the point -- nothing that can sign is ever compiled into the thing users run. A build
+# that could sign is a build where a key file in the wrong directory becomes a release
+# nobody made.
+ceremony = ["dep:minisign"]
+
 [dependencies]
 # The verification, in a purpose-built crate rather than here. §4.9: "that is not writing
 # crypto". Zero dependencies of its own, which is most of why it is the one.
@@ -22,13 +47,33 @@ sha2 = "0.10"
 # Version ordering, including the pre-release rule a rollback check depends on: `2.0.0-rc.1`
 # is older than `2.0.0`, and hand-rolled dotted-number comparison gets that wrong.
 semver = "1.0"
+# `latest.yml` carries its digest as base64, which is the one thing about that file most
+# likely to be filled in with hex by somebody copying it from the manifest beside it.
+base64 = "0.22"
+# Signing, for the ceremony binary only. Optional, so the shipped client cannot sign.
+minisign = { version = "0.9.1", optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
+# The same client the offsets store and the hat store use, with the same certificate
+# handling. A third HTTP crate would be a third TLS configuration to get right.
+ureq = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# One question: is this process elevated? §4.9 item 3 refuses to install an update if it is.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
-# Signing, so the tests verify a real signature made a moment ago rather than a recorded
-# one -- and so no private key is committed anywhere.
+# The tests sign too, with a keypair they make a moment before -- so a real signature is
+# exercised rather than a recorded one, and no private key is committed anywhere.
 minisign = "0.9.1"
+# Reading back what `legacy_feed` writes by hand, so the test checks the document rather
+# than the string. A serialiser in the shipped path would be a dependency whose job is to
+# emit six lines, in the highest-blast-radius file the project has.
+serde_yaml = "0.9"
 
 [lints]
 workspace = true

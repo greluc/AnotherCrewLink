@@ -31,6 +31,10 @@ webrtc.workspace = true
 # already in the tree beneath `webrtc`; this only makes the edge direct, so nothing new
 # enters the dependency graph. Pinned to the same version for the same reason `webrtc` is.
 rtc = "=0.20.3"
+# One type: the byte buffer a media sample carries. Already in the tree beneath `rtc`, so
+# naming it here costs nothing and saves a conversion at the only place audio is handed
+# over.
+bytes = "1"
 serde_json.workspace = true
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
@@ -62,6 +66,10 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# One Opus packet, for the loopback test that proves audio crosses. A real packet rather
+# than an invented payload: the track is negotiated as Opus, and a packetizer handed
+# something else is a packetizer whose behaviour nobody has looked at.
+acl-audio.workspace = true
 # For `tests/session_conformance.rs`, which drives two sessions against a real server.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net"] }
 

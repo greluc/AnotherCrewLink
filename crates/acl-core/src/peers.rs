@@ -45,7 +45,6 @@ use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::MediaEngine;
 use webrtc::peer_connection::{
@@ -62,6 +61,23 @@ pub struct Outbound {
     pub to: String,
     /// What to send.
     pub payload: Payload,
+}
+
+/// One Opus packet that arrived from a peer.
+///
+/// The payload as it came off the wire, undecoded. Decoding belongs to `acl-audio` and
+/// happens where the jitter buffer is; this crate's job is to say who it came from and in
+/// what order, which is what the sequence number and timestamp are for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Incoming {
+    /// Whose socket it came from.
+    pub peer: String,
+    /// The RTP sequence number, which is what a jitter buffer orders by.
+    pub sequence: u16,
+    /// The RTP timestamp, in the 48 kHz clock Opus uses here.
+    pub timestamp: u32,
+    /// The Opus packet.
+    pub payload: Vec<u8>,
 }
 
 /// Something that happened to a connection.
@@ -94,6 +110,7 @@ enum Inbound {
         generation: Generation,
         init: RTCIceCandidateInit,
     },
+    Audio(Incoming),
     State {
         peer: String,
         generation: Generation,
@@ -146,6 +163,52 @@ impl PeerConnectionEventHandler for Handler {
             state,
         });
     }
+
+    /// The far end's audio.
+    ///
+    /// A task per track, and it ends when the track does: `poll` returns `None`, or the
+    /// generation moves on and `forward` starts discarding. A task that outlived its
+    /// connection would be a task feeding audio from a peer that has gone into a mixer
+    /// that still has a slot for them.
+    ///
+    /// The payload is passed on undecoded. Decoding belongs where the jitter buffer is, and
+    /// this crate does not have one -- what it can say is who it came from and in what
+    /// order, which is exactly what a jitter buffer needs and all it needs.
+    async fn on_track(&self, track: Arc<dyn webrtc::media_stream::track_remote::TrackRemote>) {
+        use webrtc::media_stream::track_remote::TrackRemoteEvent;
+
+        let peer = self.peer.clone();
+        let generation = self.generation;
+        let current = Arc::clone(&self.current);
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            while let Some(event) = track.poll().await {
+                if !is_current(
+                    generation,
+                    Generation::from_raw(current.load(Ordering::Acquire)),
+                ) {
+                    return;
+                }
+                let TrackRemoteEvent::OnRtpPacket(packet) = event else {
+                    continue;
+                };
+                // An empty payload is a packet the far end sent to keep the stream alive --
+                // DTX does exactly that -- and it is not audio to hand anybody.
+                if packet.payload.is_empty() {
+                    continue;
+                }
+                let sent = events.send(Inbound::Audio(Incoming {
+                    peer: peer.clone(),
+                    sequence: packet.header.sequence_number,
+                    timestamp: packet.header.timestamp,
+                    payload: packet.payload.to_vec(),
+                }));
+                if sent.is_err() {
+                    return;
+                }
+            }
+        });
+    }
 }
 
 /// The microphone track every connection carries.
@@ -157,11 +220,23 @@ impl PeerConnectionEventHandler for Handler {
 /// need a generator this crate does not otherwise have, and a stable one per peer means a
 /// rebuild reuses the same synchronisation source — which is what the far end expects of a
 /// connection that has been repaired rather than replaced.
-fn microphone_track(peer: &str, generation: Generation) -> Result<Arc<dyn TrackLocal>, PeerError> {
+/// The synchronisation source for a peer's track.
+///
+/// Its own function because two things need it and they must not disagree: the track is
+/// built with it and every sample written to that track has to name it.
+fn microphone_ssrc(peer: &str) -> u32 {
     let mut ssrc: u32 = 0x811c_9dc5;
     for byte in peer.as_bytes() {
         ssrc = (ssrc ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
     }
+    ssrc
+}
+
+fn microphone_track(
+    peer: &str,
+    generation: Generation,
+) -> Result<Arc<TrackLocalStaticSample>, PeerError> {
+    let ssrc = microphone_ssrc(peer);
     let track = MediaStreamTrack::new(
         format!("acl-{peer}"),
         format!("acl-audio-{}", generation.raw()),
@@ -185,9 +260,24 @@ fn microphone_track(peer: &str, generation: Generation) -> Result<Arc<dyn TrackL
     Ok(Arc::new(TrackLocalStaticSample::new(track)?))
 }
 
+/// The payload type Opus is registered at.
+///
+/// 111, from the `rtc` crate's own default media engine -- `register_default_codecs`
+/// registers Opus there and nowhere else, so this is read out of the crate rather than
+/// taken from the convention it happens to match.
+const OPUS_PAYLOAD_TYPE: u8 = 111;
+
 /// One connection and what is known about it.
 struct Peer {
     connection: Arc<dyn PeerConnection>,
+    /// The synchronisation source the track was built with, so a sample can name it.
+    ssrc: u32,
+    /// The outgoing track, kept rather than handed to `add_track` and forgotten.
+    ///
+    /// Until this was kept there was nowhere to write audio to: the track existed because
+    /// an offer with no media has no ICE credentials, and it carried silence because
+    /// nothing could reach it.
+    microphone: Arc<TrackLocalStaticSample>,
     generation: Generation,
     current: Arc<AtomicU64>,
     queue: CandidateQueue<RTCIceCandidateInit>,
@@ -411,6 +501,11 @@ impl PeerSet {
         let mut media = MediaEngine::default();
         media.register_default_codecs()?;
 
+        // Built before the connection so it can be kept: `add_track` takes it by handle and
+        // there is no way back out afterwards, and audio has to be written *into* it.
+        let ssrc = microphone_ssrc(peer);
+        let microphone = microphone_track(peer, generation)?;
+
         let connection = Box::pin(
             PeerConnectionBuilder::new()
                 .with_udp_addrs(vec!["0.0.0.0:0"])
@@ -428,14 +523,14 @@ impl PeerSet {
 
         // Before anything is offered or answered. A connection with no media negotiates no
         // ICE, which is the failure recorded at the top of this file.
-        connection
-            .add_track(microphone_track(peer, generation)?)
-            .await?;
+        connection.add_track(microphone.clone()).await?;
 
         if let Some(previous) = self.peers.insert(
             peer.to_owned(),
             Peer {
                 connection: Arc::new(connection),
+                ssrc,
+                microphone,
                 generation,
                 current,
                 queue: CandidateQueue::new(),
@@ -472,10 +567,16 @@ impl PeerSet {
     /// Everything the connections have reported since the last call.
     ///
     /// Never blocks. The candidates come back as [`Outbound`] to be sent through the
-    /// signalling server; the state changes are for whoever is showing them.
-    pub fn drain(&mut self) -> (Vec<Outbound>, Vec<PeerEvent>) {
+    /// signalling server; the state changes are for whoever is showing them; the audio is
+    /// for whoever has a jitter buffer, which is not this crate.
+    ///
+    /// Audio is returned in arrival order and not sorted. Ordering is what a jitter buffer
+    /// is *for*, and sorting here would be a second, worse one that also throws away the
+    /// arrival order the real one uses to measure delay.
+    pub fn drain(&mut self) -> (Vec<Outbound>, Vec<PeerEvent>, Vec<Incoming>) {
         let mut outbound = Vec::new();
         let mut events = Vec::new();
+        let mut audio = Vec::new();
         while let Ok(message) = self.inbox.try_recv() {
             match message {
                 Inbound::Candidate {
@@ -506,9 +607,61 @@ impl PeerSet {
                     }
                     events.push(PeerEvent::StateChanged { peer, state });
                 }
+                Inbound::Audio(incoming) => {
+                    // No generation check: the task that produced it stops as soon as its
+                    // generation is stale, and a packet already in flight from a connection
+                    // that has just been replaced is still audio that peer said. Dropping
+                    // it would put a gap in the stream at exactly the moment a repaired
+                    // connection is trying not to have one.
+                    audio.push(incoming);
+                }
             }
         }
-        (outbound, events)
+        (outbound, events, audio)
+    }
+
+    /// Everybody this set holds a connection to.
+    ///
+    /// For the sender, which has one packet and needs to give it to each of them: who can
+    /// actually *hear* it is the receiver's decision, applied where the audio is played.
+    #[must_use]
+    pub fn peers(&self) -> Vec<String> {
+        self.peers.keys().cloned().collect()
+    }
+
+    /// Sends one Opus packet to a peer.
+    ///
+    /// The packet is `acl_audio::codec::Encoder`'s output, whole. This adds the RTP around
+    /// it and nothing else -- no encoding, no packing, no opinion about silence.
+    ///
+    /// `Ok(false)` when there is no connection to that peer, which is ordinary: a player
+    /// who has left is a player the mixer has not stopped calling about yet.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError`] if the track refuses the sample.
+    pub async fn send_audio(
+        &self,
+        peer: &str,
+        packet: &[u8],
+        duration: std::time::Duration,
+    ) -> Result<bool, PeerError> {
+        let Some((track, ssrc)) = self
+            .peers
+            .get(peer)
+            .map(|peer| (Arc::clone(&peer.microphone), peer.ssrc))
+        else {
+            return Ok(false);
+        };
+        let sample = rtc::media::Sample {
+            data: bytes::Bytes::copy_from_slice(packet),
+            duration,
+            ..Default::default()
+        };
+        track
+            .write_sample(ssrc, OPUS_PAYLOAD_TYPE, &sample, &[])
+            .await?;
+        Ok(true)
     }
 
     /// Whether a message still speaks for the connection this set holds.

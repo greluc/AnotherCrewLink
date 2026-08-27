@@ -787,6 +787,27 @@ fixtures.
 > Non-negotiable: this is a lossless, purely mechanical transformation, so
 > anything less than exact means a bug, not a tolerance.
 >
+> **Amended 2026-08-27: exactness stays non-negotiable, coverage does not gate 2.0.**
+> The two were being run together. Every frame the corpus reaches must still match exactly
+> and the gate fails on a single divergence — that has not moved. What is decided is the
+> other question: 2.0 does not wait for a corpus that reaches the meeting HUD, cameras,
+> doors, comms sabotage, or `isDead`/`lightRadius` under a lights sabotage.
+>
+> Those need four people in an online round, because all of them are read inside
+> `if (state === GameState.TASKS)` and freeplay never enters it. Blocking a release on
+> scheduling four players is a release that slips for a reason no amount of work here can
+> resolve.
+>
+> What the decision costs, stated rather than glossed: if the Rust reader diverges in one of
+> those branches, the players find it. The fourth recording session found 23 divergences in
+> branches nobody had reached before, so the rate is not zero. Against that, both readers
+> skip these fields identically today, and 1.x has been shipping the same code paths for
+> years.
+>
+> So: [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10) stays open, the
+> release notes say which situations are unproven, and the first recorded round after 2.0
+> ships is still worth doing — it is just not a gate.
+>
 > Unchanged by the hardening track, with one addition: G1 must pass byte-for-byte
 > using the embedded bundle, which proves the bundle format lost nothing that
 > `lookup.json` carried.
@@ -1742,6 +1763,31 @@ us.
    > picking it and nothing about the update path changes. Turn on `github-attestations` and `cargo-auditable`, and
    write down the exit: the output is checked-in GitHub Actions YAML, which is
    what makes a one-maintainer build tool an acceptable dependency.
+   > **Built 2026-08-26.** `installer/anothercrewlink.nsi` is the script;
+   > `[workspace.metadata.dist]` is the cargo-dist config, with `installers = []` because
+   > every installer it can produce is one this project may not publish; and
+   > `.github/workflows/rust-release.yml` is the release job, every action pinned to a
+   > commit SHA that was checked against the API rather than copied from a README.
+   >
+   > **The contract is held by a test rather than by care.**
+   > `crates/acl-updater/tests/installer_contract.rs` reads the script as text and fails if
+   > it stops handling `--updated`, `/S` or `/D=`, if a silent install would open a window,
+   > if anything overwrites `$INSTDIR` after NSIS has filled it from `/D=`, if the artefact
+   > name changes, or if the directory drifts from `acl_core::paths::APP_DIRECTORY`. It
+   > cannot run `makensis` and does not pretend to; `installer/README.md` carries the
+   > three manual checks that a text test cannot, and §4.9's own instruction — prove it by
+   > shipping an ordinary 1.0.x release with it — is stronger than all of them.
+   >
+   > **The release job writes no `latest.yml`, deliberately.** That file is what the
+   > installed fleet's `electron-updater` follows, so writing one here would move every
+   > 1.x machine as a side effect of tagging a 2.x build. Moving the fleet is §4.12 and it
+   > is a different act with a different blast radius. The release is drafted rather than
+   > published for the same reason: a release that publishes itself is one nobody looked
+   > at.
+   >
+   > The job also fails when the tag and `Cargo.toml`'s version disagree. That is silent
+   > for everybody except the person reading an issue about it later.
+
 2. **No Authenticode code signing.** Windows artefacts ship unsigned and users go
    on seeing the unknown-publisher warning on every install, exactly as they do
    with 1.0.2 today. Nothing regresses and nothing improves. The
@@ -1784,11 +1830,52 @@ us.
    > availability rather than preference: `minisign-verify` 0.2.5 (MIT, zero
    > dependencies) and `self-replace` 1.5.0.
    >
-   > `crates/acl-updater` holds the half that is all decision and no side effect: the
-   > manifest and its signature, and the policy that says whether to install what it
-   > offers. Neither downloads anything, runs anything, or touches a file, which is why
-   > both are tested rather than argued about. The downloading and the installing are the
-   > other half and are not written.
+   > `crates/acl-updater` is a library and a binary. `manifest` and `policy` are all
+   > decision and no side effect -- neither downloads anything, runs anything, or touches a
+   > file, which is why both are tested rather than argued about. `fetch` and `install` are
+   > the half with side effects, and are thin because everything they decide they decide by
+   > asking the first two.
+   >
+   > **The order is the design**: manifest, signature, policy, artefact, digest, and only
+   > then a byte written anywhere. The artefact is not even *fetched* until the policy has
+   > said yes -- a client that downloaded eighty megabytes and then discovered it was a
+   > downgrade would have spent somebody's data allowance proving a point.
+   >
+   > A separate binary, and separate is the point: it replaces the client's files, so it
+   > must not be one of them. A client updating itself in place holds open the handles the
+   > installer needs to write.
+   >
+   > The arguments it passes are the ones the installed 1.x fleet's updater uses, and a
+   > test asserts the installer script still reads them -- one contract, exercised by both
+   > the 2.x self-update and P8's bridge, instead of two of which one is exercised once a
+   > year.
+   >
+   > **The installer is built and run on every push, 2026-08-26.** It used to be compiled
+   > only by the release job, on a tag, with `installer_contract.rs` reading it as text in
+   > between. `rust.yml`'s `installer` job now compiles both scripts and runs what they
+   > produce: a silent install with the command line 1.x's updater spawns, a check that the
+   > binaries and the locale tree landed, and a silent uninstall.
+   >
+   > It earned its place in three runs. It found a message string NSIS would not parse, and
+   > `VIProductVersion` aborting on a prerelease version — which the release workflow accepts,
+   > because it triggers on `v2.*` and §4.12's staged rollout is exactly what gets tagged
+   > `v2.0.0-rc.1`. That one would have stopped the first staging release for a reason
+   > nothing in the repository mentioned. Neither was visible to the text check: every word
+   > it looks for was present, in a script `makensis` refused.
+   >
+   > **The ceremony is a command, 2026-08-26.** `acl-release keys | write | sign`, behind
+   > a non-default feature and a `required-features` binary so a plain `cargo build`
+   > produces no signing tool at all -- the client verifies, and a client that could sign
+   > is one where a key file in the wrong directory becomes a release nobody made.
+   > `installer/RELEASE.md` is the runbook and `tests/ceremony.rs` runs the real binary and
+   > reads what it produced with the client's own verifier.
+   >
+   > Three things it does that a runbook would have left to the reader: the digest and size
+   > are read off the artefact rather than typed; `sign` verifies its own output against the
+   > public key *given* rather than derived, because deriving it checks the signature against
+   > the key that made it and therefore checks nothing; and `keys` refuses to overwrite,
+   > because silently replacing one retires every client that trusts the old one with no
+   > step in between where anybody could notice.
    >
    > **It fails closed, and it is closed.** `PUBLIC_KEYS` is empty: no release key
    > exists, generating one is a ceremony the maintainer performs offline, and a
@@ -1853,6 +1940,18 @@ us.
    `electron` bump currently patches libopus, libvpx, BoringSSL and libpng at
    once, with CVE numbers and a public feed. After the port that becomes a named
    human with a named upstream watch list, and it needs an owner here.
+
+   > **Partly built 2026-08-26.** `rust.yml` has carried `check`, `test`, `deny`,
+   > `attribution` and `auditable` for some time — `cargo-deny` and `cargo-vet` in place of
+   > `npm audit`, and `cargo-about` producing the attribution file GPL distribution wants.
+   > CodeQL still covers the repository through its own workflow. `rust-release.yml` is
+   > new and is the release half.
+   >
+   > **The loss this item names is unchanged and still unowned.** RustSec does not
+   > systematically track CVEs in the C vendored inside `-sys` crates, so `cargo audit`
+   > will never report a libopus or an APM security release. Nothing built here changes
+   > that; it needs a named human with a named watch list, and naming one is not something
+   > a commit can do.
 6. ~~The Linux tarball with a documented `setcap cap_sys_ptrace+ep` step.~~ Struck
    2026-08-25 with the client's Linux support. It was here because on the common
    `ptrace_scope=1` default the client cannot read the game at all, and an AppImage
@@ -1941,9 +2040,9 @@ from the client even after our own 1.x support ends.
 | P1+ Foundations | 5.0 | built | no |
 | P2+ Game reader | 6.0 | built, G1 met | with P3+ |
 | P3+ Audio engine | 10.0 | built, G2 met | critical path |
-| P4+ Transport | 10.5 | decisions built; mesh wired, audio not | critical path |
-| P5+ Platform | 6.0 | built | with P4+ |
-| P6+ GUI | 11.5 | built | after P5+ |
+| P4+ Transport | 10.5 | built | critical path |
+| P5+ Platform | 6.0 | partly built | with P4+ |
+| P6+ GUI | 11.5 | planned | after P5+ |
 | P7+ Packaging | 9.5 | planned | partly with P6+ |
 | P8 Bridge and sunset → G4 | 4.0 | planned | before the 2.0 release, not after |
 | **Total to 2.0, one developer** | **74** | | midpoint of a range whose low end is 65 |
@@ -2038,6 +2137,18 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
    with Linux on 2026-08-25.
 2. No `.blockmap` asset for the bridge, or the updater attempts a differential
    download against a file that is not there.
+
+   > **Built 2026-08-26, items 1 and 2.** `acl_updater::legacy_feed` writes `latest.yml`
+   > and `there_is_no_blockmap` is the test — `electron-builder` names one by default, so
+   > the omission has to be deliberate and stay deliberate.
+   >
+   > **Two things in that file are easy to get wrong**, and both now have tests. The digest
+   > is **base64**, while `acl_updater::manifest` carries the same SHA-512 as hex —
+   > `electron-updater` decodes base64 and compares bytes, so a hex digest there is one
+   > that never matches and every client refuses the update quietly. And **both** the
+   > `files` list and the top-level `path`/`sha512` pair are written, because the installed
+   > fleet spans `electron-updater` versions: older ones read the pair, newer ones read the
+   > list, and writing one of the two is choosing which half of the fleet updates.
 3. Staged rollout as sequential tagged releases — 1.1.0, 1.1.1, 1.1.2, a week
    apart, cohort baked in at build time. `stagingPercentage` is not available and
    this is settled rather than weighed: it lives in `latest.yml`, `latest.yml` is
@@ -2051,6 +2162,22 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
 4. The first bridge installer **renames rather than deletes** the Electron
    install and its config, and 2.x ships a documented way back. Only after the
    bridge has sat at full rollout for a cycle does it begin deleting.
+
+   > **Built 2026-08-26, with one departure that is stated rather than done quietly.**
+   > `installer/bridge.nsi` moves the Electron files into `1.x-backup` beside them, and its
+   > install section contains no `Delete` and no `RMDir` at all — there is a test for that.
+   > The uninstaller leaves the backup, because somebody uninstalling 2.x may be doing
+   > exactly that in order to go back.
+   >
+   > **It does not touch the config**, and item 4 says "the Electron install *and* its
+   > config". Since §4.9 item 4 the two versions keep separate settings directories and
+   > `acl_core::paths::import` reads 1.x's forward on first run. Renaming 1.x's config
+   > would therefore break the import it exists to enable: 2.x would start on defaults with
+   > the settings sitting under a name nothing looks for. Leaving it untouched is strictly
+   > more conservative than renaming it and serves the same purpose.
+   >
+   > It also opens no window at all, where the plain installer opens one on a first
+   > install. Every machine that runs the bridge runs it because its updater decided to.
 5. The **migration is complete before the switch-off**, and "complete" is a
    number agreed in advance and read off the per-version join counts below, not a
    feeling about how long it has been. Until that number is met, 1.1.x keeps
@@ -2062,6 +2189,22 @@ picks by extension and then prefers a filename containing `x64` or `ia32`;
    not updated must be told why it stopped working, in the app, in its own
    language — the 37 locale directories are already there. This is small work and
    it is the difference between a sunset and an outage.
+
+   > **The client half built 2026-08-26 — and it is small work with an ordering
+   > constraint that is not.** `src/common/protocolRetirement.ts` maps the server's
+   > sentinel to `game.error_retired`, and `Voice.tsx` translates it where the error is
+   > *rendered* rather than where it arrives, so it follows the language setting rather
+   > than capturing `t` in an effect.
+   >
+   > **A client can only translate a string it already has.** This has to reach the fleet in
+   > an ordinary 1.x release, and that release has to reach people, *before* the server
+   > starts sending it. Ship the two together and every user sees the raw sentinel:
+   > technically a message, practically an outage with a serial number.
+   >
+   > So the sentinel is also a readable English sentence — "this version is no longer
+   > supported, please update" — and there is a test asserting it stays one. If the ordering
+   > is got wrong anyway, what a user sees is still something they can act on. The server
+   > half is the other repository's.
 
 **Rollback** is re-marking the 1.0.2 release as *Latest*: un-updated clients
 revert within one check interval without touching a frozen asset. It is
@@ -2126,7 +2269,36 @@ after that release there is no 1.x client in any lobby of ours, so the threshold
 this phase used to wait on is the same number P8 item 5 already had to meet.
 
 Move lobby settings and the impostor radio claim to the socket, drop the data
-channel and disable SCTP, and delete the SCTP fuzz targets. A second wire
+channel and disable SCTP, and delete the SCTP fuzz targets.
+
+> **Taken apart 2026-08-26, and three of the four are already answered.** The phase reads
+> as one blocked lump; it is not.
+>
+> **The data channel was never built.** `acl_core::peers` adds an audio track and nothing
+> else — there is no `create_data_channel` anywhere in the shipped crates, only in
+> `acl-net`'s loopback test. There is nothing to drop.
+>
+> **SCTP cannot be turned off, and is never negotiated.** `rtc-sctp` is a hard dependency
+> of `rtc` with no feature gating it, so the code is linked in whatever this client does.
+> What is true instead is that the wire never carries it: an SDP with no `m=application`
+> section negotiates no association, so the linked code is unreachable by anything a peer
+> sends. `the_offer_carries_audio_and_no_data_channel` asserts exactly that, because "we do
+> not use it" is an intention and "the offer does not contain it" is a fact — and it stops
+> being one the moment somebody adds a data channel for something convenient.
+>
+> **There are no SCTP fuzz targets.** This repository has no `fuzz` directory. Nothing to
+> delete.
+>
+> **What is genuinely blocked is the first clause, and now for a stated reason rather than
+> an asserted one.** 1.x sends the lobby settings and the impostor radio claim *over the
+> data channel* — `Voice.tsx` lines 732, 918 and 1197 — so a 2.x client that sent them over
+> the socket would be understood by no 1.x peer, and §4.12's staged rollout deliberately
+> puts both generations in one lobby for weeks. The switch-off is what removes the peer
+> that cannot hear it. Until then this is not a cleanup being deferred; it is a change that
+> would break people who are still in the lobby.
+>
+> Which leaves P9 with one item, gated on other people's machines, and its blockedness is
+> now a mechanism anybody can check rather than a claim to be taken on trust. A second wire
 protocol is not one of the things the switch-off unlocks, and it is worth being
 explicit about why, because half its stated precondition is now met and that
 invites the wrong conclusion: the OBS page has been migrated since H3, but the

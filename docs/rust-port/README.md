@@ -138,13 +138,27 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > never in the corpus and still are not. `TASKS`, `DISCUSSION`, comms sabotage, doors and
 > cameras need four people in a real round, and freeplay provably cannot reach them —
 > the Electron reader takes all five *inside* `if (state === GameState.TASKS)`.
+>
+> **Decided 2026-08-27: that gap does not hold 2.0.** Exactness is unchanged and still
+> fails on one divergence. What was decided is that a release does not wait on getting four
+> people into a lobby — the release notes name the unproven situations instead, and
+> [issue #10](https://github.com/greluc/AnotherCrewLink/issues/10) stays open. The cost is
+> stated rather than glossed: the fourth session found 23 divergences in branches nobody had
+> reached, so if one of these five is wrong, the players find it.
 > `test/recordings/README.md` records the measurement.
 >
-> `P4+`'s decisions are built, and its **mesh** is wired: the client joins the lobby the
-> reader reports, offers to newcomers, routes signals through `signal_route`, and reports
-> which peers are reachable — proved by two clients meeting through a real server. What is
-> missing is the audio itself: capture, encode, decode, playback. "Mesh wired, audio not"
-> is the whole of it, and the audio is the part §2 has always called the project.
+> `P4+` is **built**, and that is the sentence this note has been unable to write. The
+> client joins the lobby the reader reports, offers to newcomers, routes signals through
+> `signal_route`, carries Opus over the mesh, and opens a microphone and a speaker at both
+> ends — capture, encode, send, order, decode, place by `voice_params`, mix, play.
+>
+> The echo canceller and the resampler are in it too: `Apm::render` is fed from the output
+> callback before every `Apm::capture`, and a device that does not offer 48 kHz is opened at
+> its own rate and resampled rather than refused. Measured on a real machine: one buffer
+> underrun at start-up, none in the twenty seconds after.
+>
+> What has never been done is the thing no test here can do: two people, two machines,
+> hearing each other.
 >
 > `P5+` is **built**. The overlay window draws — that was the last piece, and it took a
 > sprite protocol to get there.
@@ -153,7 +167,24 @@ P9  Post-1.x cleanup             3.0   outside the 2.0 budget
 > and file), lobby browser end to end, overlay view with its seven positions and the
 > meeting table, and the GPU fallback chain — which lost a rung to measurement.
 >
-> `P7+`, `P8` and `P9` are untouched.
+> `P7+` is built, and its ceremony is a command: `acl-release keys | write | sign`, with a
+> runbook beside it. What it cannot do is *be performed* — the maintainer generates and
+> keeps the keys, and ships an ordinary 1.0.x release through the new installer first,
+> which is §4.9's own instruction and the only thing that tests the CLI contract against
+> real 1.x updaters.
+>
+> `P8`'s mechanism is built: `latest.yml`, the bridge installer that renames rather than
+> deletes, the switch-off message. What is left of it is not code — three staged releases,
+> a fleet that has to move, and G4 rehearsed on real 1.0.2 installs.
+>
+> `P9` is three-quarters **already true** and one-quarter blocked, which is not how it
+> reads. The data channel was never built, so there is none to drop; SCTP cannot be
+> feature-disabled — it is a hard dependency of `rtc` — but is never negotiated, and a test
+> asserts the offer contains no `m=application`; and there are no SCTP fuzz targets to
+> delete. What is left is moving the lobby settings and the impostor radio claim to the
+> socket, and that is blocked for a mechanical reason: 1.x reads both off the *data
+> channel*, and the rollout puts both generations in one lobby for weeks. It is not a
+> cleanup being deferred; it is a change that would break people still in the lobby.
 >
 > The weeks are unchanged and are not a record of what anything cost.
 > [04-implementation-plan.md](04-implementation-plan.md) §4.11 carries the same statement
@@ -224,7 +255,7 @@ arithmetic and this page is the summary of it.
 | Gate | After | Criterion | If it fails |
 | --- | --- | --- | --- |
 | **G0** | 1.x offsets trust chain (H2) | A malicious-bundle corpus is rejected with a distinct error each; on-disk tampering with the cached bundle is rejected as far as the validator can catch it, proving validation at load and not only at download; the validator accepts all 81 real upstream files unchanged; the embedded floor holds with the mirror unreachable, and the client says which bundle it is using; a bundle is published within 6 hours of a real Among Us update | P2+ does not start its offsets work |
-| **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame | Bug; fix and retry |
+| **G1** | Game reader | `AmongUsState` matches the Electron reader exactly on every recorded frame. Exact is still exact — one divergence fails it. Since 2026-08-27 the *coverage* of the corpus is not a release gate: five situations need four people in an online round, and 2.0 does not wait on scheduling them | Bug; fix and retry |
 | **G2** | Audio engine | DSP within −80 dBFS of golden vectors; added latency within 30 ms and quality within 0.2 MOS of Chromium under emulated loss and jitter; the receive path recovers Opus in-band FEC from a Chromium sender at 5% loss (the `i686-pc-windows-msvc` build criterion was struck on 2026-08-24 with the target) | **Stop the port** |
 | ~~**G3**~~ | Transport | **Struck 2026-08-25.** It asked that a 1.0.2 Electron client and a Rust client hear each other in the same lobby, direct and via TURN; the same call under each impairment profile; and a three-client mixed-generation lobby with one client leaving and rejoining | Was *no staged rollout; reconsider scope*. That is now the standing position rather than a contingency |
 | **G4** | Bridge (P8) — and a prerequisite of the 2.0 release itself | Real 1.0.2 installs on Windows x64 update from a staging feed to the bridge, silently. Narrowed from three legs on 2026-08-25: ia32 went with the Windows 11 floor and Linux with its support | **2.0 does not ship.** The 1.x wire format is switched off when it does, so releasing over an unmigrated fleet cuts every 1.x user off on the day |

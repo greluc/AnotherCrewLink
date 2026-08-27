@@ -457,6 +457,54 @@ Ordered steps:
 
 > **Gate `G4` — bridge rehearsal, and a release prerequisite.** On **real 1.0.2 installs**, not dev builds: Windows x64, Windows ia32 and Linux each update from a staging feed to the bridge. Silent install; the **correct architecture** selected; correct install directory; working uninstall entry; migrated config; and on Linux the old process exits within 2 seconds rather than hanging. Prerequisites in the field: the minisign manifest chain, the elevation gate, immutable releases, and `G3` passing — because during the staged rollout the same lobby contains both generations, by design, for weeks.
 >
+> **Two of those three legs describe a bridge that does not exist — found 2026-08-26.**
+> `G4` was written on 2026-08-24. The 32-bit build and Linux support were removed on
+> 2026-08-25, and nothing came back to this paragraph.
+>
+> There is no ia32 artefact and no AppImage, so the ia32 and Linux legs cannot be
+> rehearsed, cannot be fixed by rehearsing them, and are not a gap in testing. What they
+> are is a gap in the *rollout*: §9's `C1` row says 1.0.2 keeps working "until 2.0 ships —
+> at which point `S4` stops speaking the 1.x wire format at all", and `P8`/`G4` exist to
+> get the fleet across that day. A 32-bit or Linux user cannot be got across it. There is
+> nothing on the other side for them.
+>
+> **What the feed does to them today, which is worse than nothing.** `findFile` prefers a
+> name containing `x64` or `ia32` and **otherwise takes the first `.exe`**. The bridge
+> publishes one `.exe` and no token — `the_artefact_is_still_one_exe_under_the_old_name`
+> pins that — so a 32-bit client is handed the x64 installer and runs it. NSIS installers
+> are themselves 32-bit, so it would run to the end, report success, and leave the machine
+> with binaries that cannot start. The "Bridge installer misnamed" risk row below is not a
+> risk any more; with no second artefact it is the only possible outcome.
+>
+> Both scripts now refuse in `.onInit` — `${RunningX64}`, no dialog under `/S`, non-zero
+> exit code — and the bridge refuses *before* it renames the 1.x installation, so a
+> refused user keeps the client that worked.
+> `a_thirty_two_bit_machine_keeps_the_client_it_has` holds that ordering. Refusing rescues
+> nobody; it is the difference between an install that reports success and leaves nothing
+> working, and one that says what happened.
+>
+> **Decided 2026-08-27: 1.0.2 is the last version for those machines, and they are told
+> so.** Not left to be discovered on the day the server stops answering. The alternative —
+> keeping the 1.x wire format alive indefinitely for a population nobody can build for — was
+> weighed and refused: it is a second protocol maintained forever against a fleet that can
+> never move, and the sunset decision of 2026-08-24 exists precisely to avoid that.
+>
+> What this obliges, and none of it is optional:
+>
+> * The release notes say it, in the register `CHANGELOG.md` is written in — what changed,
+>   what the user sees, what their options are. **This is already done**: the drafted
+>   `v1.0.6` entry announces both removals at length, and was written on 2026-08-25 when
+>   they happened. The decision recorded here does not create that obligation; it confirms
+>   the answer that entry already gave, and stops the plan documents contradicting it.
+> * Both installers refuse a 32-bit machine rather than reporting success over binaries that
+>   cannot start, which is now true and tested.
+> * `G4` is a **one-leg gate — x64 only**. There is no ia32 or Linux leg to fail, and a
+>   three-leg gate that quietly cannot pass is worse than a one-leg gate that says so.
+>
+> The honest summary is that this decision does not cost those users anything the removal of
+> 2026-08-25 had not already cost them. What it changes is whether they hear it from us or
+> from a client that stops connecting.
+
 > **`G4` gates the 2.0 release itself.** It is no longer a gate whose failure mode is "no fleet migration; 2.0 stays a parallel install" — that fallback died with the sunset decision. Since 2.0 shipping is what switches the 1.x wire format off, a `G4` that has not passed and a fleet that has not moved mean 2.0 cannot ship without cutting off every remaining 1.x user on the day. If `G4` fails, 2.0 waits.
 
 **Sunset.** No date is published, and none is needed: the 1.x wire format is switched off **when 2.0 ships**. The server remains the binding commitment — users who never update keep working only for as long as the server speaks 1.x — but that window is now defined by the rollout rather than by a calendar, which is why `P8` runs before the release and not after it. Announce it in-app through the existing update-notification path at least two release cycles ahead, and when it arrives have the server return a message the 1.x client displays rather than failing silently.

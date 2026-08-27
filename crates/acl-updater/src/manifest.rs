@@ -19,14 +19,20 @@
 //! Among Us updates and ends when players can hear each other again, and a human holding a
 //! key in that window *is* the outage.
 //!
-//! # It fails closed, and it is closed today
+//! # It fails closed, and both keys are in
 //!
-//! [`PUBLIC_KEYS`] is empty. No release key exists yet — generating one is a ceremony the
-//! maintainer performs offline, and inventing a placeholder here would be a key whose
-//! private half is in a scratch directory somewhere. Until it is filled in, every manifest
-//! is refused: `no_keys_means_no_updates` is the test, and it is a feature. An updater that
-//! accepted unsigned manifests while the keys were "not done yet" is the exact shape of the
-//! accident this design exists to prevent.
+//! The ceremony happened on 2026-08-27. [`PUBLIC_KEYS`] holds the operational key, which
+//! signs releases, and the recovery key, which never signs one — it is here so that a
+//! client already trusts it on the day the operational key is lost or stolen. That is the
+//! only day it is any use, and the one day it could not be delivered, because delivering it
+//! would mean an update signed by the key that has gone.
+//!
+//! `there_are_two_keys` fails on one as well as on none. One key is the state where somebody
+//! performed half a ceremony and moved on, and reading the file does not distinguish it from
+//! the finished state.
+//!
+//! The private halves are the maintainer's, encrypted with a passphrase, and in two
+//! different places. Nothing in this repository or reachable from any workflow can sign.
 
 use minisign_verify::{PublicKey, Signature};
 
@@ -39,8 +45,16 @@ use minisign_verify::{PublicKey, Signature};
 /// having to reach it first — which is the whole point, since a compromised release key is
 /// exactly when updates cannot be trusted to arrive.
 ///
-/// Empty until the ceremony happens. See the module documentation.
-pub const PUBLIC_KEYS: &[&str] = &[];
+/// Generated 2026-08-27 by `scripts/new-release-key.ps1`. The private halves are the
+/// maintainer's, encrypted, and are not in this repository or reachable from any workflow.
+pub const PUBLIC_KEYS: &[&str] = &[
+    // Operational: signs releases.
+    "RWTwJop88FcaN1c8o/aeHwMQ+32VTloV1dmj8duTvXseZ3N9/p+2kyL/",
+    // Recovery: never signs a release and never goes near a workflow. It is here so that a
+    // client already trusts it on the day the operational key is lost or stolen -- which is
+    // the only day it is any use, and the one day it could not be delivered.
+    "RWQ8iPMEM6xLL184YQFFd0TXPLFaMRF7JUsSPrJJk+h9bZ+qVgtqxAQM",
+];
 
 /// What an update is.
 ///
@@ -199,7 +213,7 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Manifest, ManifestError, PUBLIC_KEYS};
+    use super::{Manifest, ManifestError, PUBLIC_KEYS, PublicKey};
 
     /// A keypair made for this test, and a manifest signed with it.
     ///
@@ -226,19 +240,77 @@ mod tests {
         )
     }
 
-    /// **The shipped build trusts nothing, and that is deliberate.** No release key exists
-    /// yet; a placeholder here would be a key whose private half is in a scratch directory.
-    /// An updater that accepted unsigned manifests while the keys were "not done yet" is
-    /// the exact accident this design exists to prevent.
+    /// Every key in the list is a key.
+    ///
+    /// The one that matters. A key mistyped or truncated on its way from the ceremony into
+    /// this file is a build that refuses every update — and it refuses them at the moment
+    /// the fleet is meant to be updating, with an error about signatures that sends whoever
+    /// reads it looking at the signing rather than at the trusting.
+    #[test]
+    fn every_key_is_a_key() {
+        for key in PUBLIC_KEYS {
+            assert!(
+                PublicKey::from_base64(key).is_ok(),
+                "{key} is in PUBLIC_KEYS and is not a minisign public key"
+            );
+        }
+    }
+
+    /// And no key is in the list twice.
+    ///
+    /// Two entries that are the same key are one key that looks like two, which is exactly
+    /// the appearance the recovery key exists to avoid — a build that looks like it can
+    /// recover and cannot.
+    #[test]
+    fn the_keys_are_different_keys() {
+        let unique: std::collections::BTreeSet<_> = PUBLIC_KEYS.iter().collect();
+        assert_eq!(
+            unique.len(),
+            PUBLIC_KEYS.len(),
+            "the same key is in PUBLIC_KEYS more than once"
+        );
+    }
+
+    /// There are two, and this fails while there is one.
+    ///
+    /// §4.9: "the operational key held offline and never in a release-workflow secret". One
+    /// signs releases; the other never touches a workflow and is what the project recovers
+    /// with if the first is lost or stolen.
+    ///
+    /// Recovery only works if clients **already** trust the second key — a key added after
+    /// the first is compromised has to reach the fleet through an update, and the update
+    /// path is precisely what is broken at that moment. So there is no adding it later.
+    ///
+    /// Failing on exactly one is deliberate. One key is the state where somebody performed
+    /// half the ceremony and moved on, and it is indistinguishable from the finished state
+    /// by reading the file. Zero fails too, and says something different.
+    #[test]
+    fn there_are_two_keys() {
+        assert!(
+            !PUBLIC_KEYS.is_empty(),
+            "no release key: run scripts/new-release-key.ps1, twice, into two places"
+        );
+        assert_eq!(
+            PUBLIC_KEYS.len(),
+            2,
+            "{} key(s). The recovery key is missing, and it cannot be added after it is \
+             needed -- recovery works by clients already trusting it. Run \
+             `scripts/new-release-key.ps1 -Role recovery` into somewhere the operational \
+             key is not.",
+            PUBLIC_KEYS.len()
+        );
+    }
+
+    /// With no keys at all, nothing verifies.
+    ///
+    /// Kept as a property of the code rather than of today's list: `verified_with` is what
+    /// the ceremony's own test drives, and a build compiled with an empty list must refuse
+    /// rather than fall open.
     #[test]
     fn no_keys_means_no_updates() {
-        assert!(
-            PUBLIC_KEYS.is_empty(),
-            "the ceremony happened -- update this test and the module header with it"
-        );
         let (_, signature) = signed(&document("2.0.0"));
         assert_eq!(
-            Manifest::verified(document("2.0.0").as_bytes(), &signature),
+            Manifest::verified_with(document("2.0.0").as_bytes(), &signature, &[]),
             Err(ManifestError::NoKeys)
         );
     }

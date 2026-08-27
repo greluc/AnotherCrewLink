@@ -21,6 +21,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # The installer job below compiles this and then runs what it produced. Without it
+      # here, an edit to the script is checked at release time, which is the one moment
+      # when discovering it is most expensive.
+      - 'installer/**'
       # Gate G1 replays these against the Rust reader. Without them here, adding a
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
@@ -42,6 +46,10 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - '.github/workflows/rust.yml'
+      # The installer job below compiles this and then runs what it produced. Without it
+      # here, an edit to the script is checked at release time, which is the one moment
+      # when discovering it is most expensive.
+      - 'installer/**'
       # Gate G1 replays these against the Rust reader. Without them here, adding a
       # recording the reader disagrees with leaves the repository green until somebody
       # happens to touch a crate.
@@ -131,6 +139,155 @@ jobs:
         env:
           ACL_SERVER_BIN: server/target/debug/acl-server.exe
         run: cargo test --locked --workspace --target x86_64-pc-windows-msvc
+
+  installer:
+    # The installer script, compiled and then *run*.
+    #
+    # It used to be built only by the release job, on a tag. So a script that did not
+    # compile stayed green until somebody cut a release, and `tests/installer_contract.rs`
+    # -- which reads the .nsi as text -- could only ever check that the right words were
+    # in it. Words being in a file is not the same as NSIS accepting them.
+    #
+    # The binaries are stubs. What is under test is the script: its sections, its macros,
+    # the whole MUI setup, the registry writes, and the uninstaller it generates. None of
+    # that depends on what is inside the executables it copies, and building the real ones
+    # here would add ten minutes to every push to check nothing extra.
+    runs-on: windows-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress --yes
+
+      - name: Stand in for the built binaries
+        shell: bash
+        run: |
+          mkdir -p stubs
+          for name in anothercrewlink acl-helper acl-updater; do
+            printf 'stub' > "stubs/$name.exe"
+          done
+          # And for what `electron-builder --dir` leaves behind, which legacy.nsi packages.
+          # A tree rather than a list, because that is what the script copies: naming files
+          # here would test a payload the real one does not have.
+          mkdir -p unpacked/resources unpacked/locales
+          printf 'stub' > unpacked/AnotherCrewLink.exe
+          printf 'stub' > unpacked/resources/app.asar
+          printf 'stub' > unpacked/locales/en-US.pak
+
+      # The version carries a prerelease suffix on purpose. `VIProductVersion` takes four
+      # numbers and aborts on anything else, the release workflow triggers on `v2.*` --
+      # which matches `v2.0.0-rc.1` -- and §4.12's staged rollout is exactly what would be
+      # tagged that way. Compiling only `0.0.0` here would leave that path to be discovered
+      # by the first staging release, on the day it mattered.
+      - name: Compile the installer
+        shell: bash
+        run: |
+          # NSIS is not on PATH after a choco install in the same job.
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          "$makensis" -DVERSION=0.0.0-ci -DSOURCE_DIR=../stubs installer/anothercrewlink.nsi
+          test -s installer/AnotherCrewLink-Setup-0.0.0-ci.exe
+          # The bridge is the script the installed fleet actually runs, so it is the one
+          # whose failure would be discovered by everybody at once.
+          "$makensis" -DVERSION=1.1.0 -DSOURCE_DIR=../stubs installer/bridge.nsi
+          # And the one that carries an ordinary 1.0.x release -- §4.9's way of proving the
+          # contract against real updaters. Its payload is a tree, not three named files, so
+          # compiling it exercises a path the other two do not have.
+          "$makensis" -DVERSION=1.0.6 -DSOURCE_DIR=../unpacked \
+            -DOUT_FILE=AnotherCrewLink-Setup-1.0.6.exe installer/legacy.nsi
+          test -s installer/AnotherCrewLink-Setup-1.0.6.exe
+
+      # The silent switches are a contract with 1.x's updater, which spawns
+      # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that
+      # compiles but shows a dialog under /S hangs that updater forever, and no amount of
+      # reading the source says whether it does.
+      #
+      # `//S` and not `/S`. Git Bash rewrites an argument that looks like a POSIX path
+      # into a Windows one before the program ever sees it, so `/S` arrives as a path and
+      # the installer is not silent -- it opens its window and waits for a click that is
+      # never coming. That is precisely the hang this job spent five runs on, and it was
+      # the harness rather than the script. `//` collapses to one slash and is passed
+      # through. `/D=` and `_?=` survive as they are, because an argument containing `=`
+      # is left alone.
+      - name: Install it silently, the way the updater will
+        shell: bash
+        run: |
+          # Bounded, and the bound is the assertion. 1.x's updater spawns this and waits on
+          # the process; an installer that does not exit hangs that updater forever, on
+          # every machine, at once. Two minutes is far longer than a copy of a few files
+          # needs, so exceeding it is the bug rather than a slow runner.
+          #
+          # stdin from /dev/null and output to a file: bash on Windows waits on handles the
+          # child inherited, so a process that has exited can still look like one that has
+          # not, and that would read as the hang above.
+          set +e
+          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated //S \
+            /D=$(cygpath -w "$PWD/installed") </dev/null >install.log 2>&1 &
+          installer=$!
+          for _ in $(seq 60); do
+            kill -0 $installer 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 $installer 2>/dev/null; then
+            # Still alive after a minute. Say what is running before killing it -- an
+            # installer waiting on a child it spawned looks identical, from the outside, to
+            # one stuck on its own, and the two have nothing in common as bugs.
+            echo "--- still running; what is alive ---"
+            tasklist //FI "IMAGENAME eq AnotherCrewLink-Setup-0.0.0-ci.exe" || true
+            tasklist //FI "IMAGENAME eq taskkill.exe" || true
+            tasklist //FI "IMAGENAME eq conhost.exe" || true
+            echo "--- what it managed to write ---"
+            ls -R installed 2>/dev/null || echo "(nothing)"
+            kill -9 $installer 2>/dev/null
+            wait $installer 2>/dev/null
+            cat install.log || true
+            echo "::error::the installer did not exit within 60s under /S"
+            exit 1
+          fi
+          wait $installer
+          code=$?
+          set -e
+          cat install.log || true
+          echo "installer exit code: $code"
+          # NSIS can return before the last handle is closed, so give the files a moment.
+          for _ in $(seq 20); do
+            [ -f installed/anothercrewlink.exe ] && break
+            sleep 1
+          done
+          test -f installed/anothercrewlink.exe
+          test -f installed/acl-helper.exe
+          test -f installed/Uninstall.exe
+          # The locales are what the app reads at startup; an installer that forgot them
+          # is one that starts and shows nothing but keys.
+          test -d installed/static/locales
+          test -s installed/static/locales/en/translation.json
+
+      - name: And take it away again
+        shell: bash
+        run: |
+          # Bounded for the same reason, and `_?=` for a different one: it tells NSIS to run
+          # the uninstaller in place rather than from a copy in the temp directory, which is
+          # the only way a script can wait for it and see the result.
+          set +e
+          timeout 120 ./installed/Uninstall.exe //S _?=$(cygpath -w "$PWD/installed") \
+            </dev/null >uninstall.log 2>&1
+          code=$?
+          set -e
+          cat uninstall.log || true
+          if [ $code -eq 124 ]; then
+            echo "::error::the uninstaller did not exit within 120s under /S"
+            exit 1
+          fi
+          echo "uninstaller exit code: $code"
+          for _ in $(seq 20); do
+            [ -f installed/anothercrewlink.exe ] || break
+            sleep 1
+          done
+          # `_?=` keeps Uninstall.exe itself, which is how NSIS runs an uninstaller
+          # in-place rather than from a copy in the temp directory. Everything it was
+          # responsible for should be gone.
+          test ! -f installed/anothercrewlink.exe
+          test ! -d installed/static
 
   deny:
     # Advisories, licences, duplicate versions and crate sources — the policy is in

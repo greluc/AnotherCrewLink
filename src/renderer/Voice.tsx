@@ -51,6 +51,7 @@ import { pushToTalkOptions } from './settings/SettingsStore';
 import { poseCollide } from '../common/ColliderMap';
 import { hasRelay, isRelayUrl, withTcpRelays, withTransportPolicy } from './iceServers';
 import { routeSignal } from './signalRoute';
+import { retirementMessage } from '../common/protocolRetirement';
 
 console.log(adapter.browserDetails.browser);
 
@@ -930,6 +931,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 
 		socket.on('error', (error: SocketError) => {
 			if (error.message) {
+				// Stored as the server sent it and translated where it is rendered. Reaching
+				// for `t` in here would capture it in the effect, which is a stale closure the
+				// moment somebody changes language -- and the switch-off message is precisely
+				// the one a person might be changing language to read.
 				setError(error.message);
 			}
 			console.error('socketIO error:', error);
@@ -1718,7 +1723,11 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						ERROR
 					</Typography>
 					<Typography align="center" style={{ whiteSpace: 'pre-wrap' }}>
-						{error}
+						{/* The switch-off arrives as a server error: §4.12 item 6 answers a 1.x
+						    handshake with a message rather than closing the socket, so the user
+						    is told why they stopped being able to hear anybody. Translated here
+						    rather than where it arrives, so it follows the language setting. */}
+						{error && retirementMessage(error, t)}
 						{initialError}
 					</Typography>
 					<SupportLink />
