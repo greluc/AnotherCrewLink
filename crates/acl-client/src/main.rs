@@ -1690,7 +1690,14 @@ impl Client {
                 return;
             }
             net::State::Failed(why) => {
-                ui.colored_label(egui::Color32::from_rgb(230, 140, 90), why);
+                // A retired protocol is the one server error worth replacing: it is not a
+                // fault to report but a sentence telling the player to update, and it is
+                // theirs to read in their own language. Everything else passes through --
+                // a translated guess over a real error hides the thing they need.
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 140, 90),
+                    acl_net::retirement::message(&why, translate),
+                );
                 if ui.button("Try again").clicked() {
                     // Back to idle, which is what makes the arm above connect again.
                     self.link.disconnect();
@@ -2062,8 +2069,16 @@ impl Client {
                 self.link.connected_peers()
             ));
         });
+        let retired;
         let link_trouble = match self.link.state() {
-            net::State::Failed(why) => Some(why.as_str()),
+            net::State::Failed(why) => {
+                let catalogue = self.catalogue.as_ref();
+                retired = acl_net::retirement::message(why, |key| {
+                    catalogue
+                        .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+                });
+                Some(retired.as_str())
+            }
             _ => None,
         };
         for (what, trouble) in [
