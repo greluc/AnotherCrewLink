@@ -191,11 +191,27 @@ jobs:
       - name: Install it silently, the way the updater will
         shell: bash
         run: |
-          # /D= last and unquoted, which is NSIS's rule and not a style choice: it takes
-          # the rest of the line verbatim, so a quote would land in the path.
-          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S /D=$(cygpath -w "$PWD/installed")
-          # NSIS returns immediately and carries on in another process.
-          for _ in $(seq 40); do
+          # Bounded, and the bound is the assertion. 1.x's updater spawns this and waits on
+          # the process; an installer that does not exit hangs that updater forever, on
+          # every machine, at once. Two minutes is far longer than a copy of a few files
+          # needs, so exceeding it is the bug rather than a slow runner.
+          #
+          # stdin from /dev/null and output to a file: bash on Windows waits on handles the
+          # child inherited, so a process that has exited can still look like one that has
+          # not, and that would read as the hang above.
+          set +e
+          timeout 120 ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S \
+            /D=$(cygpath -w "$PWD/installed") </dev/null >install.log 2>&1
+          code=$?
+          set -e
+          cat install.log || true
+          if [ $code -eq 124 ]; then
+            echo "::error::the installer did not exit within 120s under /S"
+            exit 1
+          fi
+          echo "installer exit code: $code"
+          # NSIS can return before the last handle is closed, so give the files a moment.
+          for _ in $(seq 20); do
             [ -f installed/anothercrewlink.exe ] && break
             sleep 1
           done
@@ -210,8 +226,21 @@ jobs:
       - name: And take it away again
         shell: bash
         run: |
-          ./installed/Uninstall.exe /S _?=$(cygpath -w "$PWD/installed")
-          for _ in $(seq 40); do
+          # Bounded for the same reason, and `_?=` for a different one: it tells NSIS to run
+          # the uninstaller in place rather than from a copy in the temp directory, which is
+          # the only way a script can wait for it and see the result.
+          set +e
+          timeout 120 ./installed/Uninstall.exe /S _?=$(cygpath -w "$PWD/installed") \
+            </dev/null >uninstall.log 2>&1
+          code=$?
+          set -e
+          cat uninstall.log || true
+          if [ $code -eq 124 ]; then
+            echo "::error::the uninstaller did not exit within 120s under /S"
+            exit 1
+          fi
+          echo "uninstaller exit code: $code"
+          for _ in $(seq 20); do
             [ -f installed/anothercrewlink.exe ] || break
             sleep 1
           done
