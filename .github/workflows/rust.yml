@@ -200,15 +200,33 @@ jobs:
           # child inherited, so a process that has exited can still look like one that has
           # not, and that would read as the hang above.
           set +e
-          timeout 120 ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S \
-            /D=$(cygpath -w "$PWD/installed") </dev/null >install.log 2>&1
+          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S \
+            /D=$(cygpath -w "$PWD/installed") </dev/null >install.log 2>&1 &
+          installer=$!
+          for _ in $(seq 60); do
+            kill -0 $installer 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 $installer 2>/dev/null; then
+            # Still alive after a minute. Say what is running before killing it -- an
+            # installer waiting on a child it spawned looks identical, from the outside, to
+            # one stuck on its own, and the two have nothing in common as bugs.
+            echo "--- still running; what is alive ---"
+            tasklist //FI "IMAGENAME eq AnotherCrewLink-Setup-0.0.0-ci.exe" || true
+            tasklist //FI "IMAGENAME eq taskkill.exe" || true
+            tasklist //FI "IMAGENAME eq conhost.exe" || true
+            echo "--- what it managed to write ---"
+            ls -R installed 2>/dev/null || echo "(nothing)"
+            kill -9 $installer 2>/dev/null
+            wait $installer 2>/dev/null
+            cat install.log || true
+            echo "::error::the installer did not exit within 60s under /S"
+            exit 1
+          fi
+          wait $installer
           code=$?
           set -e
           cat install.log || true
-          if [ $code -eq 124 ]; then
-            echo "::error::the installer did not exit within 120s under /S"
-            exit 1
-          fi
           echo "installer exit code: $code"
           # NSIS can return before the last handle is closed, so give the files a moment.
           for _ in $(seq 20); do
