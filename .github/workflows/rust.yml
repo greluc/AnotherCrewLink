@@ -198,8 +198,16 @@ jobs:
             name=$1; shift
             cp installer/anothercrewlink.nsi "installer/probe-$name.nsi"
             "$@" "installer/probe-$name.nsi"
-            "$makensis" -DVERSION=0.0.0-$name -DSOURCE_DIR=../stubs \
-              -DOUT_FILE=probe-$name.exe "installer/probe-$name.nsi" >/dev/null
+            # Checked, unlike last time: a variant that failed to compile leaves no .exe,
+            # and running a file that is not there exits instantly -- which reads as
+            # "this one is fine" and is how `notail` came back a false negative.
+            if ! "$makensis" -DVERSION=0.0.0-$name -DSOURCE_DIR=../stubs \
+                 -DOUT_FILE=probe-$name.exe "installer/probe-$name.nsi" >"mk-$name.log" 2>&1
+            then
+              echo "PROBE $name: DID NOT COMPILE"
+              tail -3 "mk-$name.log"
+              return
+            fi
             rm -rf "out-$name"
             ./installer/probe-$name.exe /S /D=$(cygpath -w "$PWD/out-$name") \
               </dev/null >/dev/null 2>&1 &
@@ -213,10 +221,17 @@ jobs:
             fi
           }
           probe asis true
+          # Surgical, so the LogicLib structure around it stays valid. `Exec` on a stub
+          # that is four bytes of text is a CreateProcess that fails, and a failed launch
+          # is exactly the kind of thing that can put a modal error box on a process
+          # nobody is looking at.
+          probe noexec sed -i '/Exec .\"\$INSTDIR\\\\anothercrewlink.exe\"./d'
           probe noshortcut sed -i '/CreateShortCut/d'
           probe nokill sed -i '/nsExec::Exec/d;/^  Pop \$0$/d'
-          probe notail sed -i '/\${If} \$IsUpdate == "0"/,/\${EndIf}/d'
           probe noreg sed -i '/WriteReg/d'
+          # Whether the silent flag is even being seen. If this one exits, `${Silent}` is
+          # false under /S and the guard around Exec is not guarding anything.
+          probe alwaysquiet sed -i 's/\${IfNot} \${Silent}/\${If} 0 == 1/'
 
       # The silent switches are a contract with 1.x's updater, which spawns
       # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that
