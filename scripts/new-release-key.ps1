@@ -74,15 +74,33 @@ $repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $target = [System.IO.Path]::GetFullPath($Into, $PWD.Path).TrimEnd('\')
 $repository = $repository.TrimEnd('\')
 
+# A refusal is an answer, not a crash. `throw` prints the offending line and a row of
+# tildes, which reads as "this script is broken" when it is doing exactly its job -- and
+# this one is run by somebody performing a ceremony they will only perform twice.
+function Stop-With([string] $Message) {
+    Write-Host ''
+    Write-Host $Message -ForegroundColor Red
+    Write-Host ''
+    exit 1
+}
+
 # Compared as directory prefixes, so `...\BetterCrewLink-keys` is not mistaken for a path
 # inside `...\BetterCrewLink`.
 function Test-Inside([string] $Path, [string] $Directory) {
     return $Path -eq $Directory -or $Path.StartsWith($Directory + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 
-# `Test-Path` on a drive that does not exist raises, and this script runs with
-# ErrorActionPreference Stop -- so a mistyped drive letter came back as PowerShell's
-# "Cannot find drive" instead of the sentence explaining what to do about it.
+# Anything that touches the disk has to survive a drive that is not there. This script runs
+# with ErrorActionPreference Stop, and on a missing drive PowerShell's path cmdlets raise
+# rather than returning false -- so an unplugged USB stick came back as "Cannot find drive.
+# A drive with the name 'E' does not exist", from whichever line happened to look first,
+# instead of the sentence saying what to do about it.
+#
+# `Join-Path` is one of those cmdlets: it resolves through the provider, so it raises too.
+# `[IO.Path]::Combine` is string work and does not care.
+function Test-Anything([string] $Path) {
+    try { return Test-Path -LiteralPath $Path } catch { return $false }
+}
 function Test-Directory([string] $Path) {
     try { return Test-Path -LiteralPath $Path -PathType Container } catch { return $false }
 }
@@ -90,7 +108,7 @@ function Test-Directory([string] $Path) {
 # The guard that matters most. Everything else here is hygiene; this one is the difference
 # between a private key and a published one.
 if (Test-Inside $target $repository) {
-    throw @"
+    Stop-With @"
 $target is inside the repository.
 
 A private key in the working tree is one 'git add -A' away from being pushed, and a key
@@ -101,37 +119,44 @@ Put it on removable media, or anywhere outside $repository.
 "@
 }
 
-if ((Test-Path -LiteralPath (Join-Path $target 'release.key')) -or (Test-Path -LiteralPath (Join-Path $target 'release.pub'))) {
-    throw "$target already holds a key. Move it aside deliberately: replacing one silently retires every client that trusts it, at the next release, with no step in between where anybody could notice."
-}
-
 if ($PassphraseInto) {
     $passphrasePath = [System.IO.Path]::GetFullPath($PassphraseInto, $PWD.Path)
     if (Test-Inside $passphrasePath $target) {
-        throw "The passphrase would be written inside $target, beside the key it protects. That is not a second factor; it is a longer key -- anyone who copies the directory has both halves. Choose somewhere else, or leave -PassphraseInto off and paste into a password manager."
+        Stop-With "The passphrase would be written inside $target, beside the key it protects. That is not a second factor; it is a longer key -- anyone who copies the directory has both halves. Choose somewhere else, or leave -PassphraseInto off and paste into a password manager."
     }
     if (Test-Inside $passphrasePath $repository) {
-        throw "$passphrasePath is inside the repository. See above: the working tree is not where secrets go."
+        Stop-With "$passphrasePath is inside the repository. See above: the working tree is not where secrets go."
     }
     $passphraseParent = Split-Path -Parent $passphrasePath
     if (-not (Test-Directory $passphraseParent)) {
-        throw "$passphraseParent does not exist. Create it deliberately, so a typo does not put the passphrase somewhere nobody looks."
+        Stop-With "$passphraseParent does not exist. Create it deliberately, so a typo does not put the passphrase somewhere nobody looks."
     }
 }
 
-# Last, so the checks about *where* this points come first. A typo in a drive letter should
-# not silently make a directory, but it also should not be the first thing complained about
-# when the path is somewhere it must never go.
+# After the checks about *where* this points, and before anything else that looks at the
+# disk. A typo in a drive letter should not silently make a directory -- but it also should
+# not be reported by whichever later line happened to touch the disk first, which is how an
+# unplugged E: came back as a complaint from the "is there already a key here" check.
 $targetParent = Split-Path -Parent $target
 if (-not (Test-Directory $targetParent)) {
-    throw "$targetParent does not exist. Create the parent directory deliberately, so a typo in a drive letter does not silently make one."
+    Stop-With @"
+$targetParent does not exist.
+
+Create it deliberately, so a mistyped drive letter does not silently make one -- and if
+that was meant to be removable media, plug it in.
+"@
+}
+
+if ((Test-Anything ([System.IO.Path]::Combine($target, 'release.key'))) -or
+    (Test-Anything ([System.IO.Path]::Combine($target, 'release.pub')))) {
+    Stop-With "$target already holds a key. Move it aside deliberately: replacing one silently retires every client that trusts it, at the next release, with no step in between where anybody could notice."
 }
 
 # --- the tool ----------------------------------------------------------------------------
 
 if (-not $ToolPath) {
     $built = Join-Path $repository 'target\release\acl-release.exe'
-    if (Test-Path $built) {
+    if (Test-Anything $built) {
         $ToolPath = $built
     }
     else {
@@ -145,7 +170,9 @@ if (-not $ToolPath) {
         $ToolPath = $built
     }
 }
-if (-not (Test-Path $ToolPath)) { throw "$ToolPath is not there" }
+# Tolerant too: -ToolPath is a path a person typed, and it can name a drive that is not
+# there just as easily as -Into can.
+if (-not (Test-Anything $ToolPath)) { Stop-With "$ToolPath is not there" }
 
 # --- the passphrase ----------------------------------------------------------------------
 
@@ -178,7 +205,7 @@ $env:ACL_RELEASE_KEY_PASSWORD = $passphrase
 try {
     $output = & $ToolPath keys --into $target 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "acl-release refused:`n$output"
+        Stop-With "acl-release refused:`n$output"
     }
 }
 finally {
