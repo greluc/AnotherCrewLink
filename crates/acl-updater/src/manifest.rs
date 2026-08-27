@@ -19,16 +19,20 @@
 //! Among Us updates and ends when players can hear each other again, and a human holding a
 //! key in that window *is* the outage.
 //!
-//! # It fails closed, and one key is in
+//! # It fails closed, and both keys are in
 //!
-//! The ceremony happened on 2026-08-27 and [`PUBLIC_KEYS`] holds the **operational** key.
-//! The recovery key is not there yet, and until it is this build has no way back from a
-//! compromised or lost operational key: recovery works by a client already trusting the
-//! second key, so it cannot be delivered by an update after the fact.
+//! The ceremony happened on 2026-08-27. [`PUBLIC_KEYS`] holds the operational key, which
+//! signs releases, and the recovery key, which never signs one — it is here so that a
+//! client already trusts it on the day the operational key is lost or stolen. That is the
+//! only day it is any use, and the one day it could not be delivered, because delivering it
+//! would mean an update signed by the key that has gone.
 //!
-//! `there_are_two_keys` fails while exactly one is present. That is the point of it — one
-//! key is the state where somebody performed half a ceremony and moved on, and it is
-//! indistinguishable from the finished state by reading the file.
+//! `there_are_two_keys` fails on one as well as on none. One key is the state where somebody
+//! performed half a ceremony and moved on, and reading the file does not distinguish it from
+//! the finished state.
+//!
+//! The private halves are the maintainer's, encrypted with a passphrase, and in two
+//! different places. Nothing in this repository or reachable from any workflow can sign.
 
 use minisign_verify::{PublicKey, Signature};
 
@@ -46,6 +50,10 @@ use minisign_verify::{PublicKey, Signature};
 pub const PUBLIC_KEYS: &[&str] = &[
     // Operational: signs releases.
     "RWTwJop88FcaN1c8o/aeHwMQ+32VTloV1dmj8duTvXseZ3N9/p+2kyL/",
+    // Recovery: never signs a release and never goes near a workflow. It is here so that a
+    // client already trusts it on the day the operational key is lost or stolen -- which is
+    // the only day it is any use, and the one day it could not be delivered.
+    "RWQ8iPMEM6xLL184YQFFd0TXPLFaMRF7JUsSPrJJk+h9bZ+qVgtqxAQM",
 ];
 
 /// What an update is.

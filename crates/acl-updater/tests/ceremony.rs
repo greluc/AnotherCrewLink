@@ -402,3 +402,39 @@ fn the_key_script_still_refuses_the_working_tree() {
         "nothing checks the passphrase alphabet is still 32 symbols"
     );
 }
+
+/// `check` consults the compiled-in keys, and a key nobody put there is refused.
+///
+/// The positive direction cannot be tested here: `PUBLIC_KEYS` holds the real release keys,
+/// whose private halves are the maintainer's and are not in this repository — which is the
+/// property the whole design rests on. What can be tested is the direction that would make
+/// the command worthless, which is a `check` that says yes to anything.
+///
+/// The command exists for the recovery key. A wrong entry for the operational one is found
+/// at the next release; a wrong entry for the recovery one is found on the day the
+/// operational key is gone, when there is no second chance and no way to send a fix.
+#[test]
+fn a_key_the_build_does_not_know_is_refused() {
+    let directory = scratch("stranger");
+    run(&["keys", "--into", &directory.to_string_lossy()]);
+
+    let output = Command::new(tool())
+        .args([
+            "check",
+            "--key",
+            &directory.join("release.key").to_string_lossy(),
+        ])
+        .env("ACL_RELEASE_KEY_PASSWORD", PASSPHRASE)
+        .output()
+        .expect("the tool runs");
+
+    assert!(
+        !output.status.success(),
+        "a key generated seconds ago was reported as one the shipped client trusts"
+    );
+    let complaint = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        complaint.contains("PUBLIC_KEYS"),
+        "the refusal does not say where the key would have to be: {complaint}"
+    );
+}

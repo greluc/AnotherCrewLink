@@ -41,6 +41,7 @@ fn main() -> std::process::ExitCode {
         Some("write") => write(&arguments),
         Some("sign") => sign(&arguments),
         Some("feed") => feed(&arguments),
+        Some("check") => check(&arguments),
         _ => Err(usage()),
     };
     match outcome {
@@ -60,7 +61,8 @@ fn usage() -> String {
      acl-release keys  --into <directory>          (ACL_RELEASE_KEY_PASSWORD required)\n  \
      acl-release write --version <v> --url <u> --artefact <path> --into <path>\n  \
      acl-release sign  --manifest <path> --key <path> [--public <path>]\n  \
-     acl-release feed  --version <v> --artefact <path> --released <date> --into <path>\n\
+     acl-release feed  --version <v> --artefact <path> --released <date> --into <path>\n  \
+     acl-release check --key <path>                (ACL_RELEASE_KEY_PASSWORD if encrypted)\n\
      \n\
      The passphrase is read from ACL_RELEASE_KEY_PASSWORD, never from an argument."
         .to_owned()
@@ -218,24 +220,7 @@ fn sign(arguments: &[String]) -> Result<String, String> {
 
     let document =
         std::fs::read(&manifest).map_err(|error| format!("{}: {error}", manifest.display()))?;
-    let secret_text =
-        std::fs::read_to_string(&key).map_err(|error| format!("{}: {error}", key.display()))?;
-    let boxed = minisign::SecretKeyBox::from_string(&secret_text)
-        .map_err(|error| format!("{}: {error}", key.display()))?;
-    // Encrypted or not, and the password comes from the environment rather than from an
-    // argument: a passphrase on a command line is a passphrase in the shell's history and
-    // in every process listing on the machine while it runs.
-    let secret = match std::env::var("ACL_RELEASE_KEY_PASSWORD") {
-        Ok(password) => boxed.into_secret_key(Some(password)),
-        Err(_) => boxed.into_unencrypted_secret_key(),
-    }
-    .map_err(|error| {
-        format!(
-            "{}: {error}
-(an encrypted key needs ACL_RELEASE_KEY_PASSWORD set)",
-            key.display()
-        )
-    })?;
+    let secret = secret_key(&key)?;
 
     let signature = minisign::sign(None, &secret, std::io::Cursor::new(&document), None, None)
         .map_err(|error| format!("no signature: {error}"))?
@@ -346,5 +331,82 @@ fn feed(arguments: &[String]) -> Result<String, String> {
         into.display(),
         file_name,
         bytes.len(),
+    ))
+}
+
+/// Loads a secret key, encrypted or not.
+///
+/// The passphrase comes from the environment rather than from an argument: one on a command
+/// line is in the shell's history and in every process listing while the process runs.
+fn secret_key(path: &Path) -> Result<minisign::SecretKey, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let boxed = minisign::SecretKeyBox::from_string(&text)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    match std::env::var("ACL_RELEASE_KEY_PASSWORD") {
+        Ok(password) => boxed.into_secret_key(Some(password)),
+        Err(_) => boxed.into_unencrypted_secret_key(),
+    }
+    .map_err(|error| {
+        format!(
+            "{}: {error}
+(an encrypted key needs ACL_RELEASE_KEY_PASSWORD set)",
+            path.display()
+        )
+    })
+}
+
+/// Asks whether the shipped client would trust something this key signed.
+///
+/// # The question nothing else answers
+///
+/// `sign` checks a signature against a public key *file*. That proves the two halves on the
+/// maintainer's disk agree. It says nothing about `manifest::PUBLIC_KEYS`, which is the list
+/// compiled into what people are running — and a key transcribed into that list wrongly is a
+/// build that refuses every update.
+///
+/// For the operational key the transcription can be checked by eye against `release.pub`.
+/// For the **recovery** key it cannot usefully be: it is only ever used on the day the
+/// operational key is gone, so a wrong entry sits there looking correct until the one moment
+/// it has to work, and on that day there is no second chance and no way to send a fix.
+///
+/// So this signs a throwaway document and verifies it with the client's own verifier against
+/// the compiled-in list. It answers "would the fleet accept this key", which is the question,
+/// and it is worth asking again before any release rather than only once.
+fn check(arguments: &[String]) -> Result<String, String> {
+    let key = PathBuf::from(option(arguments, "--key").ok_or_else(usage)?);
+    let secret = secret_key(&key)?;
+
+    // A manifest rather than arbitrary bytes, because the verifier parses before it trusts
+    // and a document it rejects for its shape would look like a key it rejects.
+    let document = concat!(
+        r#"{"version":"0.0.0","url":"https://example.invalid/none","sha512":""#,
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
+        "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+        r#"","size":0}"#
+    );
+    let signature = minisign::sign(None, &secret, std::io::Cursor::new(document), None, None)
+        .map_err(|error| format!("no signature: {error}"))?
+        .to_string();
+
+    acl_updater::manifest::Manifest::verified(document.as_bytes(), &signature).map_err(
+        |error| {
+            format!(
+                "{}\n\n\
+                 This key is NOT one the shipped client trusts. Either it is not in \
+                 `manifest::PUBLIC_KEYS`, or what is in there is not this key. On the day \
+                 that matters there is no way to correct it, because correcting it means \
+                 shipping an update.",
+                error
+            )
+        },
+    )?;
+
+    Ok(format!(
+        "{} is trusted by this build.\n\n\
+         A manifest signed by it was accepted by the client's own verifier, against the \
+         {} key(s) compiled into `manifest::PUBLIC_KEYS`.",
+        key.display(),
+        acl_updater::manifest::PUBLIC_KEYS.len(),
     ))
 }

@@ -68,8 +68,23 @@ Keep both private halves off the release machine. That is not something this too
 for you: it is a property of where the file is, and it is the whole of what protects the
 update path.
 
-Until `PUBLIC_KEYS` has something in it, the updater refuses every manifest. That is
-deliberate; `no_keys_means_no_updates` is the test.
+Both public halves go into `manifest::PUBLIC_KEYS`. `there_are_two_keys` fails on one as
+well as on none: one key is the state where somebody performed half the ceremony and moved
+on, and reading the file does not distinguish it from the finished state.
+
+Then check that the build agrees, which is a different question from the one `sign` answers:
+
+```bash
+ACL_RELEASE_KEY_PASSWORD='...'   cargo run -p acl-updater --features ceremony --bin acl-release -- check --key <key>/release.key
+```
+
+`sign` checks a signature against a public key *file* — that the two halves on your disk
+agree. `check` signs a throwaway manifest and verifies it with the client's own verifier
+against the list compiled into what people run. **Do this for the recovery key especially.**
+A wrong entry for the operational key is found at the next release; a wrong entry for the
+recovery key is found on the day the operational one is gone, and on that day there is no
+second chance and no way to send a fix — sending one would mean shipping an update signed by
+the key that has gone.
 
 ## Per release
 
