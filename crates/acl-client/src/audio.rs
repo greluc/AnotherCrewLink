@@ -83,6 +83,9 @@ pub(crate) struct Audio {
     incoming: Sender<Incoming>,
     /// Packets from the microphone, on their way to the mesh.
     outgoing: Receiver<Vec<u8>>,
+    /// Transitions from the voice detector on the capture thread. See
+    /// [`Self::take_voice_activity`].
+    activity: Receiver<bool>,
     /// What each peer sounds like, read by the mixing thread.
     placements: Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     /// Why there is no audio, when there is none.
@@ -100,12 +103,16 @@ impl Audio {
     pub(crate) fn start() -> Self {
         let (incoming, packets) = std::sync::mpsc::channel::<Incoming>();
         let (encoded, outgoing) = std::sync::mpsc::channel::<Vec<u8>>();
+        // Transitions only, which is what makes an unbounded channel safe here: somebody
+        // talking produces two of these a sentence, not fifty a second.
+        let (voice, activity) = std::sync::mpsc::channel::<bool>();
         let placements = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
 
-        match Self::open(packets, &encoded, &placements) {
+        match Self::open(packets, &encoded, &voice, &placements) {
             Ok(streams) => Self {
                 incoming,
                 outgoing,
+                activity,
                 placements,
                 trouble: None,
                 _streams: streams,
@@ -113,6 +120,7 @@ impl Audio {
             Err(why) => Self {
                 incoming,
                 outgoing,
+                activity,
                 placements,
                 trouble: Some(why),
                 _streams: Vec::new(),
@@ -124,6 +132,20 @@ impl Audio {
     pub(crate) fn receive(&self, packet: Incoming) {
         // A failed send means the mixing thread is gone, which is a client on its way out.
         let _ = self.incoming.send(packet);
+    }
+
+    /// Whether the detector changed its mind since the last call, and to what.
+    ///
+    /// `None` when nothing changed, which is almost every frame. Only the last transition
+    /// is returned: if speech started and stopped between two paints, what the peers need is
+    /// where it ended up — telling them it started would leave an indicator lit with nothing
+    /// behind it.
+    pub(crate) fn take_voice_activity(&self) -> Option<bool> {
+        let mut last = None;
+        while let Ok(speaking) = self.activity.try_recv() {
+            last = Some(speaking);
+        }
+        last
     }
 
     /// Takes whatever the microphone has produced since the last call.
@@ -162,6 +184,7 @@ impl Audio {
     fn open(
         packets: Receiver<Incoming>,
         encoded: &Sender<Vec<u8>>,
+        voice: &Sender<bool>,
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         // What the mixing thread produces and the output callback consumes. A mutex the
@@ -184,7 +207,7 @@ impl Audio {
         // The speaker first, because a client that can hear is useful on its own and a
         // microphone failure should not cost it.
         let speaker = open_speaker(&host, &ready, &played)?;
-        let microphone = open_microphone(&host, encoded, &played)?;
+        let microphone = open_microphone(&host, encoded, voice, &played)?;
         Ok(vec![speaker, microphone])
     }
 
@@ -193,6 +216,7 @@ impl Audio {
     fn open(
         _packets: Receiver<Incoming>,
         _encoded: &Sender<Vec<u8>>,
+        _voice: &Sender<bool>,
         _placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         Err("this build has no audio devices; enable the `audio` feature".to_owned())
@@ -266,6 +290,7 @@ fn open_speaker(
 fn open_microphone(
     host: &cpal::Host,
     encoded: &Sender<Vec<u8>>,
+    voice: &Sender<bool>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
@@ -293,7 +318,29 @@ fn open_microphone(
     // comes to on Windows.
     apm.set_delay_ms(40);
 
+    // The detector, reading frames the canceller has already cleaned. Before it, the
+    // detector would hear the speakers and report the lobby talking as this player speaking
+    // -- an indicator that lights up whenever anybody else does.
+    //
+    // `acl_audio::vad` and `acl_audio::analyser` have both existed since P3+ and neither had
+    // a caller. The client emitted no `VAD` at all, so every other client saw this one as
+    // permanently silent, and this one saw them the same way: `Link` parsed the event and
+    // dropped it.
+    let mut analyser =
+        acl_audio::analyser::Analyser::new(acl_audio::vad::FFT_SIZE, acl_audio::vad::SMOOTHING);
+    let mut detector = acl_audio::vad::Vad::new(
+        f64::from(acl_audio::stream::WANTED_RATE),
+        acl_audio::vad::VadSettings::default(),
+    );
+    // The detector learns the room's noise floor before it decides anything, and reports
+    // nothing until it has. A second of frames, counted rather than timed: the callback has
+    // no clock and every frame is the same length.
+    let calibration_frames =
+        (acl_audio::vad::NOISE_CAPTURE_MS / u64::from(acl_audio::codec::FRAME_MS)).max(1);
+    let mut heard_frames = 0_u64;
+
     let reference = Arc::clone(played);
+    let voice = voice.clone();
     let encoded = encoded.clone();
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
     let mut converted: Vec<f32> = Vec::new();
@@ -339,6 +386,19 @@ fn open_microphone(
                         }
                     }
                     let _ = apm.capture(&mut frame);
+
+                    // On the same frame the encoder gets, before it gets it. The
+                    // detector consumes nothing, and reading it here is what guarantees the
+                    // two are looking at identical samples.
+                    analyser.push(&frame);
+                    let heard = detector.push(&analyser);
+                    heard_frames += 1;
+                    if heard_frames == calibration_frames {
+                        detector.finish_calibration();
+                    }
+                    if heard.changed && voice.send(heard.talking).is_err() {
+                        return;
+                    }
 
                     packet.clear();
                     if encode_frame(&mut opus, &frame, &mut packet).is_ok()

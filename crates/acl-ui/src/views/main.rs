@@ -1,14 +1,22 @@
 //! The main view: who is in the lobby, and what is happening to their voice.
 //!
-//! §4.8 item 2, and it replaces `App.tsx`, `Voice.tsx`'s UI half and `Avatar.tsx`. Which of
-//! those it does *not* replace yet is worth saying plainly: the avatars here are drawn, not
-//! composited. The real ones are a recoloured base sprite with a hat, a skin and a visor
-//! over it, fetched at run time; [`crate::cosmetics`] already holds where each of those
-//! goes and the fetching is its own piece of work.
+//! §4.8 item 2, and it replaces `App.tsx`, `Voice.tsx`'s UI half and `Avatar.tsx`.
 //!
-//! What is here is the part that is not the sprites — the layout, the states, and the four
-//! things a player is actually looking for in this window: who is here, who is speaking,
-//! who cannot be heard, and who is dead.
+//! # Two ways of drawing a player, and the second one is not a fallback for the first
+//!
+//! A crewmate here is the real thing when the artwork has arrived: a recoloured body with a
+//! hat, a skin and a visor over it, composited by [`crate::worn`] from files fetched at run
+//! time. Until it arrives — and on the first frame of every session it has not — the same
+//! player is drawn as shapes: a body, a visor, a shadow.
+//!
+//! The drawn form is not a placeholder to be removed. Artwork can fail to arrive at all, on
+//! a machine with no network or against a collection that has moved, and a window that
+//! showed nothing in that case would be a window that looks broken for a reason the user
+//! cannot see. It is also what a player wearing nothing gets, which is most of them.
+//!
+//! What both forms share is the part a player is actually reading: who is here, who is
+//! speaking, who cannot be heard, and who is dead. Those are drawn by this view over
+//! whichever body it has, so they never depend on a download.
 //!
 //! §4.8 grants the licence for the difference: "the Rust UI will not be pixel-identical to
 //! the React one. Layout, spacing and control affordances will differ. What must not differ
@@ -29,9 +37,18 @@ pub struct Portrait<'a> {
     /// Their name, with rich-text tags already stripped by the reader.
     pub name: &'a str,
     /// Their crew colour, as an index into the palette.
+    ///
+    /// Used to draw them when there is no artwork, and it is also part of what the artwork
+    /// is keyed on — two players in different colours are two different sprites.
     pub color_id: i32,
     /// What the roster said about them.
     pub state: Shown,
+    /// Their dressed crewmate, if it has been composited and uploaded.
+    ///
+    /// A texture id rather than a bitmap: building one costs a fetch and a composite, and
+    /// doing that per frame for fifteen players would be the most expensive thing in the
+    /// window. The caller owns the cache; this only draws what it is handed.
+    pub art: Option<egui::TextureId>,
 }
 
 /// How wide a slot is, including its name.
@@ -101,13 +118,44 @@ fn describe(portrait: &Portrait<'_>) -> String {
     said.join(" — ")
 }
 
-/// The crewmate itself.
-///
-/// Drawn rather than composited, and the shape is the game's silhouette in the crudest
-/// terms it can be: a body, a visor, and a shadow that makes it read as round. The shadow
-/// matters more than it sounds — `player_colors` carries one per colour precisely because
-/// using the body colour for it gives a flat sticker.
+/// The crewmate itself: the artwork if there is any, the shape if there is not.
 fn crewmate(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
+    if let Some(art) = portrait.art {
+        dressed(ui, centre, portrait, art);
+    } else {
+        shapes(ui, centre, portrait);
+    }
+    indicators(ui, centre, portrait);
+}
+
+/// The composited crewmate.
+///
+/// Square, because the sprites are: `sprite::crewmate` draws into a square bitmap and the
+/// cosmetics are placed as fractions of its width. Fitting it to a non-square box would move
+/// every hat.
+fn dressed(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>, art: egui::TextureId) {
+    let rect = Rect::from_center_size(centre, Vec2::splat(AVATAR));
+    // The same fade the drawn form uses for a dead player, applied to the whole sprite
+    // rather than to two colours. `WHITE` is "unchanged" for a tinted image.
+    let tint = if portrait.state.alive {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(90)
+    };
+    ui.painter().image(
+        art,
+        rect,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        tint,
+    );
+}
+
+/// The crewmate as shapes, for when there is no artwork.
+///
+/// The game's silhouette in the crudest terms it can be: a body, a visor, and a shadow that
+/// makes it read as round. The shadow matters more than it sounds — `player_colors` carries
+/// one per colour precisely because using the body colour for it gives a flat sticker.
+fn shapes(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
     let (mut body, mut shadow) = colour::crew(portrait.color_id);
     let painter = ui.painter();
 
@@ -142,6 +190,16 @@ fn crewmate(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
         radius * 0.42,
         Color32::from_rgb(0xBE, 0xE3, 0xF5),
     );
+}
+
+/// What this view says about a player, over whichever body it drew.
+///
+/// Separate from both so that neither can lose them. These are the things somebody is
+/// actually looking at the window for, and they must not depend on whether a download
+/// finished.
+fn indicators(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
+    let painter = ui.painter();
+    let radius = AVATAR / 2.0;
 
     // The connection, as an outline, because it is a property of the whole player rather
     // than of any part of them. Nothing is drawn when the connection is good: an indicator
@@ -274,6 +332,8 @@ mod tests {
             name: "Red",
             color_id: 0,
             state: shown(Link::Connected, false, true),
+            // No artwork in these: the drawn form is what a test can assert about.
+            art: None,
         };
         assert_eq!(describe(&quiet), "Red — connected");
 

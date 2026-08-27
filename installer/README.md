@@ -25,7 +25,12 @@ found two real defects in its first three runs — a message string NSIS would n
 `VIProductVersion` aborting on a prerelease tag, which would have stopped the first staging
 release. Neither was visible to a text check, because every word it looks for was present.
 
-**Neither is a person using it.** Before a release that matters, once, on a machine:
+**Neither is a person using it**, and on 2026-08-27 a person did: 1.0.6 went out through
+`legacy.nsi` and the update from 1.0.5 was confirmed working on a real installation before
+it was offered to anybody. That is §4.9's instruction, carried out.
+
+The list below stays, because it is the list for the *next* script — `anothercrewlink.nsi`,
+which carries 2.x and has never installed anything on a machine with a profile on it:
 
 1. Install into a fresh user profile. The window opens, the settings page opens, and
    `%APPDATA%\ACL` appears.

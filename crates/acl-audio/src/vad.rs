@@ -20,6 +20,21 @@ use crate::analyser::Analyser;
 /// How long the detector listens before it will decide anything, in milliseconds.
 pub const NOISE_CAPTURE_MS: u64 = 1000;
 
+/// The transform size the detector's thresholds were tuned against.
+///
+/// `src/renderer/vad.ts` line 57. Here rather than at the call site because it is not the
+/// caller's choice: the bin widths decide which frequencies fall in the capture band, so an
+/// analyser built at a different size measures a different thing and the thresholds below
+/// stop meaning what they say.
+pub const FFT_SIZE: usize = 1024;
+
+/// How much of the previous frame each bin keeps.
+///
+/// `src/renderer/vad.ts` line 59, and low on purpose. Web Audio defaults to 0.8, which is
+/// most of a second of history and turns a decision about *this* frame into one about the
+/// last twenty — a speaking indicator that lags a sentence behind the sentence.
+pub const SMOOTHING: f64 = 0.2;
+
 /// The band the decision is made in: speech fundamentals, in hertz.
 pub const MIN_CAPTURE_HZ: f64 = 85.0;
 

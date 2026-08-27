@@ -60,6 +60,10 @@ pub(crate) enum Command {
         /// Whether this player is the game's host.
         is_host: bool,
     },
+    /// Say whether this player is speaking, for everybody else's indicator.
+    VoiceActivity(bool),
+    /// Claim the game host's role, after having become it.
+    SetHost(i64),
     /// Leave it, closing every connection.
     Leave,
 }
@@ -126,6 +130,13 @@ pub(crate) struct Link {
     /// the server is the only thing that sees both. Kept here because it is the only place
     /// both halves pass through.
     sockets: std::collections::BTreeMap<i64, String>,
+    /// Who the server says is speaking, by socket id.
+    ///
+    /// A level, not a moment, which is the difference between this and [`Self::speaking`].
+    /// The server relays `VAD` when a peer starts and again when they stop, so this is held
+    /// until told otherwise rather than decaying — a peer who talks for ten seconds sends
+    /// two messages, not five hundred.
+    vocal: std::collections::BTreeSet<String>,
     /// Packets that have arrived and not yet been handed to a decoder.
     ///
     /// Held for one frame at most: `take_arrived` empties it, and the caller hands them
@@ -165,6 +176,7 @@ impl Link {
             answer: None,
             connected: std::collections::BTreeSet::new(),
             sockets: std::collections::BTreeMap::new(),
+            vocal: std::collections::BTreeSet::new(),
             speaking: std::collections::BTreeSet::new(),
             arrived: Vec::new(),
         }
@@ -240,6 +252,18 @@ impl Link {
             Event::PeerLeft { socket_id } => {
                 self.sockets.retain(|_, socket| *socket != socket_id);
                 self.connected.remove(&socket_id);
+                // Or they stay speaking forever, on a screen, after they have gone.
+                self.vocal.remove(&socket_id);
+            }
+            Event::VoiceActivity {
+                socket_id,
+                speaking,
+            } => {
+                if speaking {
+                    self.vocal.insert(socket_id);
+                } else {
+                    self.vocal.remove(&socket_id);
+                }
             }
             Event::LobbyCode { code, server } => {
                 self.answer = Some(format!("{code} — {server}"));
@@ -271,6 +295,35 @@ impl Link {
     #[must_use]
     pub(crate) fn take_arrived(&mut self) -> Vec<acl_core::peers::Incoming> {
         std::mem::take(&mut self.arrived)
+    }
+
+    /// Whether the server says this player is speaking.
+    ///
+    /// Read rather than taken, unlike [`Self::take_speaking`]: `VAD` is a level and arrives
+    /// on transitions, so forgetting it between frames would show a peer as speaking for one
+    /// paint and silent for the next ninety-nine.
+    #[must_use]
+    pub(crate) fn talking(&self, client_id: i64) -> bool {
+        self.sockets
+            .get(&client_id)
+            .is_some_and(|socket| self.vocal.contains(socket))
+    }
+
+    /// Claims the game host's role.
+    ///
+    /// For the promotion case only: `join` carries `is_host` for the join itself. See
+    /// `Session::set_host`.
+    pub(crate) fn say_host(&self, client_id: i64) {
+        self.send(Command::SetHost(client_id));
+    }
+
+    /// Tells the lobby whether this player is speaking.
+    ///
+    /// On transitions only. The caller's detector has a hangover for exactly this reason:
+    /// speech is fifty frames a second, and a message per frame to every peer would be more
+    /// traffic than the audio it is describing.
+    pub(crate) fn say_speaking(&self, speaking: bool) {
+        self.send(Command::VoiceActivity(speaking));
     }
 
     /// Sends one Opus packet to everybody in the lobby.
@@ -668,6 +721,16 @@ fn obey(
         } => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.join(&code, player_id, client_id, is_host));
+            }
+        }
+        Command::VoiceActivity(speaking) => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.voice_activity(speaking));
+            }
+        }
+        Command::SetHost(client_id) => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.set_host(client_id));
             }
         }
         Command::Leave => {
@@ -1202,6 +1265,68 @@ mod tests {
         // Magnitude, normalised by length so the threshold does not depend on how many
         // frames happened to arrive before the loop stopped.
         (previous * previous + older * older - coefficient * previous * older).sqrt() / count
+    }
+
+    /// One client says it is speaking, and the other one sees it.
+    ///
+    /// Both halves of the same signal, which had neither. `acl-core` has parsed
+    /// `Event::VoiceActivity` since it was written and `Link` dropped it on the floor; the
+    /// client emitted no `VAD` at all. The visible result was a speaking indicator that
+    /// never lit up, for anybody, in either window — and nothing failed, so there was
+    /// nothing to notice.
+    ///
+    /// It goes through the real server because that is where the relaying happens: this end
+    /// sends `VAD` with a boolean and the server decides whom to tell and under what socket
+    /// id. A test against a loopback of our own would prove the two halves of *our* guess.
+    #[test]
+    #[ignore = "needs a server: set ACL_SERVER_BIN"]
+    fn saying_something_lights_up_the_other_end() {
+        const PORT: u16 = 19_764;
+        let Some(_server) = serving(PORT) else {
+            eprintln!("skipping: set ACL_SERVER_BIN to the server binary");
+            return;
+        };
+        let base = format!("http://127.0.0.1:{PORT}");
+
+        let mut speaker = Link::start();
+        let mut listener = Link::start();
+        speaker.connect(&base);
+        listener.connect(&base);
+        let both_up = wait(&mut [&mut speaker, &mut listener], |links| {
+            links
+                .iter()
+                .all(|link| matches!(link.state(), State::Connected(_)))
+        });
+        assert!(both_up, "one of the sessions never connected");
+
+        speaker.join("VOICED", 1, 11, true);
+        listener.join("VOICED", 2, 22, false);
+        // The listener has to know who 11 *is* before it can be asked whether they are
+        // talking: `talking` looks the client id up in the socket map the lobby fills.
+        let met = wait(&mut [&mut speaker, &mut listener], |links| {
+            links[1].socket_of(11).is_some()
+        });
+        assert!(met, "the listener never learned the speaker's socket");
+
+        assert!(
+            !listener.talking(11),
+            "somebody is speaking before anybody said so"
+        );
+
+        speaker.say_speaking(true);
+        let lit = wait(&mut [&mut speaker, &mut listener], |links| {
+            links[1].talking(11)
+        });
+        assert!(lit, "the speaker said so and the listener never heard");
+
+        // And it goes out again. A level that only ever arrives is an indicator that stays
+        // on for the rest of the lobby, which is worse than one that never comes on: it
+        // reads as a peer whose microphone is stuck open.
+        speaker.say_speaking(false);
+        let out = wait(&mut [&mut speaker, &mut listener], |links| {
+            !links[1].talking(11)
+        });
+        assert!(out, "the speaker stopped and the indicator stayed on");
     }
 
     /// Drives some links until something is true of them, or long enough to say it is not.

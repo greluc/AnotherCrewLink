@@ -34,8 +34,27 @@ that means and what your options are.
 
   If you are on Windows 10 this release will very likely still install and run — nothing
   was added that requires 11, and nothing checks your version. It is simply no longer
-  tested, so a future release may break it without anyone noticing. There is no 32-bit
-  Windows 11, so the 32-bit half of the installer had nothing left to install onto.
+  tested, so a future release may break it without anyone noticing.
+
+  **On 32-bit Windows the installer now stops and says so.** There is no 32-bit Windows 11,
+  so there is no 32-bit build any more — and without one, the update your client fetches is
+  the 64-bit installer. It would have run to the end, reported success, and left you with
+  files your machine cannot start: an installation that looks finished and does nothing.
+  Refusing is not a fix, and nothing here can be one. It is the difference between that and
+  a message telling you what happened. 1.0.5 is the last release for those machines and it
+  keeps working; your client will go on reporting it is up to date, and that will be true.
+
+### Changed
+
+- **The installer is now built by this project rather than by the packaging tool.** You
+  should not be able to tell. It has the same name, installs to the same place, updates the
+  same way, and the update from 1.0.5 was tested before this went out.
+
+  It is here because the Rust rewrite has to ship its own installer eventually, and the
+  moment to find out whether it handles an update correctly is not the moment several
+  hundred machines run it at once. So it is carrying an ordinary release first. If anything
+  about installing or updating looks different to you, that is worth reporting — it is the
+  one part of this release that is genuinely new.
 
 ### Fixed
 

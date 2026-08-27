@@ -19,6 +19,7 @@
 //! performance number already on record is the one this runs on.
 
 mod audio;
+mod controls;
 mod hat_store;
 mod net;
 mod reader;
@@ -71,6 +72,153 @@ fn union(
 /// Fixed rather than scaled to the game window: a 4K screen and a 1080p one want the same
 /// physical size, and scaling by the window would make the overlay twice as large on the
 /// larger monitor for no reason anybody asked for.
+/// What a dressed crewmate looks like, as everything that changes the picture.
+///
+/// The cache key. Colour and the three cosmetics and nothing else: whether a player is
+/// speaking or dead is drawn *over* the sprite by the view, so two players in the same
+/// outfit share one texture however differently they are behaving.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Appearance {
+    colour: i32,
+    hat: String,
+    skin: String,
+    visor: String,
+}
+
+/// The dressed crewmates the main window is showing, as GPU textures.
+///
+/// # Why a cache and not a build per frame
+///
+/// Building one is a composite of up to five layers into a bitmap and an upload. At sixty
+/// frames a second for fifteen players that is the most expensive thing in the window, to
+/// produce the same picture every time.
+///
+/// # Why it cannot grow
+///
+/// Everything not asked for during a frame is dropped at the end of it. A lobby holds
+/// fifteen players, so the live set is small and bounded — but a session spans many lobbies
+/// and many outfits, and a map that only ever inserted would hold a texture for everybody
+/// the user has played with today.
+#[derive(Default)]
+struct Portraits {
+    held: std::collections::BTreeMap<Appearance, egui::TextureHandle>,
+    /// What this frame asked for. Cleared at the start of each frame rather than allocated
+    /// per frame.
+    seen: std::collections::BTreeSet<Appearance>,
+}
+
+impl Portraits {
+    /// The texture for one player, building it if the artwork is there.
+    ///
+    /// `None` while the cosmetics are still being fetched, which the view draws as shapes —
+    /// deliberately, and not as a placeholder: artwork can fail to arrive at all, and a
+    /// window that showed nothing then would look broken for a reason nobody can see.
+    fn of(
+        &mut self,
+        context: &egui::Context,
+        hats: &mut hat_store::Loader,
+        appearance: Appearance,
+    ) -> Option<egui::TextureId> {
+        self.seen.insert(appearance.clone());
+        if let Some(held) = self.held.get(&appearance) {
+            return Some(held.id());
+        }
+
+        let pieces = acl_ui::worn::pieces(
+            hats.collection(),
+            acl_ui::worn::Worn {
+                hat: &appearance.hat,
+                skin: &appearance.skin,
+                visor: &appearance.visor,
+            },
+            acl_types::cosmetics::HAT_COLLECTION_URL,
+            acl_ui::hats::BASE,
+        );
+        // Nothing to composite. The view's own drawing is better than a texture of the same
+        // shapes: it is one draw call rather than an upload, and it recolours for free.
+        if pieces.len() == 1 {
+            return None;
+        }
+        // Every layer, or none. A half-dressed crewmate cached now would stay half-dressed
+        // until the outfit changed, because nothing here revisits a texture it already has.
+        if pieces
+            .iter()
+            .filter_map(|piece| piece.url.as_deref())
+            .any(|url| hats.image(url).is_none())
+        {
+            return None;
+        }
+
+        let (body, shadow) = acl_ui::views::colour::crew(appearance.colour);
+        let mut canvas = acl_ui::sprite::Bitmap::blank(PORTRAIT_SPRITE, PORTRAIT_SPRITE);
+        for piece in &pieces {
+            let Some(url) = piece.url.as_deref() else {
+                // The body. Plain: no speaking ring and no fading, because the view draws
+                // both of those over whatever body it has and would otherwise draw them
+                // twice.
+                let base = acl_ui::sprite::crewmate(
+                    PORTRAIT_SPRITE,
+                    acl_ui::sprite::Crewmate {
+                        body: (body.r(), body.g(), body.b()),
+                        shadow: (shadow.r(), shadow.g(), shadow.b()),
+                        talking: false,
+                        alive: true,
+                    },
+                );
+                canvas.composite(&base, (0, 0), (PORTRAIT_SPRITE, PORTRAIT_SPRITE));
+                continue;
+            };
+            let Some(artwork) = hats.image(url) else {
+                continue;
+            };
+            let artwork = artwork.clone();
+            let (at, size) = acl_ui::worn::placement(
+                piece.geometry,
+                PORTRAIT_SPRITE,
+                (artwork.width, artwork.height),
+            );
+            canvas.composite(&artwork, at, size);
+        }
+
+        let handle = context.load_texture(
+            format!("portrait-{}-{}", appearance.colour, appearance.hat),
+            acl_ui::sprite::to_image(&canvas),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = handle.id();
+        self.held.insert(appearance, handle);
+        Some(id)
+    }
+
+    /// Drops everything this frame did not ask for.
+    ///
+    /// Dropping the handle is what frees the texture: egui keeps it alive exactly as long as
+    /// somebody holds one.
+    fn sweep(&mut self) {
+        self.held.retain(|key, _| self.seen.contains(key));
+        self.seen.clear();
+    }
+}
+
+/// How large a main-window crewmate is rasterised.
+///
+/// Larger than the 52 points it is drawn at, so it survives a high-DPI display without
+/// looking soft. Not larger still: it is composited on the CPU and uploaded, and the cost of
+/// both is the square of this.
+const PORTRAIT_SPRITE: i32 = 128;
+
+/// The three cosmetic ids a player is wearing.
+///
+/// Named fields rather than a tuple of three `String`s: they are the same type, and nothing
+/// would catch two of them being swapped -- which shows up as a visor worn as a hat, on
+/// somebody else's screen, with no error anywhere.
+#[cfg(windows)]
+struct Wearing {
+    hat: String,
+    skin: String,
+    visor: String,
+}
+
 const OVERLAY_SPRITE: i32 = 56;
 
 fn main() -> eframe::Result<()> {
@@ -429,6 +577,29 @@ struct Client {
     last_seen: Option<WindowState>,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
+    /// The dressed crewmates the main window is showing. See [`Portraits`].
+    portraits: Portraits,
+    /// Whether this player is speaking, as this end's own detector last said.
+    ///
+    /// Kept here because the detector reports *changes* and the window paints levels: a
+    /// frame that saw no transition still has to draw the indicator it had.
+    local_talking: bool,
+    /// The sockets whose gain is above zero this frame. See where it is filled.
+    hearable: std::collections::BTreeSet<String>,
+    /// Whether the server has been told this client is the host.
+    ///
+    /// Kept so the claim is made on the *transition*. `setHost` every frame would be a
+    /// message a second to a server that already agrees.
+    claimed_host: bool,
+    /// Who the voice layer believes is dead, by client id.
+    ///
+    /// Not the game's `is_dead`, and the difference is the whole point. See
+    /// [`Self::follow_deaths`].
+    dead: std::collections::BTreeMap<i64, bool>,
+    /// The game state the death map was last updated for.
+    last_game_state: Option<acl_game::GameState>,
+    /// Mute, deafen and push-to-talk. See [`controls`].
+    controls: controls::Controls,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -475,6 +646,20 @@ impl Client {
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
+            portraits: Portraits::default(),
+            local_talking: false,
+            hearable: std::collections::BTreeSet::new(),
+            claimed_host: false,
+            dead: std::collections::BTreeMap::new(),
+            last_game_state: None,
+            controls: {
+                let saved = settings.config();
+                controls::Controls::new(
+                    &saved.text_at("muteShortcut"),
+                    &saved.text_at("deafenShortcut"),
+                    &saved.text_at("pushToTalkShortcut"),
+                )
+            },
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -529,15 +714,41 @@ impl Client {
             return;
         };
 
+        // Every one of these was a stub until 2026-08-27, so the overlay showed everybody
+        // connected, nobody audible and nobody speaking -- a strip of crewmates that never
+        // changed. The main window had two of them wired and the overlay had none, which is
+        // the same lobby described two ways on one screen.
+        let link = &self.link;
+        let heard = &self.speaking;
+        let local_talking = self.local_talking;
+        let hearable = &self.hearable;
+        let believed_dead = &self.dead;
+        let can_hear = |client_id: i64| {
+            link.socket_of(client_id)
+                .is_some_and(|socket| hearable.contains(socket))
+        };
         let voice = Voice {
-            talking: &|_| false,
-            dead: &|_| false,
-            connected: &|_| true,
-            audible: &|_| false,
-            local_talking: false,
+            talking: &|client_id| link.talking(client_id) && can_hear(client_id),
+            dead: &|client_id| believed_dead.get(&client_id).copied().unwrap_or(false),
+            connected: &|client_id| link.hears(client_id),
+            audible: &|client_id| heard.contains(&client_id),
+            local_talking,
             local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+            // `impostor_radio` is §4.13's one genuinely blocked item, and this is where
+            // it shows. 1.x claims the radio over the *data channel* -- `Voice.tsx` 913 and
+            // 1290 -- and this client has none by design: `the_offer_carries_audio_and_no_
+            // data_channel` asserts the SDP has no `m=application`. Moving the claim to the
+            // socket is the change §4.12's rollout forbids while both generations share a
+            // lobby, so it stays `None` until 1.x is switched off.
+            //
+            // `local_is_impostor` is not blocked and is read from the game. On its own it
+            // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
+            // available is a line that stops looking like a stub.
             impostor_radio: None,
-            local_is_impostor: false,
+            local_is_impostor: state
+                .players
+                .iter()
+                .any(|player| player.is_local && player.is_impostor),
         };
         let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
         let shown = overlay(&seats, &voice, compact);
@@ -631,7 +842,7 @@ impl Client {
         // Which crewmate wears what, collected while the sprites are built and applied
         // afterwards: the artwork lives behind `&mut self` and the closure below is
         // already borrowing the reader's state.
-        let mut wearing: Vec<(usize, String, String)> = Vec::new();
+        let mut wearing: Vec<(usize, Wearing)> = Vec::new();
         let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = shown
             .iter()
             .zip(laid.sprites.iter())
@@ -656,7 +867,14 @@ impl Client {
                 continue;
             };
             if at < sprites.len() {
-                wearing.push((at, player.hat_id.clone(), player.visor_id.clone()));
+                wearing.push((
+                    at,
+                    Wearing {
+                        hat: player.hat_id.clone(),
+                        skin: player.skin_id.clone(),
+                        visor: player.visor_id.clone(),
+                    },
+                ));
             }
         }
         Self::dress(hats, &mut sprites, &wearing);
@@ -802,8 +1020,29 @@ impl Client {
         for packet in self.link.take_arrived() {
             self.audio.receive(packet);
         }
+        // The three switches, before anything is sent. Rebound first, because somebody
+        // may have just changed one on the settings page and the next press should use it.
+        let push_to_talk = {
+            let saved = self.settings.config();
+            self.controls.rebind(
+                &saved.text_at("muteShortcut"),
+                &saved.text_at("deafenShortcut"),
+                &saved.text_at("pushToTalkShortcut"),
+            );
+            saved.bool_at("pushToTalk")
+        };
+        let transmitting = self
+            .controls
+            .poll(&acl_core::keys::AsyncKeyState)
+            .transmitting(push_to_talk);
+
         for packet in self.audio.take_encoded() {
-            self.link.send_audio(packet);
+            // Drained either way. The encoder runs whatever the switches say, and a queue
+            // nobody empties while somebody is muted is a queue that plays their last
+            // minute at whoever is listening when they unmute.
+            if transmitting {
+                self.link.send_audio(packet);
+            }
         }
 
         let Some(state) = self
@@ -847,6 +1086,18 @@ impl Client {
         };
 
         let placements = self.placements(&state, &lobby, client);
+        // Who is actually audible this frame, kept before the map is handed away.
+        //
+        // `Voice.tsx` line 1598: `nowTalking = otherVAD[clientId] === true && gain > 0`.
+        // The speaking indicator is gated on being able to hear them, and that is not a
+        // nicety -- in a game, showing that somebody across the map is talking tells you
+        // they are alive and where they are not. 1.x has always gated it; this client
+        // showed the raw `VAD` until 2026-08-27.
+        self.hearable = placements
+            .iter()
+            .filter(|(_, placement)| placement.gain > 0.0)
+            .map(|(socket, _)| socket.clone())
+            .collect();
         self.audio.place(placements);
     }
 
@@ -891,16 +1142,40 @@ impl Client {
                 lobby.max_distance,
                 None,
             );
-            if params.gain <= 0.0 {
-                // Silent, and `placed` false means the panner was not given a position
-                // either -- the Electron original leaves the graph alone in that case, and
-                // a peer left out of the map is a peer the mixer does not mix.
+            // Deafened silences everybody, which is the same `gain = 0` the per-player
+            // mute below takes and is checked in the same place for the same reason:
+            // `Voice.tsx` line 1584 tests `deafened || isMuted` as one condition.
+            if self.controls.state().deafened {
                 continue;
             }
+            // Per-player volume and mute. `voice_params` deliberately does not know about
+            // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
+            // the rule and the reason it is keyed on the name hash are in
+            // `acl_ui::config::per_player_gain`, which is tested without a game.
+            let Some(gain) = acl_ui::config::after_the_rules(
+                self.settings.config(),
+                acl_ui::config::Listener {
+                    speaker_name_hash: player.name_hash,
+                    is_dead: me.is_dead,
+                    speaker_is_dead: player.is_dead,
+                },
+                params.gain,
+            ) else {
+                // Muted, silenced by the master volume, or turned all the way down.
+                // Nothing is placed for them at all: the Electron original leaves the graph
+                // alone in that case, and a peer left out of the map is a peer the mixer
+                // does not mix -- cheaper than mixing silence.
+                //
+                // `after_the_rules` returns `None` for every gain at or below zero, so
+                // there is no second check after this one. There was until 2026-08-27, and
+                // it could not fire.
+                continue;
+            };
+
             placements.insert(
                 socket.to_owned(),
                 audio::Placement {
-                    gain: params.gain,
+                    gain,
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
                         y: 0.0,
@@ -941,6 +1216,24 @@ impl Client {
         });
 
         if wanted == self.joined {
+            // Still in the same lobby, so nothing to join -- but the host can change under
+            // us. Among Us promotes somebody when the host leaves, and the server goes on
+            // routing host-dependent decisions to a socket that is gone until it is told.
+            let host_now = state.as_ref().is_some_and(|state| state.is_host);
+            if host_now && !self.claimed_host {
+                let client_id = state
+                    .as_ref()
+                    .and_then(|state| state.players.iter().find(|player| player.is_local))
+                    .and_then(|player| player.client_id)
+                    .map_or(-1, i64::from);
+                if client_id >= 0 {
+                    self.link.say_host(client_id);
+                    self.claimed_host = true;
+                }
+            } else if !host_now {
+                // Reset, so a second promotion in the same session is claimed again.
+                self.claimed_host = false;
+            }
             return;
         }
         match &wanted {
@@ -952,6 +1245,8 @@ impl Client {
                 let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
                 let is_host = state.as_ref().is_some_and(|state| state.is_host);
                 self.link.join(code, player_id, client_id, is_host);
+                // `join` carries it, so a claim on top would be the same statement twice.
+                self.claimed_host = is_host;
             }
             None => self.link.leave(),
         }
@@ -1040,62 +1335,67 @@ impl Client {
         }
     }
 
-    /// Puts each crewmate's cosmetics on their sprite.
+    /// Paints every layer a player is wearing onto a fresh sprite.
     ///
-    /// A hat that has not been fetched yet is simply not drawn: `Loader::image` asks for it
-    /// and answers `None`, and a later frame has it. A cosmetic arriving a frame late is not
-    /// worth a stalled window.
+    /// Onto a fresh one, and that is the change of 2026-08-27. It used to composite onto the
+    /// body, which works for anything that goes *over* it and makes the hat's back
+    /// impossible -- there is nothing under a canvas. `acl_ui::worn::pieces` returns all five
+    /// layers with the body among them, so the body becomes one paste like the others.
     ///
-    /// The order is [`acl_ui::cosmetics::PAINT_ORDER`]'s, minus the layers this does not
-    /// have yet -- the back of a hat goes behind the player, which needs the base sprite
-    /// split into two passes, and the skin sits between them.
+    /// The skin was simply missing before: `AmongUsState` has carried `skin_id` all along and
+    /// the list this takes had room for two ids.
     ///
-    /// Takes the loader rather than `&self` so that the reader's borrow and the artwork's
-    /// can coexist: they are disjoint fields, and the borrow checker only knows that when
-    /// they are named separately.
+    /// Takes the loader rather than `&self` so that the reader's borrow and the artwork's can
+    /// coexist: they are disjoint fields, and the borrow checker only knows that when they
+    /// are named separately.
     #[cfg(windows)]
     fn dress(
         hats: &mut hat_store::Loader,
         sprites: &mut [(i32, i32, acl_ui::sprite::Bitmap)],
-        wearing: &[(usize, String, String)],
+        wearing: &[(usize, Wearing)],
     ) {
-        for (at, hat, visor) in wearing {
-            let Some((_, _, canvas)) = sprites.get_mut(*at) else {
+        for (at, worn) in wearing {
+            let Some((_, _, body)) = sprites.get_mut(*at) else {
                 continue;
             };
-            for id in [visor, hat] {
-                let Some(found) = hats.collection().find(id, acl_ui::hats::BASE) else {
+            let pieces = acl_ui::worn::pieces(
+                hats.collection(),
+                acl_ui::worn::Worn {
+                    hat: &worn.hat,
+                    skin: &worn.skin,
+                    visor: &worn.visor,
+                },
+                acl_types::cosmetics::HAT_COLLECTION_URL,
+                acl_ui::hats::BASE,
+            );
+            // Nothing but the body: leave it alone rather than copying it through a blank
+            // canvas for no reason. This is the common case -- most players wear nothing.
+            if pieces.len() == 1 {
+                continue;
+            }
+
+            let mut canvas = acl_ui::sprite::Bitmap::blank(body.width, body.height);
+            for piece in &pieces {
+                let Some(url) = piece.url.as_deref() else {
+                    // The body, at its own size and origin.
+                    canvas.composite(body, (0, 0), (body.width, body.height));
                     continue;
                 };
-                let geometry = found.geometry;
-                let Some(url) = found.image_url(acl_types::cosmetics::HAT_COLLECTION_URL, false)
-                else {
+                let Some(artwork) = hats.image(url) else {
+                    // Not fetched yet, or not fetchable. The layer is skipped and the rest
+                    // are drawn -- a missing hat is a player without a hat, not a player
+                    // without a body.
                     continue;
-                };
-                let Some(artwork) = hats.image(&url) else {
-                    continue;
-                };
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_precision_loss,
-                    reason = "sprite and artwork dimensions in pixels, both far below f32's                               exact integer range"
-                )]
-                let rect = {
-                    let size = OVERLAY_SPRITE as f32;
-                    let width = geometry.width * size;
-                    (
-                        (geometry.left * size) as i32,
-                        (geometry.top * size) as i32,
-                        width as i32,
-                        // The artwork is square-ish and the geometry gives only a width, so
-                        // the height follows the file's own proportions -- which is what
-                        // `width` alone means in the stylesheet this is ported from.
-                        (width * artwork.height as f32 / artwork.width.max(1) as f32) as i32,
-                    )
                 };
                 let artwork = artwork.clone();
-                canvas.composite(&artwork, (rect.0, rect.1), (rect.2, rect.3));
+                let (at, size) = acl_ui::worn::placement(
+                    piece.geometry,
+                    OVERLAY_SPRITE,
+                    (artwork.width, artwork.height),
+                );
+                canvas.composite(&artwork, at, size);
             }
+            *body = canvas;
         }
     }
 
@@ -1203,6 +1503,106 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Builds this frame's crewmate textures, keyed by the player's index in the state.
+    ///
+    /// Every player the game reports rather than only the ones the roster shows: a lobby
+    /// holds fifteen, the cache makes the second frame free, and deciding who is visible is
+    /// the view's job rather than this one's.
+    ///
+    /// Returns ids and not handles, because the view paints and does not own. What owns them
+    /// is [`Portraits`], which drops at the end of this call everything the call did not ask
+    /// for -- so a session that visits many lobbies does not accumulate a texture per outfit
+    /// it has ever seen.
+    fn dress_portraits(
+        &mut self,
+        context: &egui::Context,
+    ) -> std::collections::BTreeMap<usize, egui::TextureId> {
+        let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest().cloned())
+        else {
+            // No frame, so nothing to dress -- and nothing to keep, either. A reader that
+            // stopped should not leave the last lobby's textures resident.
+            self.portraits.sweep();
+            return std::collections::BTreeMap::new();
+        };
+
+        let mut dressed = std::collections::BTreeMap::new();
+        for (at, player) in state.players.iter().enumerate() {
+            let appearance = Appearance {
+                colour: i32::try_from(player.color_id).unwrap_or(-1),
+                hat: player.hat_id.clone(),
+                skin: player.skin_id.clone(),
+                visor: player.visor_id.clone(),
+            };
+            if let Some(id) = self.portraits.of(context, &mut self.hats, appearance) {
+                dressed.insert(at, id);
+            }
+        }
+        self.portraits.sweep();
+        dressed
+    }
+}
+
+impl Client {
+    /// Everything the frame needs settled before anything is painted.
+    ///
+    /// It is here rather than inside the panel because of borrowing, not tidiness: the
+    /// closure that draws holds `self.reader` for its whole body, and each of these wants
+    /// `&mut` on a different field. Hoisting them makes the borrows disjoint by being
+    /// sequential.
+    ///
+    /// Returns the crewmate textures, keyed by the player's index in the state.
+    fn before_painting(
+        &mut self,
+        context: &egui::Context,
+    ) -> std::collections::BTreeMap<usize, egui::TextureId> {
+        if let Some(state) = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest())
+            .cloned()
+        {
+            self.follow_deaths(&state);
+        }
+        // Held as well as sent: the local player's own row reads it, and the detector
+        // reports transitions rather than a level, so nothing else remembers it. Only on a
+        // transition -- its hangover is what makes that a handful of messages a minute
+        // rather than fifty a second.
+        if let Some(speaking) = self.audio.take_voice_activity() {
+            self.local_talking = speaking;
+            self.link.say_speaking(speaking);
+        }
+        self.dress_portraits(context)
+    }
+
+    /// Updates who the voice layer believes is dead.
+    ///
+    /// The rule and its reason are `acl_ui::roster::follow_deaths`, which is tested without
+    /// a game. What is here is the two things only this side knows: which of the reader's
+    /// five states each of its three phases is, and that the whole thing runs on the
+    /// transition rather than per frame.
+    fn follow_deaths(&mut self, state: &acl_game::AmongUsState) {
+        if self.last_game_state == Some(state.game_state) {
+            return;
+        }
+        self.last_game_state = Some(state.game_state);
+
+        // `Menu` and `Unknown` are `Elsewhere` deliberately: leaving a game is a moment when
+        // what was secret stops being secret, and a map left standing would follow into the
+        // next lobby.
+        let phase = match state.game_state {
+            acl_game::GameState::Lobby => acl_ui::roster::Phase::Lobby,
+            acl_game::GameState::Tasks => acl_ui::roster::Phase::Round,
+            _ => acl_ui::roster::Phase::Elsewhere,
+        };
+        let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
+        acl_ui::roster::follow_deaths(phase, &seats, &mut self.dead);
+    }
+}
+
 impl eframe::App for Client {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(reader) = self.reader.as_mut() {
@@ -1276,6 +1676,7 @@ impl eframe::App for Client {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
             Self::title_bar(ui, &ctx, &mut page);
@@ -1360,17 +1761,43 @@ impl eframe::App for Client {
             // waits on audio moving.
             let link = &self.link;
             let speaking = &self.speaking;
+            // This end's own detector, which `roster` folds into the local player's row.
+            let local_talking = self.local_talking;
+            let hearable = &self.hearable;
+            let believed_dead = &self.dead;
+            // `Voice.tsx` line 1598, and the reason is in the comment where `hearable` is
+            // filled: a peer is shown as speaking only if this client can hear them.
+            let can_hear = |client_id: i64| {
+                link.socket_of(client_id)
+                    .is_some_and(|socket| hearable.contains(socket))
+            };
             let voice = Voice {
-                // `talking` is the game's own idea of who is speaking and still has no
-                // source; `audible` is this end's, and audio arriving is exactly it.
-                talking: &|_| false,
-                dead: &|_| false,
+                // Two different questions, and they used to be one. `talking` is whether a
+                // peer's stream carries speech, which is the `VAD` the server relays;
+                // `audible` is whether audio is arriving at all. A peer can be audible and
+                // silent -- that is most of a lobby, most of the time -- and one can be
+                // talking with nothing arriving, which is the shape of a broken connection.
+                talking: &|client_id| link.talking(client_id) && can_hear(client_id),
+                dead: &|client_id| believed_dead.get(&client_id).copied().unwrap_or(false),
                 connected: &|client_id| link.hears(client_id),
                 audible: &|client_id| speaking.contains(&client_id),
-                local_talking: false,
+                local_talking,
                 local_alive: !state.players.iter().any(|p| p.is_local && p.is_dead),
+                // `impostor_radio` is §4.13's one genuinely blocked item, and this is where
+                // it shows. 1.x claims the radio over the *data channel* -- `Voice.tsx` 913 and
+                // 1290 -- and this client has none by design: `the_offer_carries_audio_and_no_
+                // data_channel` asserts the SDP has no `m=application`. Moving the claim to the
+                // socket is the change §4.12's rollout forbids while both generations share a
+                // lobby, so it stays `None` until 1.x is switched off.
+                //
+                // `local_is_impostor` is not blocked and is read from the game. On its own it
+                // changes nothing -- `roster` needs both -- but a hard `false` where a fact is
+                // available is a line that stops looking like a stub.
                 impostor_radio: None,
-                local_is_impostor: false,
+                local_is_impostor: state
+                    .players
+                    .iter()
+                    .any(|player| player.is_local && player.is_impostor),
             };
             let seats: Vec<Seat<'_>> = state.players.iter().map(Seat).collect();
             let portraits: Vec<Portrait<'_>> = main_view(&seats, &voice)
@@ -1381,6 +1808,9 @@ impl eframe::App for Client {
                         name: &player.name,
                         color_id: i32::try_from(player.color_id).unwrap_or(-1),
                         state: *entry,
+                        // `None` while the cosmetics are still arriving, which the view
+                        // draws as shapes rather than as nothing.
+                        art: dressed.get(&entry.at).copied(),
                     })
                 })
                 .collect();

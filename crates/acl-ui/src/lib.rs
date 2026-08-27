@@ -23,3 +23,4 @@ pub mod settings_screen;
 pub mod sprite;
 pub mod views;
 pub mod window_state;
+pub mod worn;

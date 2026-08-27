@@ -228,6 +228,7 @@ fn the_main_view_draws() {
                 link: Link::Connected,
                 using_radio: false,
             },
+            art: None,
         },
         main::Portrait {
             name: "Blue",
@@ -239,6 +240,7 @@ fn the_main_view_draws() {
                 link: Link::Disconnected,
                 using_radio: true,
             },
+            art: None,
         },
         main::Portrait {
             // A name at the length the game allows, to put the clipping through its paces.
@@ -251,6 +253,7 @@ fn the_main_view_draws() {
                 link: Link::Silent,
                 using_radio: false,
             },
+            art: None,
         },
     ];
     let output = run(|ui| {
@@ -291,4 +294,49 @@ fn a_real_clash_is_seen() {
         !clashes(&output).is_empty(),
         "a duplicate id went unnoticed, so the other tests are not checking anything"
     );
+}
+
+/// A player with artwork draws, and still gets everything this view says about them.
+///
+/// The two bodies — the composited sprite and the drawn shapes — are separate functions
+/// since 2026-08-27, and the indicators were pulled out of the second one so both get them.
+/// The way that regresses is by somebody putting an indicator back inside `shapes`, where a
+/// dressed player would silently stop showing it: no error, no panic, just a crewmate whose
+/// connection state is invisible whenever their hat has finished downloading.
+///
+/// So this draws the same player twice, once each way, and asserts both paint.
+#[test]
+fn a_dressed_player_and_a_drawn_one_both_get_their_indicators() {
+    let state = Shown {
+        at: 0,
+        talking: true,
+        alive: false,
+        link: Link::Disconnected,
+        using_radio: true,
+    };
+    // `Managed(0)` is never registered here. Nothing uploads in a headless context — the
+    // harness clears `textures_delta` — so what this exercises is the painting path, which
+    // is the half that can be wrong in the source.
+    let dressed = main::Portrait {
+        name: "Red",
+        color_id: 0,
+        state,
+        art: Some(egui::TextureId::Managed(0)),
+    };
+    let drawn = main::Portrait {
+        art: None,
+        ..dressed
+    };
+
+    for (what, portrait) in [("dressed", dressed), ("drawn", drawn)] {
+        let output = run(|ui| {
+            main::draw(ui, &[portrait]);
+        });
+        assert!(painted(&output), "the {what} player painted nothing");
+        assert!(
+            clashes(&output).is_empty(),
+            "{what}: {:?}",
+            clashes(&output)
+        );
+    }
 }

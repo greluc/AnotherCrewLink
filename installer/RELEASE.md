@@ -134,6 +134,13 @@ cargo run -p acl-updater --features ceremony --bin acl-release -- feed \
   --into latest.yml
 ```
 
+> **Do not edit a draft's notes with `gh release edit`.** It clears the draft flag as a
+> side effect, and on 2026-08-27 that published 1.0.6 mid-edit — `latest.yml` and all,
+> with immutable releases meaning there was no taking it back. The workflow now writes the
+> notes from `CHANGELOG.md` at creation, so there is nothing left to fill in afterwards.
+> If you do need to change a published release's text, that is a different and safe thing;
+> it is editing a *draft* that is the trap.
+
 **Publishing the draft is what moves the fleet.** Every 1.x install polls for `latest.yml`
 and runs whatever version it names. Nothing before that step is visible to anybody, and
 nothing after it is reversible — a release can be deleted, but not un-downloaded. So the

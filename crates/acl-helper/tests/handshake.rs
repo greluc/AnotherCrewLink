@@ -169,19 +169,30 @@ fn the_link_starts_the_helper_and_keeps_it() {
     // Polled over a stretch that spans several of the helper's own sample intervals, so
     // that a helper which fell over on the first attempt to attach to a game that is not
     // there would be caught rather than missed.
-    for _ in 0..10 {
+    //
+    // Everything seen is kept and the assertions print it. Added while this test was
+    // failing intermittently for a reason that turned out not to be here at all — see
+    // `a_replacement_helper_waits_for_its_predecessors_pipe`, which now covers the cause.
+    // Kept because the diagnosis it produces is what any future failure will need: which
+    // poll it was on, what the link said, and what it had said before that.
+    let mut seen: Vec<String> = Vec::new();
+    for round in 0..10 {
         for event in link.poll() {
+            seen.push(format!("{round}: {event:?}"));
             assert!(
                 !matches!(event, acl_core::link::Event::Stopped(_)),
-                "the helper stopped while nothing was wrong: {event:?}"
+                "the helper stopped while nothing was wrong, on poll {round}.\n\
+                 Everything seen: {seen:#?}"
             );
         }
+        seen.push(format!("{round}: state {:?}", link.state()));
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
         link.state(),
         acl_core::helper::HelperState::Running,
-        "the link lost a helper that is alive and simply has no game to read"
+        "the link lost a helper that is alive and simply has no game to read.\n\
+         Everything seen: {seen:#?}"
     );
 
     link.stop();
@@ -383,8 +394,20 @@ fn within(
 ///
 /// `try_wait` in a loop rather than `wait`: a helper that never exits would otherwise take
 /// the whole test run down with it, and a test that hangs reports nothing at all.
+///
+/// # Thirty seconds, not five
+///
+/// Five seconds for a process to be scheduled, notice a closed pipe and exit is a bound on
+/// the machine's load rather than on the helper's behaviour. The longer one costs nothing
+/// when the test passes, because this returns as soon as the child is gone; it costs
+/// twenty-five extra seconds on a real failure, which is the moment to be patient.
+///
+/// It was raised while chasing an intermittent failure that turned out to have nothing to
+/// do with it — a replacement helper failing to claim a pipe its predecessor had not yet
+/// released, which `a_replacement_helper_waits_for_its_predecessors_pipe` now covers. The
+/// longer bound stays on its own merits.
 fn wait_briefly(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
-    for _ in 0..100 {
+    for _ in 0..600 {
         if let Some(status) = child.try_wait().expect("the child is waitable") {
             return Some(status);
         }
@@ -392,4 +415,57 @@ fn wait_briefly(child: &mut std::process::Child) -> Option<std::process::ExitSta
     }
     let _ = child.kill();
     None
+}
+
+/// A helper started straight after another one has been stopped gets its pipe.
+///
+/// # The thirty-second hang this is here to prevent
+///
+/// Found on 2026-08-27 as an intermittent failure of the test above, and it was neither
+/// intermittent nor about that test. Stopping a helper and starting another within a second
+/// or two had the replacement fail immediately with "all pipe instances are busy", exit, and
+/// leave the core waiting the full connect timeout for a pipe nobody was ever going to
+/// serve. `Link::stop` predicts it in a warning it had been printing all along: "the helper
+/// did not exit when asked; a replacement may not get its pipe."
+///
+/// It reached the suite as a flake because it needs a *slow* predecessor, and only the
+/// overlay test left one — so it depended on which tests had run, which is why running the
+/// failing test on its own always passed.
+///
+/// It is not a test-only problem. The client stops and restarts the helper whenever the
+/// reader is restarted, and a user who did that twice in quick succession waited thirty
+/// seconds for a client that looked hung.
+#[test]
+fn a_replacement_helper_waits_for_its_predecessors_pipe() {
+    let _serially = serially();
+
+    let mut first = acl_core::link::Link::new();
+    first
+        .start(
+            std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+            acl_core::launch::Elevation::AsIs,
+            OFFSETS,
+        )
+        .expect("the first helper starts");
+    first.stop();
+
+    // Immediately, with no pause: the pause is the bug. `stop` waits two seconds for the
+    // predecessor and gives up quietly if it takes longer, so the replacement has to be the
+    // one that copes.
+    let started = std::time::Instant::now();
+    let mut second = acl_core::link::Link::new();
+    let outcome = second.start(
+        std::path::Path::new(env!("CARGO_BIN_EXE_acl-helper")),
+        acl_core::launch::Elevation::AsIs,
+        OFFSETS,
+    );
+    let took = started.elapsed();
+    second.stop();
+
+    outcome.expect("the replacement gets the pipe its predecessor let go of");
+    // Well under the connect timeout, which is what the failure used to consume in full.
+    assert!(
+        took < Duration::from_secs(15),
+        "the replacement took {took:?}, which is the shape of the hang rather than the fix"
+    );
 }
