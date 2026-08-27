@@ -675,6 +675,31 @@ impl Session {
             .map(drop)
     }
 
+    /// Claims the game host's role for this client.
+    ///
+    /// Sent when this player *becomes* the host, which is not the same moment as joining.
+    /// `join` already carries `is_host`, so the case this covers is the one that happens
+    /// later: the host leaves, Among Us promotes somebody, and the server is still routing
+    /// host-dependent decisions to a socket that is gone.
+    ///
+    /// `Voice.tsx` line 827 does exactly this, on `gameState.isHost` changing. This client
+    /// did not, and the gap is invisible from either end -- the server accepts the claim it
+    /// never receives, and the client believes it made one.
+    ///
+    /// Nothing happens without a lobby: the server refuses a `setHost` for a lobby the
+    /// socket is not in, so sending one before joining is noise it would log.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn set_host(&mut self, client_id: i64) -> Result<(), TransportError> {
+        let Some(code) = self.lobby.code.clone() else {
+            return Ok(());
+        };
+        self.emit("setHost", vec![json!(code), json!(client_id)])
+            .await
+    }
+
     /// Tells the lobby whether this player is speaking.
     ///
     /// The other half of `Event::VoiceActivity`, which this session has parsed since it was

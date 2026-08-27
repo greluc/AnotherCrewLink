@@ -583,6 +583,13 @@ struct Client {
     /// Kept here because the detector reports *changes* and the window paints levels: a
     /// frame that saw no transition still has to draw the indicator it had.
     local_talking: bool,
+    /// The sockets whose gain is above zero this frame. See where it is filled.
+    hearable: std::collections::BTreeSet<String>,
+    /// Whether the server has been told this client is the host.
+    ///
+    /// Kept so the claim is made on the *transition*. `setHost` every frame would be a
+    /// message a second to a server that already agrees.
+    claimed_host: bool,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -631,6 +638,8 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             portraits: Portraits::default(),
             local_talking: false,
+            hearable: std::collections::BTreeSet::new(),
+            claimed_host: false,
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -692,8 +701,13 @@ impl Client {
         let link = &self.link;
         let heard = &self.speaking;
         let local_talking = self.local_talking;
+        let hearable = &self.hearable;
+        let can_hear = |client_id: i64| {
+            link.socket_of(client_id)
+                .is_some_and(|socket| hearable.contains(socket))
+        };
         let voice = Voice {
-            talking: &|client_id| link.talking(client_id),
+            talking: &|client_id| link.talking(client_id) && can_hear(client_id),
             dead: &|_| false,
             connected: &|client_id| link.hears(client_id),
             audible: &|client_id| heard.contains(&client_id),
@@ -1017,6 +1031,18 @@ impl Client {
         };
 
         let placements = self.placements(&state, &lobby, client);
+        // Who is actually audible this frame, kept before the map is handed away.
+        //
+        // `Voice.tsx` line 1598: `nowTalking = otherVAD[clientId] === true && gain > 0`.
+        // The speaking indicator is gated on being able to hear them, and that is not a
+        // nicety -- in a game, showing that somebody across the map is talking tells you
+        // they are alive and where they are not. 1.x has always gated it; this client
+        // showed the raw `VAD` until 2026-08-27.
+        self.hearable = placements
+            .iter()
+            .filter(|(_, placement)| placement.gain > 0.0)
+            .map(|(socket, _)| socket.clone())
+            .collect();
         self.audio.place(placements);
     }
 
@@ -1111,6 +1137,24 @@ impl Client {
         });
 
         if wanted == self.joined {
+            // Still in the same lobby, so nothing to join -- but the host can change under
+            // us. Among Us promotes somebody when the host leaves, and the server goes on
+            // routing host-dependent decisions to a socket that is gone until it is told.
+            let host_now = state.as_ref().is_some_and(|state| state.is_host);
+            if host_now && !self.claimed_host {
+                let client_id = state
+                    .as_ref()
+                    .and_then(|state| state.players.iter().find(|player| player.is_local))
+                    .and_then(|player| player.client_id)
+                    .map_or(-1, i64::from);
+                if client_id >= 0 {
+                    self.link.say_host(client_id);
+                    self.claimed_host = true;
+                }
+            } else if !host_now {
+                // Reset, so a second promotion in the same session is claimed again.
+                self.claimed_host = false;
+            }
             return;
         }
         match &wanted {
@@ -1122,6 +1166,8 @@ impl Client {
                 let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
                 let is_host = state.as_ref().is_some_and(|state| state.is_host);
                 self.link.join(code, player_id, client_id, is_host);
+                // `join` carries it, so a claim on top would be the same statement twice.
+                self.claimed_host = is_host;
             }
             None => self.link.leave(),
         }
@@ -1593,13 +1639,20 @@ impl eframe::App for Client {
             let speaking = &self.speaking;
             // This end's own detector, which `roster` folds into the local player's row.
             let local_talking = self.local_talking;
+            let hearable = &self.hearable;
+            // `Voice.tsx` line 1598, and the reason is in the comment where `hearable` is
+            // filled: a peer is shown as speaking only if this client can hear them.
+            let can_hear = |client_id: i64| {
+                link.socket_of(client_id)
+                    .is_some_and(|socket| hearable.contains(socket))
+            };
             let voice = Voice {
                 // Two different questions, and they used to be one. `talking` is whether a
                 // peer's stream carries speech, which is the `VAD` the server relays;
                 // `audible` is whether audio is arriving at all. A peer can be audible and
                 // silent -- that is most of a lobby, most of the time -- and one can be
                 // talking with nothing arriving, which is the shape of a broken connection.
-                talking: &|client_id| link.talking(client_id),
+                talking: &|client_id| link.talking(client_id) && can_hear(client_id),
                 dead: &|_| false,
                 connected: &|client_id| link.hears(client_id),
                 audible: &|client_id| speaking.contains(&client_id),

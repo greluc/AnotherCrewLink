@@ -62,6 +62,8 @@ pub(crate) enum Command {
     },
     /// Say whether this player is speaking, for everybody else's indicator.
     VoiceActivity(bool),
+    /// Claim the game host's role, after having become it.
+    SetHost(i64),
     /// Leave it, closing every connection.
     Leave,
 }
@@ -305,6 +307,14 @@ impl Link {
         self.sockets
             .get(&client_id)
             .is_some_and(|socket| self.vocal.contains(socket))
+    }
+
+    /// Claims the game host's role.
+    ///
+    /// For the promotion case only: `join` carries `is_host` for the join itself. See
+    /// `Session::set_host`.
+    pub(crate) fn say_host(&self, client_id: i64) {
+        self.send(Command::SetHost(client_id));
     }
 
     /// Tells the lobby whether this player is speaking.
@@ -716,6 +726,11 @@ fn obey(
         Command::VoiceActivity(speaking) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.voice_activity(speaking));
+            }
+        }
+        Command::SetHost(client_id) => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.set_host(client_id));
             }
         }
         Command::Leave => {
