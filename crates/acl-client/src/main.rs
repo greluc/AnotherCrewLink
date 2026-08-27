@@ -1870,8 +1870,10 @@ impl Client {
             .iter()
             .map(|(id, label)| acl_ui::views::settings::Entry { id, label })
             .collect();
+        let level = self.audio.input_level();
         let context = acl_ui::views::settings::Context {
             t: &translate,
+            input_level: level,
             microphones: &microphones,
             speakers: &speakers,
             locales: &locales,
@@ -1894,6 +1896,10 @@ impl Client {
                 }
                 settings_page::Effect::LanguageChanged => {
                     self.catalogue = load_catalogue(&self.settings);
+                }
+                settings_page::Effect::TestSpeaker => {
+                    acl_core::log_info!("audio", "playing a test tone");
+                    self.audio.test_speaker();
                 }
                 settings_page::Effect::ResetOffsets => {
                     // The offsets belong to the helper, which owns the file and the

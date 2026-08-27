@@ -57,6 +57,11 @@ pub(crate) enum Effect {
     ResetOffsets,
     /// The language changed, so the catalogue has to be reloaded.
     LanguageChanged,
+    /// Play a sound through the speaker that is selected.
+    ///
+    /// A `Probe` rather than an `Action`: it changes nothing, so it carries no warning and
+    /// needs no confirmation. See `Kind::Probe`.
+    TestSpeaker,
 }
 
 impl Page {
@@ -141,6 +146,7 @@ impl Page {
         match key {
             "restoreDefaults" => effects.push(Effect::RestoreDefaults),
             "resetOffsets" => effects.push(Effect::ResetOffsets),
+            "testSpeaker" => effects.push(Effect::TestSpeaker),
             // Unreachable while `settings_screen` is the only source of these, and not a
             // panic: an action this build does not know is a screen that has moved ahead
             // of its handler, which is a missing feature rather than a broken client.

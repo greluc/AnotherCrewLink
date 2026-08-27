@@ -108,6 +108,12 @@ pub struct Context<'a> {
     pub speakers: &'a [Entry<'a>],
     /// The locales under `static/locales`, with their names.
     pub locales: &'a [Entry<'a>],
+    /// What the microphone is hearing, from nought to one, for [`Kind::Meter`].
+    ///
+    /// `None` when there is no microphone open, which draws an empty bar rather than a
+    /// full one: a meter that reads maximum when nothing is listening is worse than one
+    /// that reads nothing.
+    pub input_level: Option<f32>,
     /// Whether this player may change the lobby rules: host, and in a lobby.
     pub host_may_change: bool,
     /// Whether the player is somewhere a lobby exists, which picks which of the two
@@ -282,6 +288,18 @@ fn one(
                 changes.push(Change::Capture(control.key));
             }
         }
+        Kind::Meter => {
+            let level = context.input_level.unwrap_or(0.0).clamp(0.0, 1.0);
+            // A bar rather than a number. The question it answers is "is it hearing me",
+            // and the answer is whether the thing moves when you speak.
+            ui.add(egui::ProgressBar::new(level).desired_width(200.0).fill(
+                if context.input_level.is_some() {
+                    egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
+                } else {
+                    ui.visuals().weak_text_color()
+                },
+            ));
+        }
         Kind::Text => {
             let mut text = values.text_at(scope, control.key);
             ui.label(label);
@@ -297,6 +315,16 @@ fn one(
                 changes.push(Change::Run {
                     key: control.key,
                     warning: control.warning,
+                });
+            }
+        }
+        Kind::Probe => {
+            // The same `Run`, and never a warning: a `Probe` has none by construction, and
+            // `nothing_that_writes_nothing_shadows_a_setting` is what keeps it that way.
+            if ui.button(label).clicked() {
+                changes.push(Change::Run {
+                    key: control.key,
+                    warning: None,
                 });
             }
         }

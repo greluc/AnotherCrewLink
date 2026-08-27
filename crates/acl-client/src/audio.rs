@@ -125,6 +125,15 @@ pub(crate) struct Tuning {
     /// Bumped whenever `noise_floor` changes, so the callback knows to re-tune the
     /// detector rather than comparing floats every frame.
     generation: std::sync::atomic::AtomicU64,
+    /// What the microphone last heard, nought to one, for the settings screen's meter.
+    ///
+    /// Written by the capture callback and read by the paint. `VadFrame::level` has carried
+    /// this since P3+, documented as "for a meter", and nothing had ever read it.
+    ///
+    /// Negative means no microphone has reported anything, which draws an empty bar rather
+    /// than a full one — a meter that reads maximum when nothing is listening is worse than
+    /// one that reads nothing.
+    level: std::sync::atomic::AtomicU32,
 }
 
 impl Default for Tuning {
@@ -133,6 +142,7 @@ impl Default for Tuning {
             gain: std::sync::atomic::AtomicU32::new(1.0_f32.to_bits()),
             noise_floor: std::sync::atomic::AtomicU64::new((-1.0_f64).to_bits()),
             generation: std::sync::atomic::AtomicU64::new(0),
+            level: std::sync::atomic::AtomicU32::new((-1.0_f32).to_bits()),
         }
     }
 }
@@ -146,6 +156,18 @@ impl Tuning {
         if self.noise_floor.swap(wanted, Ordering::Relaxed) != wanted {
             self.generation.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Records what the microphone just heard.
+    fn heard(&self, level: f32) {
+        self.level
+            .store(level.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// What it last heard, if anything has.
+    fn level(&self) -> Option<f32> {
+        let held = f32::from_bits(self.level.load(std::sync::atomic::Ordering::Relaxed));
+        (held >= 0.0).then_some(held)
     }
 
     /// The gain to apply to the next frame.
@@ -217,6 +239,8 @@ pub(crate) struct Audio {
     placements: Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     /// The capture settings that change while it runs, read by the capture callback.
     tuning: Arc<Tuning>,
+    /// What the speaker callback drains, so a test tone can be put into it.
+    playing: Arc<Mutex<std::collections::VecDeque<f32>>>,
     /// Why there is no audio, when there is none.
     trouble: Option<String>,
     /// Kept alive: dropping a `cpal` stream stops it.
@@ -237,14 +261,28 @@ impl Audio {
         let (voice, activity) = std::sync::mpsc::channel::<bool>();
         let placements = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let tuning = Arc::new(Tuning::default());
+        // Made here rather than inside `open`, because the handle keeps a share of it: the
+        // speaker test puts samples into the queue the mixer fills, which is what makes the
+        // test go through the device the client is actually playing on.
+        let playing: Arc<Mutex<std::collections::VecDeque<f32>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
 
-        match Self::open(packets, &encoded, &voice, &placements, capture, &tuning) {
+        match Self::open(
+            packets,
+            &encoded,
+            &voice,
+            &placements,
+            capture,
+            &tuning,
+            &playing,
+        ) {
             Ok(streams) => Self {
                 incoming,
                 outgoing,
                 activity,
                 placements,
                 tuning,
+                playing,
                 trouble: None,
                 _streams: streams,
             },
@@ -254,6 +292,7 @@ impl Audio {
                 activity,
                 placements,
                 tuning,
+                playing,
                 trouble: Some(why),
                 _streams: Vec::new(),
             },
@@ -317,6 +356,60 @@ impl Audio {
         }
     }
 
+    /// What the microphone is hearing, for the settings screen's meter.
+    ///
+    /// `None` until a frame has been through the detector, which is also the answer when
+    /// there is no microphone at all or the detector is switched off.
+    pub(crate) fn input_level(&self) -> Option<f32> {
+        self.tuning.level()
+    }
+
+    /// Plays a short sound through whichever speaker is in use.
+    ///
+    /// Into the same queue the mixer fills, so it goes through the device the client is
+    /// actually playing on — which is the whole question the button answers. A separate
+    /// stream opened for the test could succeed on a device the client is not using.
+    ///
+    /// Two notes and a fade, generated rather than shipped: an asset would be a file, a
+    /// decoder and a licence for something the ear only has to recognise as "that worked".
+    pub(crate) fn test_speaker(&self) {
+        const A: f32 = 660.0;
+        const E: f32 = 880.0;
+        // 48 000 is exact in an `f32`, and a note of 8 640 samples is exact as a `usize`.
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a fixed sample rate and a fixed fraction of a second"
+        )]
+        let (rate, note) = {
+            let rate = acl_audio::stream::WANTED_RATE as f32;
+            (rate, (rate * 0.18) as usize)
+        };
+
+        let Ok(mut ready) = self.playing.lock() else {
+            return;
+        };
+        for frequency in [A, E] {
+            for sample in 0..note {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a sample index inside one short note"
+                )]
+                let time = sample as f32 / rate;
+                // Down over the note, so it ends rather than stopping. A tone cut off at
+                // full amplitude is a click, and a click through a speaker somebody is
+                // testing reads as a fault.
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a sample index inside one short note"
+                )]
+                let fade = 1.0 - (sample as f32 / note as f32);
+                ready.push_back(0.25 * fade * (std::f32::consts::TAU * frequency * time).sin());
+            }
+        }
+    }
+
     /// Why there is no audio, if there is none.
     pub(crate) fn trouble(&self) -> Option<&str> {
         self.trouble.as_deref()
@@ -334,12 +427,12 @@ impl Audio {
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
         capture: Capture,
         tuning: &Arc<Tuning>,
+        ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         // What the mixing thread produces and the output callback consumes. A mutex the
         // callback only ever *tries*: blocking there would miss a deadline measured in
         // milliseconds because the mixer was busy, and a click is worse than a gap.
-        let ready: Arc<Mutex<std::collections::VecDeque<f32>>> =
-            Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let ready = Arc::clone(ready);
         // What the speakers played, on its way to the echo canceller.
         let played: Arc<Mutex<std::collections::VecDeque<f32>>> =
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
@@ -589,6 +682,11 @@ fn open_microphone(
                         if heard_frames == calibration_frames {
                             detector.finish_calibration();
                         }
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "a meter reading between nought and one"
+                        )]
+                        tuning.heard(heard.level as f32);
                         if heard.changed && voice.send(heard.talking).is_err() {
                             return;
                         }

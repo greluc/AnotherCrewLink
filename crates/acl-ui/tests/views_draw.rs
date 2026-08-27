@@ -104,6 +104,7 @@ fn the_settings_screen_draws() {
         label: "English",
     }];
     let context = settings::Context {
+        input_level: None,
         t: &translate,
         microphones: &devices,
         speakers: &devices,
@@ -126,6 +127,7 @@ fn the_settings_screen_draws_with_everything_disabled() {
     let values = Defaults(acl_ui::config::Config::new());
     let translate = |key: &str| key.to_owned();
     let context = settings::Context {
+        input_level: None,
         t: &translate,
         microphones: &[],
         speakers: &[],

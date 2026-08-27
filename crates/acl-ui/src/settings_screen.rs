@@ -50,6 +50,26 @@ pub enum Kind {
     },
     /// Free text.
     Text,
+    /// A button that tries something and changes nothing.
+    ///
+    /// Deliberately **not** [`Kind::Action`]. An action here means one that alters the
+    /// configuration irreversibly, which is why `an_action_is_not_a_setting` requires every
+    /// one of them to carry a warning — restoring defaults rewrites every preference, and
+    /// resetting the offsets throws away what the reader is using. Playing a sound through
+    /// the chosen speaker does neither, and putting it under the same kind would have meant
+    /// either a confirmation dialog before a chime or weakening the rule that keeps the
+    /// other two behind one.
+    Probe,
+    /// What the microphone is hearing right now, drawn rather than edited.
+    ///
+    /// Not a setting: nothing is stored under its key and nothing can be. It is here
+    /// because it belongs beside the two settings that decide what the detector does with
+    /// that level — `micSensitivity` is a threshold, and a threshold without a reading of
+    /// what it is being compared against is a number somebody guesses at.
+    ///
+    /// `VadFrame::level` has carried it since P3+, documented as "for a meter", and nothing
+    /// read it.
+    Meter,
     /// A locale, chosen from the tree under `static/locales`.
     ///
     /// Not a [`Kind::Choice`] because the options are not fixed: they are whatever
@@ -257,6 +277,15 @@ const AUDIO: &[Control] = &[
         Some("settings.audio.speaker"),
         Kind::Device { capture: false },
     ),
+    // Between the speaker and the mode, because it is about the speaker: it plays a sound
+    // through the one that is selected, which is the only way to find out that the
+    // selection is wrong.
+    Control::of(
+        "testSpeaker",
+        Some("settings.audio.test_speaker_start"),
+        Kind::Probe,
+    ),
+    Control::of("microphoneLevel", None, Kind::Meter),
     Control::of(
         "pushToTalkMode",
         None,
@@ -718,6 +747,32 @@ mod tests {
         }
     }
 
+    /// A control that writes nothing must not share a key with a setting.
+    ///
+    /// The same collision `an_action_is_not_a_setting` guards, for the two kinds that were
+    /// added beside it: any code that treated controls uniformly would write `testSpeaker`
+    /// into `config.json` as though somebody had chosen it.
+    #[test]
+    fn nothing_that_writes_nothing_shadows_a_setting() {
+        let schema = schema();
+        for control in controls() {
+            if !matches!(control.kind, Kind::Probe | Kind::Meter) {
+                continue;
+            }
+            assert!(
+                !schema.contains_key(control.key),
+                "{} is both a {:?} and a setting",
+                control.key,
+                control.kind
+            );
+            assert!(
+                control.warning.is_none(),
+                "{} changes nothing, so there is nothing to confirm",
+                control.key
+            );
+        }
+    }
+
     /// Every key this screen can write: a control's own key, and any gate it names.
     fn reachable() -> BTreeSet<&'static str> {
         let mut keys = BTreeSet::new();
@@ -758,11 +813,15 @@ mod tests {
 
     /// And the other direction: a control pointing at a key the schema does not have
     /// writes a setting nothing reads.
+    ///
+    /// Three kinds write nothing and so have nothing to point at. `Action` runs something,
+    /// `Probe` tries something, and `Meter` only reads — each has a key because the screen
+    /// needs one to build a widget id from, and none of them is a setting.
     #[test]
     fn every_control_points_at_a_real_setting() {
         let schema = schema();
         for control in controls() {
-            if control.kind == Kind::Action {
+            if matches!(control.kind, Kind::Action | Kind::Probe | Kind::Meter) {
                 continue;
             }
             assert!(
