@@ -9,13 +9,12 @@
 //! differently from the shipped one in the window department is a difference that hides
 //! exactly this class of bug until a release, which is where this one was found.
 //!
-//! What goes with it: `eprintln!` now writes nowhere. That is acceptable for the diagnostic
-//! lines -- a user launching from the Start menu never saw them either -- and is *not*
-//! acceptable for the one message that exists to be read, which is a second copy telling
-//! you the first is already running. That one is a message box now.
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
-//! The window.
+//! What went with it: `eprintln!` now writes nowhere at all, because a windows-subsystem
+//! process has no standard error to write to. Every diagnostic in this binary was going to
+//! a handle that does not exist. They go to `acl_core::logging` instead, which writes the
+//! file under the player's profile that `logFile.ts` has always written -- same shape, same
+//! four-mebibyte cap, same single previous file, so a support conversation can read a 1.x
+//! and a 2.x log side by side.
 //!
 //! §4.8 item 1: the shell, a custom title bar, and window state persistence. It is also the
 //! first thing in this port that assembles the rest — the single-instance lock, the paths,
@@ -356,7 +355,7 @@ impl Devices {
 /// look at. The closure is not called unless the variable is set.
 fn chrome_log(what: impl FnOnce() -> String) {
     if std::env::var_os("ACL_CHROME_LOG").is_some() {
-        eprintln!("AnotherCrewLink: {}", what());
+        acl_core::log_info!("chrome", "{}", what());
     }
 }
 
@@ -461,7 +460,7 @@ fn main() -> eframe::Result<()> {
             // Before a window exists, so there is nowhere to show it but here. A client
             // that cannot work out where its files go cannot start, and saying so beats a
             // window with no settings in it.
-            eprintln!("AnotherCrewLink: {error}");
+            acl_core::log_error!("client", "{error}");
             return Ok(());
         }
     };
@@ -478,7 +477,10 @@ fn main() -> eframe::Result<()> {
     );
     if carried == acl_core::paths::import::Outcome::Failed {
         // Not a reason to refuse to start: a first run with defaults is a working client.
-        eprintln!("AnotherCrewLink: 1.x's settings could not be read; starting with defaults");
+        acl_core::log_warn!(
+            "settings",
+            "1.x's settings could not be read; starting with defaults"
+        );
     }
 
     #[cfg(windows)]
@@ -492,6 +494,15 @@ fn main() -> eframe::Result<()> {
             return Ok(());
         }
     };
+
+    // Before anything else has anything to say. Every diagnostic in this binary goes here
+    // and nowhere else, because a windows-subsystem process has no standard error.
+    acl_core::logging::open(&paths.log_file());
+    acl_core::log_info!(
+        "client",
+        "AnotherCrewLink {} starting",
+        env!("CARGO_PKG_VERSION")
+    );
 
     let file = paths.window_state_file();
     let saved = read_state(&file);
@@ -1582,6 +1593,7 @@ impl Client {
                 // The server the settings name, which is 1.x's `serverURL` -- the same key
                 // in the same file, so a player who changed it keeps their change.
                 let url = self.settings.config().text_at("serverURL");
+                acl_core::log_info!("net", "connecting to {url}");
                 self.link.connect(&url);
             }
             // A subscription belongs to a socket. When the socket goes, so does it.
@@ -1631,29 +1643,35 @@ impl Client {
             }
             return;
         }
-        match &wanted {
-            Some(code) => {
-                let me = state
-                    .as_ref()
-                    .and_then(|state| state.players.iter().find(|player| player.is_local));
-                let player_id = me.map_or(-1, |player| i64::from(player.id));
-                let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
-                let is_host = state.as_ref().is_some_and(|state| state.is_host);
-                self.link.join(code, player_id, client_id, is_host);
-                // `join` carries it, so a claim on top would be the same statement twice.
-                self.announced.host = is_host;
-            }
-            None => self.link.leave(),
+        if let Some(code) = &wanted {
+            let me = state
+                .as_ref()
+                .and_then(|state| state.players.iter().find(|player| player.is_local));
+            let player_id = me.map_or(-1, |player| i64::from(player.id));
+            let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
+            let is_host = state.as_ref().is_some_and(|state| state.is_host);
+            acl_core::log_info!(
+                "lobby",
+                "joining {code} as player {player_id}, client {client_id}, host {is_host}"
+            );
+            self.link.join(code, player_id, client_id, is_host);
+            // `join` carries it, so a claim on top would be the same statement twice.
+            self.announced.host = is_host;
+        } else {
+            acl_core::log_info!("lobby", "leaving");
+            self.link.leave();
         }
         self.joined = wanted;
     }
 
     /// Draws the public lobby browser.
     ///
-    /// Opening the page is what connects. A session held open for a window nobody is
-    /// looking at is a socket the server has to keep, a heartbeat to answer and a
-    /// reconnect to attempt, for nothing; the voice pipeline will want one for longer and
-    /// will say so when it exists.
+    /// Opening the page is what *subscribes*, not what connects. It used to be both, and
+    /// the connection moved to the way up on 2026-08-27 -- a voice client that has not
+    /// joined its server is not a voice client, whatever screen it is showing. What is
+    /// still bound to this page is the lobby-list subscription: a session left watching
+    /// receives every change to every public lobby for as long as it is connected, which is
+    /// traffic for a window nobody is looking at.
     fn show_lobbies(&mut self, ui: &mut egui::Ui) {
         // Before the catalogue is borrowed below, because detecting takes `&mut self`.
         let installed = self.installed_mod();
@@ -2288,6 +2306,7 @@ impl eframe::App for Client {
                     reader.ask_to_stop();
                     reader.ask_to_start();
                 }
+                acl_core::log_info!("chrome", "reload: restarting the reader and the audio");
                 // And the audio, which is what applies the three capture settings that can
                 // only be given when the device is opened. `Settings.tsx` raises an
                 // "unsaved" count for exactly those and asks for a reconnect; this is that

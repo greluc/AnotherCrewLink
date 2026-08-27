@@ -226,6 +226,12 @@ impl Link {
         while let Ok(report) = self.reports.try_recv() {
             match report {
                 Report::State(state) => {
+                    // On the transition. The state is reported when it changes, but a
+                    // reconnect can report the same failure twice and a log that repeats
+                    // itself is one nobody reads to the end of.
+                    if self.state != state {
+                        acl_core::log_info!("net", "{state:?}");
+                    }
                     if !matches!(state, State::Connected(_)) {
                         // Every peer went with the socket they were signalled over.
                         self.connected.clear();

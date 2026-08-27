@@ -423,7 +423,7 @@ fn open_speaker(
                     }
                 }
             },
-            |error| eprintln!("AnotherCrewLink: output stream: {error}"),
+            |error| acl_core::log_warn!("audio", "output stream: {error}"),
             None,
         )
         .map_err(|error| format!("the speaker could not be opened: {error}"))?;
@@ -609,7 +609,7 @@ fn open_microphone(
             // callback pays for the encoder's and the canceller's warm-up while the device
             // is already running. Worth knowing about, and worth not mistaking for the
             // recurring kind, which would sound like a stutter rather than like nothing.
-            |error| eprintln!("AnotherCrewLink: input stream: {error}"),
+            |error| acl_core::log_warn!("audio", "input stream: {error}"),
             None,
         )
         .map_err(|error| format!("the microphone could not be opened: {error}"))?;

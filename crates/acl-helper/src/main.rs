@@ -6,7 +6,11 @@
 //! window would have become one window that appears a moment later.
 //!
 //! The two diagnostics below are for somebody who ran this by hand, and they still reach a
-//! shell that redirected them -- which is how `it_refuses_to_start_without_being_told_who_
+//! shell that redirected them. They are *not* written to the client's log file, and that is
+//! deliberate twice over: reaching `acl_core::logging` would pull the whole unelevated
+//! client stack -- webrtc included -- into an administrator process, which is what §4.7
+//! keeps out of here; and anything this half has to say to the client it says over the
+//! pipe, where the client logs it. See `Stopping` -- which is how `it_refuses_to_start_without_being_told_who_
 //! started_it` reads them.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
