@@ -169,19 +169,30 @@ fn the_link_starts_the_helper_and_keeps_it() {
     // Polled over a stretch that spans several of the helper's own sample intervals, so
     // that a helper which fell over on the first attempt to attach to a game that is not
     // there would be caught rather than missed.
-    for _ in 0..10 {
+    //
+    // Everything seen is kept, and the assertions below print it. This test failed three
+    // times on 2026-08-27 and has not been reproducible since — sixteen runs, including
+    // three with a forced rebuild to recreate the load it seemed to correlate with. So the
+    // next occurrence has to carry its own diagnosis: which poll it was on, what the link
+    // said, and what it had said before that.
+    let mut seen: Vec<String> = Vec::new();
+    for round in 0..10 {
         for event in link.poll() {
+            seen.push(format!("{round}: {event:?}"));
             assert!(
                 !matches!(event, acl_core::link::Event::Stopped(_)),
-                "the helper stopped while nothing was wrong: {event:?}"
+                "the helper stopped while nothing was wrong, on poll {round}.\n\
+                 Everything seen: {seen:#?}"
             );
         }
+        seen.push(format!("{round}: state {:?}", link.state()));
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
         link.state(),
         acl_core::helper::HelperState::Running,
-        "the link lost a helper that is alive and simply has no game to read"
+        "the link lost a helper that is alive and simply has no game to read.\n\
+         Everything seen: {seen:#?}"
     );
 
     link.stop();
