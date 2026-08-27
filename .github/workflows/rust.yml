@@ -184,59 +184,18 @@ jobs:
           # whose failure would be discovered by everybody at once.
           "$makensis" -DVERSION=1.1.0 -DSOURCE_DIR=../stubs installer/bridge.nsi
 
-      # TEMPORARY. The install below hangs under /S with every file already written,
-      # Uninstall.exe included -- so it is stuck on one of the few instructions after
-      # them. This narrows it to one, and comes out again once it has.
-      - name: Which instruction does not return
-        shell: bash
-        run: |
-          # Actions runs bash with -e, and `wait` on a process this killed returns
-          # non-zero -- which ended the step after the first probe.
-          set +e
-          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
-          probe() {
-            name=$1; shift
-            cp installer/anothercrewlink.nsi "installer/probe-$name.nsi"
-            "$@" "installer/probe-$name.nsi"
-            # Checked, unlike last time: a variant that failed to compile leaves no .exe,
-            # and running a file that is not there exits instantly -- which reads as
-            # "this one is fine" and is how `notail` came back a false negative.
-            if ! "$makensis" -DVERSION=0.0.0-$name -DSOURCE_DIR=../stubs \
-                 -DOUT_FILE=probe-$name.exe "installer/probe-$name.nsi" >"mk-$name.log" 2>&1
-            then
-              echo "PROBE $name: DID NOT COMPILE"
-              tail -3 "mk-$name.log"
-              return
-            fi
-            rm -rf "out-$name"
-            ./installer/probe-$name.exe /S /D=$(cygpath -w "$PWD/out-$name") \
-              </dev/null >/dev/null 2>&1 &
-            pid=$!
-            for _ in $(seq 30); do kill -0 $pid 2>/dev/null || break; sleep 1; done
-            if kill -0 $pid 2>/dev/null; then
-              echo "PROBE $name: STILL RUNNING"
-              kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
-            else
-              echo "PROBE $name: exited"
-            fi
-          }
-          probe asis true
-          # Surgical, so the LogicLib structure around it stays valid. `Exec` on a stub
-          # that is four bytes of text is a CreateProcess that fails, and a failed launch
-          # is exactly the kind of thing that can put a modal error box on a process
-          # nobody is looking at.
-          probe noexec sed -i '/Exec .\"\$INSTDIR\\\\anothercrewlink.exe\"./d'
-          probe noshortcut sed -i '/CreateShortCut/d'
-          probe nokill sed -i '/nsExec::Exec/d;/^  Pop \$0$/d'
-          probe noreg sed -i '/WriteReg/d'
-          # Whether the silent flag is even being seen. If this one exits, `${Silent}` is
-          # false under /S and the guard around Exec is not guarding anything.
-          probe alwaysquiet sed -i 's/\${IfNot} \${Silent}/\${If} 0 == 1/'
-
       # The silent switches are a contract with 1.x's updater, which spawns
       # `installer.exe --updated /S /D=<dir>` and never sees a window. A script that
       # compiles but shows a dialog under /S hangs that updater forever, and no amount of
       # reading the source says whether it does.
+      #
+      # `//S` and not `/S`. Git Bash rewrites an argument that looks like a POSIX path
+      # into a Windows one before the program ever sees it, so `/S` arrives as a path and
+      # the installer is not silent -- it opens its window and waits for a click that is
+      # never coming. That is precisely the hang this job spent five runs on, and it was
+      # the harness rather than the script. `//` collapses to one slash and is passed
+      # through. `/D=` and `_?=` survive as they are, because an argument containing `=`
+      # is left alone.
       - name: Install it silently, the way the updater will
         shell: bash
         run: |
@@ -249,7 +208,7 @@ jobs:
           # child inherited, so a process that has exited can still look like one that has
           # not, and that would read as the hang above.
           set +e
-          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated /S \
+          ./installer/AnotherCrewLink-Setup-0.0.0-ci.exe --updated //S \
             /D=$(cygpath -w "$PWD/installed") </dev/null >install.log 2>&1 &
           installer=$!
           for _ in $(seq 60); do
@@ -297,7 +256,7 @@ jobs:
           # the uninstaller in place rather than from a copy in the temp directory, which is
           # the only way a script can wait for it and see the result.
           set +e
-          timeout 120 ./installed/Uninstall.exe /S _?=$(cygpath -w "$PWD/installed") \
+          timeout 120 ./installed/Uninstall.exe //S _?=$(cygpath -w "$PWD/installed") \
             </dev/null >uninstall.log 2>&1
           code=$?
           set -e
