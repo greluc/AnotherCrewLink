@@ -1,0 +1,248 @@
+//! Mute, deafen and push-to-talk: the three switches a voice client must have.
+//!
+//! `acl_core::keys` has had the polling and the edge detection since P5+, and until
+//! 2026-08-27 the only caller was the settings screen — where it is used to *record* a
+//! shortcut. Nothing read them while the client was running, so none of the three did
+//! anything: there was no way to mute yourself, no way to stop hearing the lobby, and
+//! push-to-talk transmitted continuously.
+//!
+//! # The rules are `Voice.tsx`'s, including the odd one
+//!
+//! The microphone is open when `!deafened && !muted && not in push-to-talk mode`
+//! (lines 1105-1108), and in push-to-talk mode it is open only while the key is held.
+//!
+//! The odd one is mute while deafened: it clears **both** (lines 1113-1117). Read as a
+//! toggle that is what it does — you press mute, and you can hear again. It is the way out
+//! of deafened for somebody who reached for the nearer key, and copying it is not optional:
+//! a player who deafens themselves and then presses mute expects to be back.
+//!
+//! Deafened silences everybody else too, which is not here — it belongs where the gain is
+//! decided, next to the per-player mute it behaves like.
+
+use acl_core::keys::{Edge, KeyState, Shortcut};
+use acl_core::shortcuts::binding_for;
+
+/// What the three switches say right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct State {
+    /// The microphone is off.
+    pub(crate) muted: bool,
+    /// The microphone is off and so is everybody else.
+    pub(crate) deafened: bool,
+    /// Push-to-talk is held, which only means anything in push-to-talk mode.
+    pub(crate) holding: bool,
+}
+
+impl State {
+    /// Whether this client should be sending audio.
+    ///
+    /// `push_to_talk` is the *mode*, from the settings: with it off the microphone is open
+    /// unless something closed it, and with it on the microphone is closed unless the key
+    /// is held. Those are different sentences and the difference is the whole feature.
+    #[must_use]
+    pub(crate) const fn transmitting(self, push_to_talk: bool) -> bool {
+        if self.muted || self.deafened {
+            return false;
+        }
+        !push_to_talk || self.holding
+    }
+}
+
+/// The three shortcuts, and what they have done.
+pub(crate) struct Controls {
+    mute: Shortcut,
+    deafen: Shortcut,
+    talk: Shortcut,
+    state: State,
+    /// What the bindings were last built from, so they are rebuilt only when they change.
+    ///
+    /// Parsing three shortcut strings every frame would be three allocations sixty times a
+    /// second to answer a question whose answer changes when somebody opens the settings.
+    bound: [String; 3],
+}
+
+impl Controls {
+    /// Shortcuts from their settings strings.
+    pub(crate) fn new(mute: &str, deafen: &str, talk: &str) -> Self {
+        Self {
+            mute: Shortcut::new(binding_for(mute)),
+            deafen: Shortcut::new(binding_for(deafen)),
+            talk: Shortcut::new(binding_for(talk)),
+            state: State::default(),
+            bound: [mute.to_owned(), deafen.to_owned(), talk.to_owned()],
+        }
+    }
+
+    /// Rebinds, if the settings have changed since the last call.
+    ///
+    /// The pressed state is deliberately not carried across: a shortcut that was held when
+    /// it was rebound is a key nobody is holding any more, and `Shortcut::new` starts from
+    /// not-pressed for the same reason.
+    pub(crate) fn rebind(&mut self, mute: &str, deafen: &str, talk: &str) {
+        if self.bound[0] == mute && self.bound[1] == deafen && self.bound[2] == talk {
+            return;
+        }
+        let held = self.state;
+        *self = Self::new(mute, deafen, talk);
+        // The toggles survive; only the key that produces them changed.
+        self.state.muted = held.muted;
+        self.state.deafened = held.deafened;
+    }
+
+    /// Reads the keyboard and applies the rules.
+    pub(crate) fn poll(&mut self, keys: &impl KeyState) -> State {
+        if self.deafen.poll(keys) == Edge::Pressed {
+            self.state.deafened = !self.state.deafened;
+            // Deafening implies muting: `Voice.tsx` closes the microphone on either, and a
+            // player who cannot hear the lobby is not expecting to still be heard by it.
+            if self.state.deafened {
+                self.state.muted = true;
+            }
+        }
+        if self.mute.poll(keys) == Edge::Pressed {
+            if self.state.deafened {
+                // The way out. See the module documentation.
+                self.state.deafened = false;
+                self.state.muted = false;
+            } else {
+                self.state.muted = !self.state.muted;
+            }
+        }
+        // A level, not an edge: this one is held rather than toggled.
+        let _ = self.talk.poll(keys);
+        self.state.holding = self.talk.is_down();
+        self.state
+    }
+
+    /// What the switches say, without reading the keyboard.
+    #[must_use]
+    pub(crate) const fn state(&self) -> State {
+        self.state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{Controls, State};
+
+    /// A keyboard with whatever keys the test wants held.
+    struct Held(Vec<u16>);
+
+    impl acl_core::keys::KeyState for Held {
+        fn is_down(&self, virtual_key: u16) -> bool {
+            self.0.contains(&virtual_key)
+        }
+    }
+
+    /// `F1`, `F2`, `F3` — three bindings the vendored table knows.
+    fn controls() -> Controls {
+        Controls::new("F1", "F2", "F3")
+    }
+
+    const F1: u16 = 0x70;
+    const F2: u16 = 0x71;
+    const F3: u16 = 0x72;
+
+    /// Nothing held, nothing changed.
+    #[test]
+    fn a_client_starts_able_to_talk_and_hear() {
+        let mut controls = controls();
+        let state = controls.poll(&Held(vec![]));
+        assert_eq!(state, State::default());
+        assert!(state.transmitting(false));
+    }
+
+    /// Mute is a toggle, and it takes a release before it toggles again.
+    ///
+    /// The level is all the platform offers. A held key read as a repeated press would
+    /// toggle sixty times a second, which reads as a microphone that flickers.
+    #[test]
+    fn holding_mute_down_toggles_once() {
+        let mut controls = controls();
+        assert!(controls.poll(&Held(vec![F1])).muted);
+        assert!(controls.poll(&Held(vec![F1])).muted, "it toggled again");
+        assert!(controls.poll(&Held(vec![])).muted, "releasing changed it");
+        assert!(!controls.poll(&Held(vec![F1])).muted, "it did not toggle");
+    }
+
+    /// Deafening closes the microphone too.
+    ///
+    /// A player who cannot hear the lobby is not expecting to still be heard by it.
+    #[test]
+    fn deafening_also_mutes() {
+        let mut controls = controls();
+        let state = controls.poll(&Held(vec![F2]));
+        assert!(state.deafened);
+        assert!(state.muted);
+        assert!(!state.transmitting(false));
+    }
+
+    /// Mute while deafened is the way back, and clears both.
+    ///
+    /// `Voice.tsx` lines 1113-1117. Read as a plain toggle it looks wrong; it is the
+    /// affordance for somebody who deafened themselves and reached for the nearer key.
+    #[test]
+    fn mute_while_deafened_undoes_both() {
+        let mut controls = controls();
+        controls.poll(&Held(vec![F2]));
+        controls.poll(&Held(vec![]));
+        let state = controls.poll(&Held(vec![F1]));
+        assert!(!state.deafened, "still deafened");
+        assert!(!state.muted, "still muted");
+    }
+
+    /// In push-to-talk mode the microphone is closed unless the key is held.
+    #[test]
+    fn push_to_talk_inverts_the_default() {
+        let mut controls = controls();
+        let idle = controls.poll(&Held(vec![]));
+        assert!(idle.transmitting(false), "not in push-to-talk mode");
+        assert!(!idle.transmitting(true), "push-to-talk should be closed");
+
+        let holding = controls.poll(&Held(vec![F3]));
+        assert!(holding.holding);
+        assert!(holding.transmitting(true));
+    }
+
+    /// And muting beats holding the key.
+    #[test]
+    fn a_muted_client_stays_quiet_however_hard_it_pushes() {
+        let mut controls = controls();
+        controls.poll(&Held(vec![F1]));
+        let state = controls.poll(&Held(vec![F1, F3]));
+        assert!(state.muted);
+        assert!(!state.transmitting(true), "muted and still transmitting");
+        assert!(!state.transmitting(false));
+    }
+
+    /// Rebinding keeps the toggles and forgets what was held.
+    ///
+    /// A key that was down when it stopped being the binding is a key nobody is holding any
+    /// more. Carrying that across would leave push-to-talk open with nothing pressed.
+    #[test]
+    fn rebinding_keeps_what_you_chose_and_drops_what_you_held() {
+        let mut controls = controls();
+        controls.poll(&Held(vec![F1]));
+        controls.poll(&Held(vec![F3]));
+        assert!(controls.state().muted);
+        assert!(controls.state().holding);
+
+        controls.rebind("F1", "F2", "F4");
+        assert!(controls.state().muted, "the toggle was forgotten");
+        assert!(!controls.state().holding, "a key nobody is holding is held");
+    }
+
+    /// Rebinding to the same strings changes nothing at all.
+    #[test]
+    fn rebinding_to_what_is_already_bound_is_free() {
+        let mut controls = controls();
+        controls.poll(&Held(vec![F3]));
+        controls.rebind("F1", "F2", "F3");
+        assert!(
+            controls.state().holding,
+            "an unchanged rebind threw the key away"
+        );
+    }
+}

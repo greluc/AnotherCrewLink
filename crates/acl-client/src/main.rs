@@ -19,6 +19,7 @@
 //! performance number already on record is the one this runs on.
 
 mod audio;
+mod controls;
 mod hat_store;
 mod net;
 mod reader;
@@ -597,6 +598,8 @@ struct Client {
     dead: std::collections::BTreeMap<i64, bool>,
     /// The game state the death map was last updated for.
     last_game_state: Option<acl_game::GameState>,
+    /// Mute, deafen and push-to-talk. See [`controls`].
+    controls: controls::Controls,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -649,6 +652,14 @@ impl Client {
             claimed_host: false,
             dead: std::collections::BTreeMap::new(),
             last_game_state: None,
+            controls: {
+                let saved = settings.config();
+                controls::Controls::new(
+                    &saved.text_at("muteShortcut"),
+                    &saved.text_at("deafenShortcut"),
+                    &saved.text_at("pushToTalkShortcut"),
+                )
+            },
             settings,
             link: net::Link::start(),
             audio: audio::Audio::start(),
@@ -1009,8 +1020,29 @@ impl Client {
         for packet in self.link.take_arrived() {
             self.audio.receive(packet);
         }
+        // The three switches, before anything is sent. Rebound first, because somebody
+        // may have just changed one on the settings page and the next press should use it.
+        let push_to_talk = {
+            let saved = self.settings.config();
+            self.controls.rebind(
+                &saved.text_at("muteShortcut"),
+                &saved.text_at("deafenShortcut"),
+                &saved.text_at("pushToTalkShortcut"),
+            );
+            saved.bool_at("pushToTalk")
+        };
+        let transmitting = self
+            .controls
+            .poll(&acl_core::keys::AsyncKeyState)
+            .transmitting(push_to_talk);
+
         for packet in self.audio.take_encoded() {
-            self.link.send_audio(packet);
+            // Drained either way. The encoder runs whatever the switches say, and a queue
+            // nobody empties while somebody is muted is a queue that plays their last
+            // minute at whoever is listening when they unmute.
+            if transmitting {
+                self.link.send_audio(packet);
+            }
         }
 
         let Some(state) = self
@@ -1110,6 +1142,12 @@ impl Client {
                 lobby.max_distance,
                 None,
             );
+            // Deafened silences everybody, which is the same `gain = 0` the per-player
+            // mute below takes and is checked in the same place for the same reason:
+            // `Voice.tsx` line 1584 tests `deafened || isMuted` as one condition.
+            if self.controls.state().deafened {
+                continue;
+            }
             // Per-player volume and mute. `voice_params` deliberately does not know about
             // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
             // the rule and the reason it is keyed on the name hash are in
