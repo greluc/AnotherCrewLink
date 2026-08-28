@@ -775,15 +775,30 @@ async fn follow(
             };
             // Only to a newcomer. The other side offers when we are the newcomer, and both
             // offering is the glare.
-            if *arrival == Arrival::Newcomer
-                && let Ok(outbound) = mesh.offer(socket_id).await
-            {
-                let _ = session
-                    .signal(&outbound.to, outbound.payload.to_value())
-                    .await;
+            if *arrival == Arrival::Newcomer {
+                match mesh.offer(socket_id).await {
+                    Ok(outbound) => {
+                        acl_core::log_info!("peer", "{socket_id} joined; offering");
+                        let _ = session
+                            .signal(&outbound.to, outbound.payload.to_value())
+                            .await;
+                    }
+                    // Worth a line of its own. A connection that is never offered looks
+                    // exactly like one that is offered and never answered, and the two are
+                    // fixed in different places.
+                    Err(why) => {
+                        acl_core::log_warn!("peer", "could not offer to {socket_id}: {why}");
+                    }
+                }
+            } else {
+                // Said out loud because it is the *expected* half of the rule and its
+                // absence is indistinguishable from a bug: somebody reading this log has to
+                // be able to tell "we correctly did not offer" from "we forgot to".
+                acl_core::log_info!("peer", "{socket_id} was already here; they offer");
             }
         }
         Event::PeerLeft { socket_id } => {
+            acl_core::log_info!("peer", "{socket_id} left");
             if let Some(mesh) = mesh.as_mut() {
                 mesh.close(socket_id).await;
             }
@@ -833,6 +848,13 @@ async fn drain(
     }
     for peer_event in peer_events {
         let acl_core::peers::PeerEvent::StateChanged { peer, state } = peer_event;
+        // Every one of them, because this is the only thing that says where a handshake got
+        // to. Two testers measured thirty seconds to connect and nothing in the log had a
+        // word to say about it: not that an offer went out, not that an answer came back,
+        // not which state ICE was sitting in. A connection walks New -> Connecting ->
+        // Connected in well under a second when it works, so a line per step is a handful
+        // per peer per session and tells the whole story when it does not.
+        acl_core::log_info!("peer", "{peer} is now {state}");
         let _ = answers.send(Report::Peer {
             socket_id: peer,
             connected: state == webrtc::peer_connection::RTCPeerConnectionState::Connected,
