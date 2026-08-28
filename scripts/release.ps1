@@ -90,8 +90,29 @@ if ($declared -ne $version) {
 # The notes come out of CHANGELOG.md at release creation. An entry that is not there yields
 # a release with an empty body, and `gh release edit` cannot add one later without clearing
 # the draft flag as a side effect -- which is how 1.0.6 published itself mid-sentence.
-$notes = Select-String -Path (Join-Path $repo 'CHANGELOG.md') -Pattern "^## v$([regex]::Escape($version))$" -Quiet
-if (-not $notes) { Fail "CHANGELOG.md has no '## v$version' section. The release would go out with no notes." }
+#
+# The tag's own message comes out of the same section, so the two cannot disagree and nobody
+# writes the release twice: the heading line, then the section's opening paragraph. Both 2.x
+# tags so far are annotated and read that way.
+$changelog = @(Get-Content -LiteralPath (Join-Path $repo 'CHANGELOG.md'))
+$opens = -1
+for ($line = 0; $line -lt $changelog.Count; $line++) {
+    if ($changelog[$line] -eq "## v$version") { $opens = $line + 1; break }
+}
+if ($opens -lt 0) { Fail "CHANGELOG.md has no '## v$version' section. The release would go out with no notes." }
+$paragraph = @()
+for ($line = $opens; $line -lt $changelog.Count; $line++) {
+    if ($changelog[$line] -match '^#{2,6} ') { break }
+    if ($changelog[$line].Trim() -eq '') {
+        # The blank between the heading and the prose is not the end of the paragraph.
+        if ($paragraph.Count -gt 0) { break } else { continue }
+    }
+    $paragraph += $changelog[$line]
+}
+if ($paragraph.Count -eq 0) {
+    Fail "The '## v$version' section in CHANGELOG.md opens with a heading and no prose, so there is nothing to put in the tag."
+}
+$annotation = "AnotherCrewLink $version`n`n" + ($paragraph -join "`n") + "`n"
 
 # A tag on a commit nobody else has is a build of something no one can look at.
 $dirty = git status --porcelain
@@ -167,7 +188,14 @@ try {
 
     # --- 1. tag ---------------------------------------------------------------------------
     Step "Tagging $Tag and pushing"
-    git tag $Tag
+    # Through a file, and with a message. `tag.gpgSign` is set in this repository, so a bare
+    # `git tag` makes a signed annotated tag and stops with "no tag message?" when the editor
+    # hands back nothing -- which is what it does when nobody is sitting at one. A file
+    # rather than `-m` because the message is UTF-8 prose out of the changelog, and a
+    # command line is one more place for an em dash to arrive as something else.
+    $annotationFile = Join-Path $work 'tag-message.txt'
+    Set-Content -LiteralPath $annotationFile -Value $annotation -Encoding utf8NoBOM -NoNewline
+    git tag -F $annotationFile $Tag
     if ($LASTEXITCODE -ne 0) { Fail 'git tag failed.' }
     git push origin $Tag
     if ($LASTEXITCODE -ne 0) {
