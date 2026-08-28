@@ -64,6 +64,42 @@ pub const METER_W: f32 = 200.0;
 /// `--mic-bar-h`.
 pub const METER_H: f32 = 8.0;
 
+// -------------------------------------------------------------- controls ---
+/// `forms/Slider.jsx`: the rail behind the thumb, `rgba(255,255,255,.26)`.
+///
+/// Not in `tokens/colors.css`, and that is not an omission: it is MUI's own value, and
+/// the component file is the only place the client ever wrote it down.
+pub const RAIL: Color32 = Color32::from_rgba_premultiplied(66, 66, 66, 66);
+/// `forms/Checkbox.jsx`: the edge of an unticked box, `rgba(255,255,255,.6)`.
+pub const BOX_EDGE: Color32 = Color32::from_rgba_premultiplied(153, 153, 153, 153);
+
+/// The rail's height, from `forms/Slider.jsx`.
+pub const RAIL_H: f32 = 2.0;
+/// The thumb's diameter, from the same file.
+pub const THUMB: f32 = 12.0;
+/// The tick box, from `forms/Checkbox.jsx`.
+pub const BOX: f32 = 18.0;
+/// The tick inside it.
+pub const CHECK: f32 = 12.0;
+
+/// The two radii that are not on the client's scale.
+///
+/// `tokens/radius.css` opens with "Four radii and one circle. Nothing in the client is
+/// subtly rounded", and it is right about the client's own CSS. These two belong to the
+/// MUI controls underneath it, which the client draws and did not draw itself: two pixels
+/// on the tick box, one on the rail. Rounded up to `--radius-sm` the box would carry a
+/// five-pixel radius on an eighteen-pixel side.
+pub const RADIUS_BOX: u8 = 2;
+/// See [`RADIUS_BOX`].
+pub const RADIUS_RAIL: u8 = 1;
+
+/// egui's divisor for a slider's handle: the row height over this is the handle radius.
+///
+/// Read out of `Slider::handle_radius` rather than assumed, and used twice — once to size
+/// the row so that the handle lands on [`THUMB`], and once to cover egui's handle with the
+/// one the design system asks for.
+const HANDLE_DIVISOR: f32 = 2.5;
+
 /// The icons the client draws, by codepoint.
 ///
 /// Codepoints and not ligature names, which is the whole reason this module exists:
@@ -190,6 +226,136 @@ pub fn apply(ctx: &egui::Context) {
         style.spacing.scroll.bar_width = 8.0;
         style.text_styles = styles.clone();
     });
+}
+
+/// A settings toggle, as `forms/Checkbox.jsx` draws it.
+///
+/// Two things the shared style cannot say.
+///
+/// **The radius.** Every interactive widget carries `--radius-lg`, which is right for a
+/// button and is more than half the side of an eighteen-pixel box: at ten, egui rounds it
+/// to a circle. It did, until 2026-08-28, and eleven lobby rules were drawn with round
+/// tick boxes.
+///
+/// **The two pictures.** Ticked is a filled purple box with a dark tick and no edge;
+/// unticked is an empty box with a white one. egui reads one set of widget visuals
+/// whatever the box holds, so the value picks them, in a scope that ends with the widget.
+pub fn checkbox<'a>(
+    ui: &mut egui::Ui,
+    checked: &'a mut bool,
+    label: impl egui::IntoAtoms<'a>,
+) -> egui::Response {
+    let ticked = *checked;
+    ui.scope(|ui| {
+        let style = ui.style_mut();
+        style.spacing.icon_width = BOX;
+        style.spacing.icon_width_inner = CHECK;
+        // The tick is stroked with `fg_stroke`, and the label takes its colour from
+        // `fg_stroke` as well. The label is white in both states, so it is pinned here
+        // rather than left to follow the tick into the dark.
+        style.visuals.override_text_color = Some(Color32::WHITE);
+        for widget in [
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+        ] {
+            widget.corner_radius = CornerRadius::same(RADIUS_BOX);
+            widget.bg_fill = if ticked { PURPLE } else { Color32::TRANSPARENT };
+            widget.fg_stroke = Stroke::new(2.0, BG_TITLEBAR);
+        }
+        // Green on hover is the client's one hover effect and stays. At rest a ticked box
+        // has no edge at all, because the fill is the whole of it.
+        style.visuals.widgets.inactive.bg_stroke = if ticked {
+            Stroke::NONE
+        } else {
+            Stroke::new(2.0, BOX_EDGE)
+        };
+        ui.checkbox(checked, label)
+    })
+    .inner
+}
+
+/// A settings slider, as `forms/Slider.jsx` draws it.
+///
+/// Four things the shared style cannot say, each because the field is shared with
+/// something that wants the opposite.
+///
+/// **The rail.** egui fills it with `widgets.inactive.bg_fill`, which the style leaves
+/// transparent so that buttons are outlines. A transparent rail is no rail: until
+/// 2026-08-28 the voice-distance slider was a ring floating over nothing, which is how
+/// this function came to exist.
+///
+/// **Its radius**, which is `widgets.inactive.corner_radius` — ten pixels asked of a
+/// two-pixel rail.
+///
+/// **The travelled part**, which egui takes from `selection.bg_fill`. That is also the
+/// text-selection colour, and the system asks for 35% purple there and solid purple here.
+///
+/// **The thumb.** egui paints it from the same `bg_fill` as the rail, so at rest the two
+/// cannot differ — and the design has a purple disc on a pale rail. So egui's handle is
+/// covered by the disc the system asks for, at exactly egui's own radius, which is why the
+/// row is sized to make that radius half of [`THUMB`].
+pub fn slider(
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+) -> egui::Response {
+    let (low, high) = (*range.start(), *range.end());
+    let response = ui
+        .scope(|ui| {
+            let style = ui.style_mut();
+            style.spacing.slider_rail_height = RAIL_H;
+            // egui takes the row as the larger of the body line height and this, and the
+            // handle as the row over `HANDLE_DIVISOR`. Both halves are set, because the
+            // body face at 14px is already taller than the row this wants.
+            style.spacing.interact_size.y = THUMB * HANDLE_DIVISOR / 2.0;
+            style
+                .text_styles
+                .insert(TextStyle::Body, FontId::new(12.0, FontFamily::Proportional));
+            style.visuals.selection.bg_fill = PURPLE;
+            // egui's default handle is a rectangle -- `HandleShape::Rect { aspect_ratio:
+            // 0.75 }` -- and this one is covered by a disc. A rectangle under a disc of
+            // the same radius leaves four pale corners sticking out of it, which is what
+            // the first build of this function put on screen.
+            style.visuals.handle_shape = egui::style::HandleShape::Circle;
+            let widgets = &mut style.visuals.widgets;
+            widgets.inactive.bg_fill = RAIL;
+            widgets.inactive.corner_radius = CornerRadius::same(RADIUS_RAIL);
+            // egui outlines the handle with `fg_stroke`, which the shared style leaves a
+            // white pixel wide. Half of that stroke falls outside the disc drawn over it,
+            // so at rest the thumb wore a pale ring nothing asked for. Hover keeps its
+            // green one -- the outer half is what shows, which is the border the client's
+            // one hover effect means.
+            widgets.inactive.fg_stroke = Stroke::NONE;
+            widgets.hovered.fg_stroke = Stroke::new(2.0, GREEN);
+            widgets.active.fg_stroke = Stroke::new(2.0, GREEN);
+            ui.add(
+                egui::Slider::new(value, range)
+                    .step_by(step)
+                    // The number goes in the label — "Voice Distance: 5.3" — which is
+                    // where the component puts it. egui's box beside the rail is a second
+                    // place to read one number, and a second thing to line up.
+                    .show_value(false)
+                    .trailing_fill(true),
+            )
+        })
+        .inner;
+
+    let rect = response.rect;
+    let radius = rect.height() / HANDLE_DIVISOR;
+    // The same span egui drags over: the rail inset by a handle at each end, so the thumb
+    // cannot hang past either. `Slider::position_range`, and the reason the disc lands
+    // where the pointer left it.
+    let travel = rect.x_range().shrink(radius);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a fraction of the way along a slider, and f32 is what the painter takes"
+    )]
+    let along = (((*value - low) / (high - low)) as f32).clamp(0.0, 1.0);
+    let centre = egui::pos2(travel.min + travel.span() * along, rect.center().y);
+    ui.painter().circle_filled(centre, radius, PURPLE);
+    response
 }
 
 /// The palette and the widget states.

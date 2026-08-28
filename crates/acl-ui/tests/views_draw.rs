@@ -81,6 +81,117 @@ fn painted(output: &egui::FullOutput) -> bool {
         .any(|shape| !matches!(shape.shape, egui::Shape::Noop))
 }
 
+/// Every filled rectangle in a frame, as (side lengths, corner radius, fill).
+fn rects(output: &egui::FullOutput) -> Vec<(egui::Vec2, u8, egui::Color32)> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) => {
+                Some((rect.rect.size(), rect.corner_radius.nw, rect.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The tick box is a box.
+///
+/// `--radius-lg` is on every interactive widget, which is right for a button and is more
+/// than half the side of an eighteen-pixel box: egui clamps a radius to half the shorter
+/// side, so ten made a circle out of every lobby rule. `forms/Checkbox.jsx` says two.
+///
+/// Checked through the shapes rather than through the style, because the style is what was
+/// wrong: it said ten, it was applied exactly as written, and eleven round tick boxes came
+/// out the other end.
+#[test]
+fn the_tick_box_is_a_rounded_square_and_not_a_circle() {
+    let mut ticked = true;
+    let output = run(|ui| {
+        acl_ui::views::theme::checkbox(ui, &mut ticked, "Walls Block Audio");
+    });
+    let side = acl_ui::views::theme::BOX;
+    let box_shape = rects(&output)
+        .into_iter()
+        .find(|(size, _, _)| (size.x - side).abs() < 1.0 && (size.y - side).abs() < 1.0);
+    let Some((_, radius, fill)) = box_shape else {
+        panic!("no 18px tick box among the shapes: it is not a box");
+    };
+    assert_eq!(radius, acl_ui::views::theme::RADIUS_BOX);
+    assert_eq!(fill, acl_ui::views::theme::PURPLE, "ticked is a filled box");
+}
+
+/// The slider's thumb is the twelve pixels the design system asks for.
+///
+/// egui takes no handle size: it derives one, as the row height over 2.5, and the row is
+/// the larger of the body line height and `interact_size.y`. `theme::slider` sets both so
+/// the arithmetic lands on twelve, and this is the check — because the two halves are set
+/// in one place and read in another, and Varela Round at 14px is 16.9 tall on its own,
+/// which would make a fourteen-pixel thumb without anyone noticing.
+#[test]
+fn the_slider_thumb_is_twelve_pixels_across() {
+    let mut row = 0.0_f32;
+    run(|ui| {
+        let mut value = 5.5_f64;
+        row = acl_ui::views::theme::slider(ui, &mut value, 1.0..=10.0, 0.1)
+            .rect
+            .height();
+    });
+    // `Slider::handle_radius`, doubled.
+    let thumb = row / 2.5 * 2.0;
+    let wanted = acl_ui::views::theme::THUMB;
+    assert!(
+        (thumb - wanted).abs() < 0.5,
+        "the row came out {row}px, which is a {thumb}px thumb and not {wanted}"
+    );
+}
+
+/// Nothing taller than the rail is painted as a rectangle.
+///
+/// egui's own handle is a rectangle by default, and this slider covers the handle with a
+/// disc. A rectangle under a disc of the same radius shows four pale corners around it,
+/// which is exactly what the first build of `theme::slider` drew.
+#[test]
+fn the_thumb_has_no_corners_poking_out_from_under_it() {
+    let output = run(|ui| {
+        let mut value = 5.5_f64;
+        acl_ui::views::theme::slider(ui, &mut value, 1.0..=10.0, 0.1);
+    });
+    let rail = acl_ui::views::theme::RAIL_H;
+    for (size, _, _) in rects(&output) {
+        assert!(
+            size.y <= rail + 0.51,
+            "a {size:?} rectangle, where only a {rail}px rail should be"
+        );
+    }
+}
+
+/// The rail is visible, and it is the height the component says.
+///
+/// The bug this is here for: `widgets.inactive.bg_fill` is transparent so that buttons are
+/// outlines, and egui fills the slider's rail from that same field. The rail was there the
+/// whole time, painted in nothing at all.
+#[test]
+fn the_slider_rail_is_painted_in_something() {
+    let output = run(|ui| {
+        let mut value = 5.5_f64;
+        acl_ui::views::theme::slider(ui, &mut value, 1.0..=10.0, 0.1);
+    });
+    let height = acl_ui::views::theme::RAIL_H;
+    let rails: Vec<_> = rects(&output)
+        .into_iter()
+        .filter(|(size, _, _)| (size.y - height).abs() < 0.51 && size.x > 20.0)
+        .collect();
+    assert!(!rails.is_empty(), "no {height}px rail was painted at all");
+    for (size, _, fill) in rails {
+        assert_ne!(
+            fill,
+            egui::Color32::TRANSPARENT,
+            "a {size:?} rail painted in nothing"
+        );
+    }
+}
+
 /// A settings source that answers everything with its default.
 struct Defaults(acl_ui::config::Config);
 
