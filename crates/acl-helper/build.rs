@@ -22,11 +22,11 @@
 //! failure this file exists to end.
 
 fn main() {
-    // The icon lives beside the tree rather than in this crate: `resources/icon.ico` is
-    // what the 1.x installer ships, and two clients meant to look like the same program
-    // should not have two files to keep in step. `acl_ui::icon` reaches for the PNG next to
-    // it for the same reason.
-    println!("cargo:rerun-if-changed=../../resources/icon.ico");
+    // The design system's mark, rendered by `scripts/rasterise-icon` from `assets/icon.svg`.
+    // Not `resources/icon.ico`, which this used until 2026-08-28 and which is
+    // BetterCrewLink's artwork inherited through the fork. `acl_ui::icon` takes the PNG from
+    // the same render, so the window and the executable cannot end up showing two things.
+    println!("cargo:rerun-if-changed=../../assets/icon.ico");
     println!("cargo:rerun-if-changed=build.rs");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -34,7 +34,7 @@ fn main() {
     }
 
     let mut resource = winresource::WindowsResource::new();
-    resource.set_icon("../../resources/icon.ico");
+    resource.set_icon("../../assets/icon.ico");
     // What the Details tab shows. `ProductName` is the name the product has had since 1.0
     // rather than the crate's, which is `acl-client` and means nothing to anybody reading a
     // file's properties.

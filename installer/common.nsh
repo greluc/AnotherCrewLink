@@ -78,6 +78,12 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 !define MUI_ABORTWARNING
+; The setup and the uninstaller had no icon of their own and showed NSIS's default, so the
+; first thing anybody saw of this project was somebody else's logo. Relative to this file's
+; directory, which is how NSIS resolves a path in a script -- the same way the `File` lines
+; below reach `..\static\locales`.
+!define MUI_ICON "..\assets\icon.ico"
+!define MUI_UNICON "..\assets\icon.ico"
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"

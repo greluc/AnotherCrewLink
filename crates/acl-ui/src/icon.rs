@@ -11,13 +11,18 @@
 //! already points `DisplayIcon` at the executable, so that one is worth having too and is a
 //! build-time job rather than a run-time one.
 
-/// The same artwork the 1.x installer ships.
+/// The design system's mark, rendered by `scripts/rasterise-icon`.
 ///
-/// Reached out of the crate rather than copied in, because two clients that are meant to
-/// look like the same program should not be able to drift apart in what they look like. It
-/// is a 512×512 sixteen-bit PNG, which is larger than any icon needs; Windows scales it
-/// down, and the alternative is a second file to keep in step.
-const ARTWORK: &[u8] = include_bytes!("../../../resources/icon.png");
+/// **Not** `resources/icon.png`, which this used until 2026-08-28 and which is
+/// the artwork of `BetterCrewLink` — inherited through the fork, still named `BCL-*` where
+/// it lives. Putting it on this window meant the rewrite introduced itself under the logo
+/// of the project it forked from.
+///
+/// `assets/icon.svg` is the source and is `design/assets/logos/acl-client-outlined.svg`
+/// byte for byte: the ring mark on its own plate, with the letters already paths so no font
+/// has to be present to draw them. Reached out of the crate rather than copied in, because
+/// the executables' icon comes from the same render and the two must not be able to differ.
+const ARTWORK: &[u8] = include_bytes!("../../../assets/icon.png");
 
 /// The icon to give the window, or `None` if it could not be read.
 ///
@@ -79,19 +84,20 @@ mod tests {
         // Windows draws its fallback for, and nobody reports a blank square as an error.
         // So the assertion is that it loaded, not that nothing threw.
         let icon = window().expect("the shipped icon must decode");
-        assert_eq!(icon.width, 512, "the artwork is 512 square");
-        assert_eq!(icon.height, 512);
+        assert_eq!(icon.width, 256, "the artwork is 256 square");
+        assert_eq!(icon.height, 256);
         assert_eq!(
             icon.rgba.len(),
-            512 * 512 * 4,
+            256 * 256 * 4,
             "straight RGBA8, four a pixel"
         );
     }
 
     #[test]
     fn it_is_not_a_transparent_square() {
-        // A 512-square block of zeroes satisfies every assertion above and draws nothing at
-        // all, which is the same blank taskbar button this set out to fix.
+        // A 256-square block of zeroes satisfies every assertion above and draws nothing at
+        // all, which is the same blank taskbar button this set out to fix. The mark sits on
+        // a filled plate, so most of the square is opaque.
         let icon = window().expect("the shipped icon must decode");
         let opaque = icon
             .rgba
@@ -101,7 +107,7 @@ mod tests {
             .filter(|pixel| pixel[3] > 0x80)
             .count();
         assert!(
-            opaque > 512 * 512 / 20,
+            opaque > 256 * 256 / 2,
             "only {opaque} pixels of the icon are opaque; it would draw as nothing"
         );
     }

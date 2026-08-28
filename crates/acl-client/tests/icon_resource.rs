@@ -19,13 +19,13 @@ const RT_ICON: u32 = 3;
 const RT_GROUP_ICON: u32 = 14;
 const RT_VERSION: u32 = 16;
 
-/// Which resource types a PE file carries, and how many of each.
+/// What a PE file's resource directory holds.
 ///
 /// A deliberately small reader: it walks the optional header to the resource data directory,
 /// maps that address back to a file offset through the section table, and reads one level of
 /// the resource tree. Anything it cannot follow is `None` rather than a panic, so a failure
 /// here reads as "this file has no resources" and the assertion below says which file.
-fn resource_types(path: &Path) -> Option<std::collections::BTreeMap<u32, usize>> {
+fn resources(path: &Path) -> Option<Resources> {
     let file = std::fs::read(path).ok()?;
     let at = |offset: usize, len: usize| -> Option<&[u8]> { file.get(offset..offset + len) };
     let u16_at = |offset: usize| -> Option<u16> {
@@ -58,60 +58,128 @@ fn resource_types(path: &Path) -> Option<std::collections::BTreeMap<u32, usize>>
     // The address is virtual; the bytes are at a file offset. The section that contains it
     // carries the difference between the two.
     let table = header + 24 + optional;
-    let mut root = None;
+    let mut section = None;
     for index in 0..sections {
         let entry = table + index * 40;
         let virtual_size = u32_at(entry + 8)?;
         let virtual_address = u32_at(entry + 12)?;
         let raw = u32_at(entry + 20)?;
         if virtual_address <= address && address < virtual_address + virtual_size.max(1) {
-            root = Some((raw + (address - virtual_address)) as usize);
+            section = Some((virtual_address, raw));
         }
     }
-    let root = root?;
+    let (virtual_base, raw) = section?;
+    let root = (raw + (address - virtual_base)) as usize;
 
-    let named = u16_at(root + 12)? as usize;
-    let numbered = u16_at(root + 14)? as usize;
-    let mut found = std::collections::BTreeMap::new();
-    for index in 0..named + numbered {
-        let entry = root + 16 + index * 8;
-        let name = u32_at(entry)?;
+    // Each level of the tree has the same header: two counts, then that many eight-byte
+    // entries of (name, offset).
+    let children = |node: usize| -> Option<Vec<(u32, u32)>> {
+        let named = u16_at(node + 12)? as usize;
+        let numbered = u16_at(node + 14)? as usize;
+        (0..named + numbered)
+            .map(|index| {
+                let entry = node + 16 + index * 8;
+                Some((u32_at(entry)?, u32_at(entry + 4)?))
+            })
+            .collect()
+    };
+
+    let mut found = Resources::default();
+    for (name, child) in children(root)? {
         // The high bit means the type has a string name rather than one of Windows'
         // numbers, and none of the three this looks for does.
         if name & 0x8000_0000 != 0 {
             continue;
         }
-        let subtree = root + (u32_at(entry + 4)? & 0x7fff_ffff) as usize;
-        let count = u16_at(subtree + 12)? as usize + u16_at(subtree + 14)? as usize;
-        found.insert(name, count);
+        let by_id = root + (child & 0x7fff_ffff) as usize;
+        let ids = children(by_id)?;
+        found.counts.insert(name, ids.len());
+        if name != RT_ICON {
+            continue;
+        }
+        // Three levels: type, then id, then language. The leaf is not another directory --
+        // it is an address and a length.
+        for (_, id) in ids {
+            for (_, language) in children(root + (id & 0x7fff_ffff) as usize)? {
+                let leaf = root + (language & 0x7fff_ffff) as usize;
+                let leaf_address = u32_at(leaf)?;
+                let length = u32_at(leaf + 4)? as usize;
+                let start = (raw + (leaf_address - virtual_base)) as usize;
+                found.icons.push(at(start, length)?.to_vec());
+            }
+        }
     }
     Some(found)
 }
 
-fn check(path: &Path) {
-    let found = resource_types(path)
-        .unwrap_or_else(|| panic!("{} carries no resource directory at all", path.display()));
+/// What one PE file's resource directory holds.
+#[derive(Default)]
+struct Resources {
+    /// How many of each type, keyed by Windows' type number.
+    counts: std::collections::BTreeMap<u32, usize>,
+    /// The image bytes of every `RT_ICON`, in the order the directory lists them.
+    icons: Vec<Vec<u8>>,
+}
 
-    // Six, because `resources/icon.ico` holds six sizes -- 16 up to 256 -- and Windows picks
-    // per place it draws them. A single 256 would be scaled down for the taskbar and look it.
+/// Every image inside an `.ico` file, in the order its directory lists them.
+///
+/// The container is a six-byte header, one sixteen-byte entry per image, then the images.
+/// Only the last two fields of an entry are needed here: how long each image is and where.
+fn ico_images(path: &Path) -> Vec<Vec<u8>> {
+    let file = std::fs::read(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+    let count = u16::from_le_bytes([file[4], file[5]]) as usize;
+    (0..count)
+        .map(|index| {
+            let entry = 6 + index * 16;
+            let length =
+                u32::from_le_bytes(file[entry + 8..entry + 12].try_into().unwrap()) as usize;
+            let at = u32::from_le_bytes(file[entry + 12..entry + 16].try_into().unwrap()) as usize;
+            file[at..at + length].to_vec()
+        })
+        .collect()
+}
+
+fn check(path: &Path) {
+    let found = resources(path)
+        .unwrap_or_else(|| panic!("{} carries no resource directory at all", path.display()));
+    let found_counts = &found.counts;
+
+    // Six, because `assets/icon.ico` holds six sizes -- 16 up to 256 -- and Windows picks per
+    // place it draws them. Each is drawn from the vector at its own size rather than scaled
+    // down from the largest, which is the difference between a 16-pixel icon and a smudge.
     assert_eq!(
-        found.get(&RT_ICON).copied().unwrap_or(0),
+        found_counts.get(&RT_ICON).copied().unwrap_or(0),
         6,
         "{} should carry all six sizes out of the .ico, and carries {:?}",
         path.display(),
-        found.get(&RT_ICON)
+        found_counts.get(&RT_ICON)
     );
     // The group is what Windows actually asks for; the images on their own are not an icon.
     assert_eq!(
-        found.get(&RT_GROUP_ICON).copied().unwrap_or(0),
+        found_counts.get(&RT_GROUP_ICON).copied().unwrap_or(0),
         1,
         "{} has icon images and no group to select them by",
         path.display()
     );
     assert_eq!(
-        found.get(&RT_VERSION).copied().unwrap_or(0),
+        found_counts.get(&RT_VERSION).copied().unwrap_or(0),
         1,
         "{} has no version block, so its Details tab is empty",
+        path.display()
+    );
+
+    // And it is *this* icon. Counting them says the build script ran; comparing the bytes
+    // says which artwork it ran with, and that is the check that was missing when all three
+    // of these shipped carrying BetterCrewLink's logo -- inherited through the fork, a
+    // perfectly valid icon, and the wrong one. It also catches the duller version of the
+    // same thing: a binary left over from before the artwork changed.
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icon.ico");
+    let wanted: std::collections::BTreeSet<Vec<u8>> = ico_images(&source).into_iter().collect();
+    let carried: std::collections::BTreeSet<Vec<u8>> = found.icons.into_iter().collect();
+    assert_eq!(
+        carried,
+        wanted,
+        "{} does not carry the images in assets/icon.ico",
         path.display()
     );
 }
