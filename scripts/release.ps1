@@ -9,6 +9,15 @@
     You are asked for two things and nothing else: the tag, and the passphrase. Everything
     else is derived or checked.
 
+    AND IT CAN BE RUN AGAIN. Every step asks what is already done before doing it: an
+    existing tag on this commit is used rather than refused, a build already finished is
+    re-used rather than re-triggered, a file already uploaded to the draft is replaced, and
+    a release already published stops the script with nothing to do. So when a step fails
+    for a reason that has nothing to do with the release -- a network blip, a tool that
+    could not work out which repository it was in -- the answer is to run it again, not to
+    cut a new version. That was the answer it used to give, and it was the wrong one: the
+    tag is the cheap half, and the build it started is still running.
+
     THE PASSPHRASE NEVER BECOMES AN ARGUMENT. It is read without echo and handed to
     `acl-release` through the environment, which is what the tool itself insists on: a
     passphrase on a command line is in the shell's history and in every process listing
@@ -75,6 +84,20 @@ foreach ($tool in 'git', 'gh', 'cargo') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Fail "$tool is not on the path." }
 }
 
+# Every `gh` call below is told which repository it is about.
+#
+# `gh` works most of it out from the git remotes, and mostly succeeds -- but not all of its
+# subcommands resolve the same way, and `gh run watch` stopped this script dead with "failed
+# to determine base repo" one line after `gh run list` had answered fine. A repository
+# derived once from the remote is not a thing that can be half configured.
+$originUrl = (git remote get-url origin 2>$null)
+if (-not $originUrl) { Fail 'There is no `origin` remote to release from.' }
+if ($originUrl -notmatch 'github\.com[:/](?<owner>[^/]+)/(?<name>[^/]+?)(\.git)?/?$') {
+    Fail "The origin remote is $originUrl, which is not a GitHub repository this can release to."
+}
+$slug = "$($Matches.owner)/$($Matches.name)"
+Note "Releasing into $slug."
+
 # --- what to cut ------------------------------------------------------------------------
 if (-not $Tag) { $Tag = Read-Host 'Tag to release (for example v2.0.0-alpha.3)' }
 $Tag = $Tag.Trim()
@@ -117,11 +140,29 @@ $annotation = "AnotherCrewLink $version`n`n" + ($paragraph -join "`n") + "`n"
 # A tag on a commit nobody else has is a build of something no one can look at.
 $dirty = git status --porcelain
 if ($dirty) { Fail 'The working tree has changes. Commit or stash them first.' }
-git rev-parse --verify --quiet "refs/tags/$Tag" > $null
-if ($LASTEXITCODE -eq 0) { Fail "The tag $Tag already exists here. Releases are immutable; cut a new version." }
 $head = (git rev-parse HEAD).Trim()
 $onRemote = git branch -r --contains $head 2>$null
 if (-not $onRemote) { Fail 'HEAD is not on any remote branch. Push it first.' }
+
+# An existing tag is where a previous run got to, not a reason to start again.
+#
+# It used to be a wall: "cut a new version". That is the wrong answer to every way this
+# script can stop after the tag is pushed -- a network blip, a Ctrl+C, gh failing to resolve
+# a repository -- because the tag is the *cheap* half. What is expensive is the build it
+# started, which is still running, and the release it drafted, which is still there. So the
+# run picks up from whatever is already done: it re-uses the build, and it skips the upload
+# of anything already uploaded. What it will not do is move a tag, because a tag that has
+# been built from is a tag somebody may have installed.
+$tagged = $false
+git rev-parse --verify --quiet "refs/tags/$Tag" > $null
+if ($LASTEXITCODE -eq 0) {
+    $points = (git rev-list -n 1 $Tag).Trim()
+    if ($points -ne $head) {
+        Fail "The tag $Tag is on $($points.Substring(0, 12)) and HEAD is $($head.Substring(0, 12)). Releases are immutable; cut a new version rather than moving a tag."
+    }
+    $tagged = $true
+    Note "$Tag already exists here, on this commit. Carrying on from there."
+}
 
 # --- the key ----------------------------------------------------------------------------
 # Where the ceremony put it. Defaulted rather than asked for, because a path typed at a
@@ -187,20 +228,33 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail 'The key did not verify. Nothing has been tagged.' }
 
     # --- 1. tag ---------------------------------------------------------------------------
-    Step "Tagging $Tag and pushing"
-    # Through a file, and with a message. `tag.gpgSign` is set in this repository, so a bare
-    # `git tag` makes a signed annotated tag and stops with "no tag message?" when the editor
-    # hands back nothing -- which is what it does when nobody is sitting at one. A file
-    # rather than `-m` because the message is UTF-8 prose out of the changelog, and a
-    # command line is one more place for an em dash to arrive as something else.
-    $annotationFile = Join-Path $work 'tag-message.txt'
-    Set-Content -LiteralPath $annotationFile -Value $annotation -Encoding utf8NoBOM -NoNewline
-    git tag -F $annotationFile $Tag
-    if ($LASTEXITCODE -ne 0) { Fail 'git tag failed.' }
+    if ($tagged) {
+        Step "$Tag is already tagged"
+    }
+    else {
+        Step "Tagging $Tag and pushing"
+        Note 'Signing the tag will ask for your GPG passphrase, which is not the signing key passphrase.'
+        # Through a file, and with a message. `tag.gpgSign` is set in this repository, so a
+        # bare `git tag` makes a signed annotated tag and stops with "no tag message?" when
+        # the editor hands back nothing -- which is what it does when nobody is sitting at
+        # one. A file rather than `-m` because the message is UTF-8 prose out of the
+        # changelog, and a command line is one more place for an em dash to arrive as
+        # something else.
+        $annotationFile = Join-Path $work 'tag-message.txt'
+        Set-Content -LiteralPath $annotationFile -Value $annotation -Encoding utf8NoBOM -NoNewline
+        git tag -F $annotationFile $Tag
+        if ($LASTEXITCODE -ne 0) { Fail 'git tag failed.' }
+    }
+    # Pushed unconditionally: a tag made by a previous run that then failed to push is
+    # exactly the state this has to be able to leave. Git says "Everything up-to-date" when
+    # it is already there.
     git push origin $Tag
     if ($LASTEXITCODE -ne 0) {
-        git tag -d $Tag | Out-Null
-        Fail 'Pushing the tag failed. The local tag has been removed so this can be run again.'
+        if (-not $tagged) {
+            git tag -d $Tag | Out-Null
+            Fail 'Pushing the tag failed. The local tag has been removed so this can be run again.'
+        }
+        Fail 'Pushing the tag failed. The tag is still here; run this again when the network is back.'
     }
 
     # --- 2. wait for the build ------------------------------------------------------------
@@ -208,18 +262,41 @@ try {
     Note 'This takes a few minutes. Ctrl+C is safe here: the tag is pushed and the build carries on.'
     $run = $null
     foreach ($attempt in 1..30) {
-        $found = gh run list --branch $Tag --workflow 'Rust Release' --limit 1 --json databaseId,status |
+        # By file name rather than by title: a workflow's `name:` is prose somebody can
+        # reword, and the file it lives in is what the tag actually triggered.
+        $found = gh run list --repo $slug --branch $Tag --workflow rust-release.yml --limit 1 --json databaseId,status,conclusion |
             ConvertFrom-Json
         if ($found) { $run = $found[0]; break }
         Start-Sleep -Seconds 4
     }
-    if (-not $run) { Fail "No release run appeared for $Tag. Look at the Actions tab; the tag is pushed." }
-    gh run watch $run.databaseId --exit-status
-    if ($LASTEXITCODE -ne 0) { Fail 'The release build failed. Fix it, then cut a new version -- this tag is spent.' }
+    if (-not $run) { Fail "No release run appeared for $Tag. Look at the Actions tab; the tag is pushed, so run this again once it starts." }
+
+    if ($run.status -eq 'completed') {
+        Note "The build has already finished: $($run.conclusion)."
+        if ($run.conclusion -ne 'success') {
+            Fail "That run ended as $($run.conclusion). A build that failed cannot be re-signed into a release -- fix it and cut a new version, because this tag has been built from."
+        }
+    }
+    else {
+        gh run watch --repo $slug $run.databaseId --exit-status
+        # A watch that could not report is not a build that failed, and saying so sent
+        # somebody looking for a broken build that was in fact green. The run is asked
+        # again, and it is the run's own answer that decides.
+        if ($LASTEXITCODE -ne 0) {
+            $after = gh run view --repo $slug $run.databaseId --json status,conclusion | ConvertFrom-Json
+            if ($after.status -ne 'completed') {
+                Fail "Lost sight of the build. It is still going: $($after.status). The tag is pushed, so run this again when it has finished."
+            }
+            if ($after.conclusion -ne 'success') {
+                Fail "The release build ended as $($after.conclusion). Fix it, then cut a new version -- this tag has been built from."
+            }
+            Note 'The watch dropped out, but the build finished green. Carrying on.'
+        }
+    }
 
     # --- 3. fetch and sign ------------------------------------------------------------------
     Step 'Fetching the manifest'
-    gh run download $run.databaseId --name "manifest-$version" --dir $work
+    gh run download --repo $slug $run.databaseId --name "manifest-$version" --dir $work
     if ($LASTEXITCODE -ne 0) { Fail "The manifest artefact was not there. Expected 'manifest-$version'." }
     $manifest = Join-Path $work 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifest)) { Fail "No manifest.json in $work." }
@@ -231,6 +308,23 @@ try {
     if (-not (Test-Path -LiteralPath $signature)) { Fail 'No signature was written.' }
 
     # --- 4. publish -------------------------------------------------------------------------
+    # What is already there, so a second run does not try to upload a file twice or ask
+    # whether to publish something that is published.
+    $release = gh release view --repo $slug $Tag --json isDraft,assets 2>$null | ConvertFrom-Json
+    if ($null -eq $release) { Fail "The build finished but there is no $Tag release to publish. Look at the Actions tab." }
+    if (-not $release.isDraft) {
+        Write-Host "`n== $Tag is already published." -ForegroundColor Green
+        $there = @($release.assets | ForEach-Object { $_.name })
+        foreach ($wanted in 'manifest.json', 'manifest.json.minisig') {
+            if ($there -notcontains $wanted) {
+                Fail "...but $wanted is not on it, and a published release is immutable. The clients cannot accept this one; cut a new version."
+            }
+        }
+        Note 'Both the manifest and its signature are on it. There is nothing left to do.'
+        exit 0
+    }
+    $already = @($release.assets | ForEach-Object { $_.name })
+
     $described = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
     Write-Host "`n-- about to publish ------------------------------------" -ForegroundColor Yellow
     Write-Host "   release  $Tag"
@@ -245,18 +339,22 @@ try {
         $answer = Read-Host "`nType 'publish' to go ahead"
         if ($answer -ne 'publish') {
             Note "Stopped. The draft release exists with its installer; the signed manifest is in $work."
-            Note "To finish by hand: gh release upload $Tag `"$manifest`" `"$signature`" && gh release edit $Tag --draft=false"
+            Note 'Nothing is lost: run this again and it picks up from here.'
             exit 0
         }
     }
 
     Step 'Uploading both files'
-    gh release upload $Tag $manifest $signature
-    if ($LASTEXITCODE -ne 0) { Fail 'The upload failed. The release is still a draft.' }
+    # `--clobber`, because a previous run may have uploaded one of them before it stopped.
+    # An asset on a *draft* is not yet published and replacing it changes nothing anybody
+    # has seen; the immutability that matters begins one step below.
+    if ($already.Count -gt 0) { Note "Replacing what a previous run left: $($already -join ', ')." }
+    gh release upload --repo $slug --clobber $Tag $manifest $signature
+    if ($LASTEXITCODE -ne 0) { Fail 'The upload failed. The release is still a draft, so run this again.' }
 
     Step 'Publishing'
-    gh release edit $Tag --draft=false
-    if ($LASTEXITCODE -ne 0) { Fail 'The release did not publish. Both files are uploaded; finish it by hand.' }
+    gh release edit --repo $slug $Tag --draft=false
+    if ($LASTEXITCODE -ne 0) { Fail 'The release did not publish. Both files are uploaded; run this again.' }
 
     Write-Host "`n== $Tag is published." -ForegroundColor Green
     # `releases/latest` is GitHub's newest release that is neither a draft nor a pre-release.

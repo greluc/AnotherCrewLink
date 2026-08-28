@@ -90,6 +90,25 @@ jobs:
           rustup show active-toolchain
           rustc --version
 
+      # The release ceremony is a PowerShell script and nothing here so much as parsed it
+      # until 2026-08-28, when a missing closing quote got as far as somebody's passphrase
+      # prompt. This is not a linter and does not pretend to be one; it answers the single
+      # question "would this run at all", which is the question that was going unasked.
+      - name: The scripts parse
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($script in Get-ChildItem -Path scripts -Filter *.ps1 -Recurse) {
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors)
+            foreach ($error in $errors) {
+              $bad += $error
+              Write-Host "::error file=$($script.FullName),line=$($error.Extent.StartLineNumber)::$($error.Message)"
+            }
+          }
+          if ($bad.Count -gt 0) { exit 1 }
+          Write-Host "every script under scripts/ parses"
+
       # cargo fmt resolves no dependencies and takes no --locked; every command below that
       # does resolve them has it.
       - name: Check formatting
