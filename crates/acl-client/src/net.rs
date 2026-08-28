@@ -169,10 +169,19 @@ pub(crate) struct Link {
     arrived: Vec<acl_core::peers::Incoming>,
     /// Which peers have sent audio since the window last looked.
     ///
-    /// Cleared by [`Link::take_speaking`], which is what makes it mean "recently" rather
-    /// than "ever". A set rather than a count: what the window asks is whether somebody is
-    /// speaking, and how many packets arrived is a question nothing here has.
-    speaking: std::collections::BTreeSet<String>,
+    /// When each was last heard, so "recently" is a length of time rather than "since the
+    /// window last asked".
+    ///
+    /// It was a set that the window emptied by reading it, and that made the meaning of
+    /// "recently" the repaint interval. At five frames a second that was two hundred
+    /// milliseconds and worked; with the pointer in the window the client draws at sixty,
+    /// and a peer sending a packet every twenty milliseconds is absent from three looks out
+    /// of four. Their ring flickered on and off several times a second, and it was the
+    /// asking that made it flicker, not them.
+    ///
+    /// A moment rather than a count: what the window asks is whether somebody is speaking,
+    /// and how many packets arrived is a question nothing here has.
+    speaking: std::collections::BTreeMap<String, std::time::Instant>,
     /// Which peers have a connection that is up.
     ///
     /// The window shows this as the difference between a player who has arrived and one who
@@ -180,6 +189,14 @@ pub(crate) struct Link {
     /// `views::main` already draws and had nothing to fill in.
     connected: std::collections::BTreeSet<String>,
 }
+
+/// How long after a packet somebody still counts as speaking.
+///
+/// Two hundred milliseconds: long enough that the twenty between one packet and the next
+/// never shows as a gap, short enough that a ring goes out promptly when somebody stops.
+/// It is deliberately not the repaint interval -- tying the two together is what made the
+/// ring flicker when the window started drawing quickly.
+const RECENTLY: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl Link {
     /// Starts the thread. Nothing is connected until [`Link::connect`] is called.
@@ -206,7 +223,7 @@ impl Link {
             sockets: std::collections::BTreeMap::new(),
             vocal: std::collections::BTreeSet::new(),
             on_radio: std::collections::BTreeSet::new(),
-            speaking: std::collections::BTreeSet::new(),
+            speaking: std::collections::BTreeMap::new(),
             arrived: Vec::new(),
         }
     }
@@ -249,7 +266,7 @@ impl Link {
                     // A moment rather than a level. The window redraws five times a second
                     // and audio arrives fifty times a second, so what it needs is "recently"
                     // -- and `pump` running is what makes this decay.
-                    self.speaking.insert(socket_id);
+                    self.speaking.insert(socket_id, std::time::Instant::now());
                     self.arrived.push(packet);
                 }
                 Report::Peer {
@@ -414,17 +431,21 @@ impl Link {
         self.sockets.get(&client_id).map(String::as_str)
     }
 
-    /// Whether a player has been heard since this was last asked, and forgets it.
+    /// Who has been heard within [`RECENTLY`], and forgets anybody older.
     ///
-    /// Taken rather than read, so "speaking" decays on its own: a peer who stops sending
-    /// stops being in the set the next time the window looks, with nothing having to notice
-    /// they went quiet.
+    /// Decays on its own, so a peer who stops sending stops being in the set without
+    /// anything having to notice they went quiet -- but on a clock of its own rather than on
+    /// however often the window happens to look. That distinction is the whole of this
+    /// function: see [`Link::speaking`] for what asking sixty times a second used to do to
+    /// somebody's ring.
     #[must_use]
     pub(crate) fn take_speaking(&mut self) -> std::collections::BTreeSet<i64> {
-        let sockets = std::mem::take(&mut self.speaking);
+        let now = std::time::Instant::now();
+        self.speaking
+            .retain(|_, heard| now.duration_since(*heard) < RECENTLY);
         self.sockets
             .iter()
-            .filter(|(_, socket)| sockets.contains(*socket))
+            .filter(|(_, socket)| self.speaking.contains_key(*socket))
             .map(|(client_id, _)| *client_id)
             .collect()
     }

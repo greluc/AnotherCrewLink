@@ -427,6 +427,62 @@ fn the_main_view_draws_an_empty_lobby() {
     assert!(clashes(&output).is_empty(), "{:?}", clashes(&output));
 }
 
+/// A button nobody pressed asks for nothing.
+///
+/// The test tone toggled several times a second whenever the pointer was anywhere in the
+/// client's window -- not over the button, anywhere. That is a `Change::Run` coming back
+/// from a frame in which nothing was clicked, so this drives the settings view the way the
+/// window does, with a pointer moving across it and no button ever pressed, and reads what
+/// comes back.
+///
+/// The pointer sweeps rather than sitting still, because "anywhere in the window" is the
+/// part of the report that says the button under it is not what matters.
+#[test]
+fn moving_the_pointer_over_the_settings_asks_for_nothing() {
+    let values = Defaults(acl_ui::config::Config::new());
+    let translate = |key: &str| key.to_owned();
+    let context = settings::Context {
+        input_level: None,
+        testing_speaker: false,
+        t: &translate,
+        microphones: &[],
+        speakers: &[],
+        locales: &[],
+        host_may_change: true,
+        in_menu_or_lobby: true,
+        capturing: None,
+    };
+
+    let egui_context = egui::Context::default();
+    acl_ui::views::theme::apply(&egui_context);
+
+    let mut asked_for = Vec::new();
+    for step in 0..12 {
+        #[expect(clippy::cast_precision_loss, reason = "a step counter under twenty")]
+        let where_it_is = egui::pos2(20.0 + step as f32 * 30.0, 20.0 + step as f32 * 40.0);
+        let input = egui::RawInput {
+            events: vec![egui::Event::PointerMoved(where_it_is)],
+            ..Default::default()
+        };
+        let mut output = egui_context.run_ui(input, |ui| {
+            asked_for.extend(settings::draw(ui, &values, &context));
+        });
+        output.textures_delta.clear();
+    }
+
+    let runs: Vec<&str> = asked_for
+        .iter()
+        .filter_map(|change| match change {
+            settings::Change::Run { key, .. } => Some(*key),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        runs.is_empty(),
+        "moving the pointer asked to run {runs:?} without anything being clicked"
+    );
+}
+
 /// The detector detects.
 ///
 /// Without this, the five assertions above pass whether or not `clashes` can see anything
