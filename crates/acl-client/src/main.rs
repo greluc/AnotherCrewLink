@@ -392,19 +392,30 @@ struct Startable {
 struct Devices {
     held: Vec<acl_audio::device::Device>,
     refreshed: Option<std::time::Instant>,
+    /// A refresh that is running on a thread of its own. See [`Devices::current`].
+    asking: Option<std::sync::mpsc::Receiver<Vec<acl_audio::device::Device>>>,
 }
 
 impl Devices {
     /// How stale the list may be.
     const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
 
-    /// What the machine has, enumerating again if it has been a while.
+    /// What the machine has, asking again if it has been a while.
+    ///
+    /// **The asking happens on a thread.** Measured on 2026-08-28: enumerating the
+    /// machine's audio devices costs **11 to 14 milliseconds**, and it used to happen
+    /// inside the paint. Every two seconds one frame took fourteen times its budget, which
+    /// is a visible hitch in a list somebody is scrolling -- and the settings screen is the
+    /// only place this is called from, so the settings screen was the only place it showed.
+    ///
+    /// The first list is fetched here and now, because a picker that is empty for two
+    /// frames while a thread starts is worse than one frame that takes fourteen
+    /// milliseconds on the way in. Every refresh after that is asked for in the background
+    /// and collected whenever it arrives.
     fn current(&mut self) -> &[acl_audio::device::Device] {
-        let due = self
-            .refreshed
-            .is_none_or(|last| last.elapsed() >= Self::FRESH_FOR);
-        if due {
-            use acl_audio::device::Backend as _;
+        use acl_audio::device::Backend as _;
+
+        if self.refreshed.is_none() {
             // A failure leaves the last good list standing rather than emptying the picker:
             // a device that was there a moment ago is a better answer than none, and the
             // one that is stored is still what the client is using.
@@ -412,6 +423,42 @@ impl Devices {
                 self.held = found;
             }
             self.refreshed = Some(std::time::Instant::now());
+            return &self.held;
+        }
+
+        match self
+            .asking
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
+            Some(Ok(found)) => {
+                self.held = found;
+                self.asking = None;
+                self.refreshed = Some(std::time::Instant::now());
+            }
+            // The thread ended without sending, which is the enumeration having failed.
+            // The clock is restarted so this is tried again on the usual interval rather
+            // than every frame.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.asking = None;
+                self.refreshed = Some(std::time::Instant::now());
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
+        }
+
+        let due = self
+            .refreshed
+            .is_none_or(|last| last.elapsed() >= Self::FRESH_FOR);
+        if due && self.asking.is_none() {
+            let (send, receive) = std::sync::mpsc::channel();
+            // Detached: nothing waits for it, and dropping the sender is how a failure is
+            // reported. cpal initialises COM on whatever thread it is called from.
+            std::thread::spawn(move || {
+                if let Ok(found) = acl_audio::device::system::Cpal::new().devices() {
+                    let _ = send.send(found);
+                }
+            });
+            self.asking = Some(receive);
         }
         &self.held
     }
@@ -1606,6 +1653,10 @@ impl Client {
                 socket.to_owned(),
                 audio::Placement {
                     gain,
+                    // The vent's low pass, the camera's, or the impostor radio's high
+                    // pass. Decided here and applied in the mixing thread, which is the
+                    // only place a filter's own state can live.
+                    muffle: params.muffle,
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
                         y: 0.0,
@@ -2827,10 +2878,7 @@ impl eframe::App for Client {
                 self.moved_at = Some(std::time::Instant::now());
             }
         }
-        if self
-            .moved_at
-            .is_some_and(|since| since.elapsed() >= SETTLE)
-        {
+        if self.moved_at.is_some_and(|since| since.elapsed() >= SETTLE) {
             self.write_window_state();
         }
 
@@ -2839,7 +2887,9 @@ impl eframe::App for Client {
         // taken before the state, because cloning the state is itself work this does not
         // need to do a hundred times a second either.
         #[cfg(windows)]
-        if self.overlay_due.due(std::time::Instant::now(), OVERLAY_TICK)
+        if self
+            .overlay_due
+            .due(std::time::Instant::now(), OVERLAY_TICK)
             && let Some(state) = self
                 .reader
                 .as_ref()
@@ -2867,9 +2917,26 @@ impl eframe::App for Client {
             self.write_window_state();
         }
 
-        // The game state arrives five times a second and nothing else moves, so there is no
-        // reason to redraw faster than that.
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        // The game state arrives five times a second and nothing else moves, so when nobody
+        // is looking at this window there is no reason to redraw faster than that.
+        //
+        // **While the pointer is over it there is.** egui scrolls smoothly by animating an
+        // offset over several frames, and it can only do that in the frames it is given.
+        // Measured on 2026-08-28 with the settings open and the wheel turning: 5 frames a
+        // second and gaps of 146 to 239 milliseconds between them -- which is this fallback
+        // firing, because between one wheel event and the next nothing asked for anything
+        // sooner. A fifth of a second of held-still list, then a jump, is exactly what
+        // "slow and juddery" describes.
+        //
+        // The cost is bounded by where the pointer is. This window's own work is 0.08ms a
+        // frame -- measured the same day -- so drawing continuously while somebody is
+        // actually pointing at it is cheap, and the moment they move away it goes back to
+        // five a second.
+        if ctx.input(|input| input.pointer.has_pointer()) {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
     }
 
     #[expect(

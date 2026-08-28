@@ -195,6 +195,29 @@ impl Tuning {
     }
 }
 
+/// The filter `voice_params` asked for, as one this crate can run.
+///
+/// Two `FilterKind`s exist and they are not the same type on purpose: one is a decision
+/// about what a player should sound like, the other is a biquad. This is the one place they
+/// meet.
+#[cfg(feature = "audio")]
+fn biquad_for(muffle: acl_audio::voice::Muffle) -> acl_audio::biquad::Biquad {
+    let kind = match muffle.kind {
+        acl_audio::voice::FilterKind::LowPass => acl_audio::biquad::FilterKind::LowPass,
+        acl_audio::voice::FilterKind::HighPass => acl_audio::biquad::FilterKind::HighPass,
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a sample rate of 48 000, which is exact in an f32"
+    )]
+    acl_audio::biquad::Biquad::new(
+        kind,
+        muffle.frequency,
+        muffle.q,
+        acl_audio::stream::WANTED_RATE as f32,
+    )
+}
+
 /// One per audible peer, replaced wholesale each frame. The gain is
 /// `acl_audio::voice::voice_params`' answer — every rule about distance, walls, vision, the
 /// dead and the vents is already in it — and the position is where the panner should put
@@ -217,6 +240,14 @@ pub(crate) struct Placement {
     /// `enableSpatialAudio` off means centred: the gain still falls with distance, because
     /// that is a different setting and turning off panning is not turning off distance.
     pub(crate) spatial: bool,
+    /// The filter to put in this peer's path, if any.
+    ///
+    /// `voice_params` has decided this since the port began -- the vent's low pass, the
+    /// camera's, the impostor radio's high pass -- and nothing carried it here, so nothing
+    /// applied it. The *gain* half of those rules worked, which is what made it hard to
+    /// notice: a player in a vent was quieter, and no more muffled than one standing next
+    /// to you.
+    pub(crate) muffle: Option<acl_audio::voice::Muffle>,
 }
 
 /// How deep the jitter buffer is, in packets.
@@ -800,6 +831,12 @@ fn mix(
         std::collections::BTreeMap::new();
     let mut mixer = Mixer::new(FRAME_SAMPLES);
     let mut mono = vec![0.0_f32; FRAME_SAMPLES];
+    // One filter per peer that has one, with the settings it was built from so a change
+    // can be told from a repeat.
+    let mut muffles: std::collections::BTreeMap<
+        String,
+        (acl_audio::voice::Muffle, acl_audio::biquad::Biquad),
+    > = std::collections::BTreeMap::new();
     let mut stereo = vec![0.0_f32; FRAME_SAMPLES * 2];
 
     loop {
@@ -833,6 +870,11 @@ fn mix(
             .lock()
             .map(|held| held.clone())
             .unwrap_or_default();
+        // A filter is state: it remembers the last two samples. So it lives here, beside
+        // the decoder it filters, rather than in `Placement` -- which is rebuilt from the
+        // window's thread every frame and would reset the filter with it, turning a
+        // continuous low pass into a click every twenty milliseconds.
+        muffles.retain(|peer, _| placed.get(peer).is_some_and(|p| p.muffle.is_some()));
         mixer.begin();
         let mut anything = false;
         for (peer, listener) in &mut listeners {
@@ -851,6 +893,29 @@ fn mix(
             // distance model is not linear in the gain.
             for sample in &mut mono {
                 *sample *= placement.gain;
+            }
+            // After the gain and before the panner, which is where `Voice.tsx` puts it:
+            // `applyEffect(gain, muffle, destination)` inserts it between the two. The
+            // panner here runs after the gain rather than before it, and that changes
+            // nothing -- a gain is a scalar, and so is each side of an equal-power pan, so
+            // filtering the mono signal is the same signal either way.
+            if let Some(wanted) = placement.muffle {
+                let filter = match muffles.entry(peer.clone()) {
+                    std::collections::btree_map::Entry::Occupied(held) => {
+                        let held = held.into_mut();
+                        // Rebuilt only when the shape changes. Rebuilding every frame
+                        // would throw away the two samples of history that make it a
+                        // filter rather than a gain.
+                        if held.0 != wanted {
+                            *held = (wanted, biquad_for(wanted));
+                        }
+                        &mut held.1
+                    }
+                    std::collections::btree_map::Entry::Vacant(empty) => {
+                        &mut empty.insert((wanted, biquad_for(wanted))).1
+                    }
+                };
+                filter.process_block(&mut mono);
             }
             let source = if placement.spatial {
                 placement.source
@@ -1189,6 +1254,7 @@ mod tests {
             },
             panner: acl_audio::panner::Panner::default(),
             spatial: true,
+            muffle: None,
         };
         let panned = placement.panner.process_block(&mono, placement.source);
         let (mut left, mut right) = (0.0_f32, 0.0_f32);

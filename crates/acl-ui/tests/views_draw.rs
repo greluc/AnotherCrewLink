@@ -87,9 +87,7 @@ fn rects(output: &egui::FullOutput) -> Vec<(egui::Vec2, u8, egui::Color32)> {
         .shapes
         .iter()
         .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) => {
-                Some((rect.rect.size(), rect.corner_radius.nw, rect.fill))
-            }
+            egui::Shape::Rect(rect) => Some((rect.rect.size(), rect.corner_radius.nw, rect.fill)),
             _ => None,
         })
         .collect()
