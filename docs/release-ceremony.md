@@ -1,5 +1,11 @@
 # The release ceremony
 
+> **There is a script for this.** `scripts/release.ps1` performs everything below, asking
+> for the tag and the passphrase and nothing else. It stops once, before publishing, because
+> that is the irreversible step. What follows is what the script does and why — read it once,
+> then use the script.
+
+
 What a maintainer does by hand when a 2.x version goes out, and why each step is a step.
 
 Everything here needs the private signing key. Nothing in this repository and nothing
