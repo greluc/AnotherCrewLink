@@ -1036,6 +1036,72 @@ mod tests {
 
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+    /// The two `FilterKind`s do not get crossed on the way between them.
+    ///
+    /// A transposition here is silent: both shapes are filters, both change the sound, and
+    /// a vent that high-passes still sounds like *something* happened. The last time two
+    /// enums were mapped across a boundary in this project it was red and blue, and that
+    /// shipped.
+    #[test]
+    fn the_decisions_filter_shape_survives_the_crossing() {
+        use acl_audio::voice::{FilterKind, Muffle};
+
+        // A low pass keeps a low tone and takes a high one away; a high pass does the
+        // reverse. Asserted on what the filter *does*, because the kinds are different
+        // types and there is nothing to compare directly.
+        for (kind, keeps, removes) in [
+            (FilterKind::LowPass, 300.0_f32, 9000.0_f32),
+            (FilterKind::HighPass, 9000.0, 300.0),
+        ] {
+            let mut filter = super::biquad_for(Muffle {
+                kind,
+                frequency: 2000.0,
+                q: 0.7,
+            });
+            let mut kept = tone(keeps);
+            filter.process_block(&mut kept);
+            let mut filter = super::biquad_for(Muffle {
+                kind,
+                frequency: 2000.0,
+                q: 0.7,
+            });
+            let mut gone = tone(removes);
+            filter.process_block(&mut gone);
+
+            assert!(
+                peak(&kept) > peak(&gone) * 3.0,
+                "{kind:?} kept {:.4} of {keeps} Hz and {:.4} of {removes} Hz",
+                peak(&kept),
+                peak(&gone)
+            );
+        }
+    }
+
+    /// A sine at a frequency, one frame long, after the filter has settled.
+    fn tone(hertz: f32) -> Vec<f32> {
+        #[expect(clippy::cast_precision_loss, reason = "48 000 is exact in an f32")]
+        let rate = acl_audio::stream::WANTED_RATE as f32;
+        // Three frames, so the measurement below is taken after the filter's own transient
+        // rather than during it.
+        (0..FRAME_SAMPLES * 3)
+            .map(|at| {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a sample index inside three frames"
+                )]
+                let time = at as f32 / rate;
+                (std::f32::consts::TAU * hertz * time).sin()
+            })
+            .collect()
+    }
+
+    /// The loudest sample in the last third, which is after the transient.
+    fn peak(samples: &[f32]) -> f32 {
+        samples[samples.len() * 2 / 3..]
+            .iter()
+            .fold(0.0_f32, |so_far, s| so_far.max(s.abs()))
+    }
+
     /// The floor only counts as moved when it moves.
     ///
     /// The callback rebuilds the detector on every reported move, and rebuilding restarts

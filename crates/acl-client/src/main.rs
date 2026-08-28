@@ -965,6 +965,11 @@ struct Client {
     moved_at: Option<std::time::Instant>,
     /// Holds the overlay to [`OVERLAY_TICK`]. See what it costs.
     overlay_due: Cadence,
+    probe_frames: u32,
+    probe_busy: std::time::Duration,
+    probe_since: Option<std::time::Instant>,
+    probe_last: Option<std::time::Instant>,
+    probe_worst: std::time::Duration,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
@@ -1107,6 +1112,11 @@ impl Client {
             written: None,
             moved_at: None,
             overlay_due: Cadence::default(),
+            probe_frames: 0,
+            probe_busy: std::time::Duration::ZERO,
+            probe_since: None,
+            probe_last: None,
+            probe_worst: std::time::Duration::ZERO,
             overlay_shown: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
@@ -2895,7 +2905,9 @@ impl eframe::App for Client {
                 .as_ref()
                 .and_then(|reader| reader.latest().cloned())
         {
+            let probe_overlay = std::time::Instant::now();
             self.compose_overlay(&state);
+            acl_core::log_info!("probe", "overlay tick {:?}", probe_overlay.elapsed());
         }
 
         // Every frame while a capture is running, because it reads the key state rather
@@ -2962,6 +2974,7 @@ impl eframe::App for Client {
                 )
             });
         }
+        let probe_frame = std::time::Instant::now();
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
@@ -3165,6 +3178,21 @@ impl eframe::App for Client {
                 None => {}
             }
         });
+        self.probe_frames += 1;
+        self.probe_busy += probe_frame.elapsed();
+        if let Some(last) = self.probe_last {
+            self.probe_worst = self.probe_worst.max(last.elapsed());
+        }
+        self.probe_last = Some(std::time::Instant::now());
+        let since = self.probe_since.get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() >= std::time::Duration::from_secs(1) {
+            acl_core::log_info!("probe", "{} frames, busy {:?}, worst gap {:?}",
+                self.probe_frames, self.probe_busy, self.probe_worst);
+            self.probe_frames = 0;
+            self.probe_busy = std::time::Duration::ZERO;
+            self.probe_worst = std::time::Duration::ZERO;
+            self.probe_since = Some(std::time::Instant::now());
+        }
     }
 }
 
