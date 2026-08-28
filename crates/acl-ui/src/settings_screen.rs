@@ -23,7 +23,16 @@ use crate::settings::Default_;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     /// A checkbox.
-    Toggle,
+    Toggle {
+        /// Whether the box shows the *opposite* of what is stored.
+        ///
+        /// True for exactly one setting, and it is not cosmetic. `hideCode` stores whether
+        /// to hide the lobby code, and the label on its box says "Show Lobby Code" —
+        /// `Settings.tsx` renders `checked={!settings.hideCode}` and writes back `!checked`
+        /// for that reason. Drawn straight, ticking "show" hides it, which is a switch that
+        /// does the opposite of what it says.
+        inverted: bool,
+    },
     /// A slider over a numeric setting.
     Slider {
         /// The lowest value the slider offers.
@@ -177,7 +186,7 @@ impl Control {
         Self {
             key,
             label: Some(label),
-            kind: Kind::Toggle,
+            kind: Kind::Toggle { inverted: false },
             gate: None,
             instead: None,
             warning: None,
@@ -566,7 +575,10 @@ const BETA: &[Control] = &[
 ];
 
 /// What to hide from a camera.
-const STREAMING: &[Control] = &[Control::toggle("hideCode", "settings.streaming.hidecode")];
+const STREAMING: &[Control] = &[Control {
+    kind: Kind::Toggle { inverted: true },
+    ..Control::toggle("hideCode", "settings.streaming.hidecode")
+}];
 
 /// The two buttons.
 ///
@@ -902,6 +914,27 @@ mod tests {
         }
     }
 
+    /// The one inverted toggle is the one whose label says the opposite of its key.
+    ///
+    /// `hideCode` stores "hide" and its box says "show". Nothing else in the schema has
+    /// that shape, and a second one added without the flag would be a switch that does the
+    /// opposite of what it says — silently, because both readings look plausible on the
+    /// screen.
+    #[test]
+    fn only_the_setting_whose_label_is_the_opposite_is_inverted() {
+        for control in controls() {
+            let Kind::Toggle { inverted } = control.kind else {
+                continue;
+            };
+            assert_eq!(
+                inverted,
+                control.key == "hideCode",
+                "{} is inverted and should not be, or the other way round",
+                control.key
+            );
+        }
+    }
+
     /// An alternative label swaps on a setting that exists.
     ///
     /// A `when` that is not a setting reads as always off, so the alternative would never
@@ -1013,7 +1046,7 @@ mod tests {
             };
             let agrees = matches!(
                 (control.kind, default),
-                (Kind::Toggle, Default_::Bool(_))
+                (Kind::Toggle { .. }, Default_::Bool(_))
 					| (Kind::Slider { .. }, Default_::Number(_))
 					// A choice may be over either -- the push-to-talk mode is a number and
 					// the overlay position is a string.
@@ -1078,9 +1111,9 @@ mod tests {
 
     /// Every label, warning and heading is a key the shipped catalogue has.
     ///
-    /// English rather than all thirty-seven: the other locales are Crowdin's and are
-    /// allowed to be incomplete, and `t` falls back to the key. English is the one that
-    /// must be whole, because it is the fallback.
+    /// English, because it is the fallback: `t` falls back to English for anything a
+    /// locale has not translated, so English is the one that must be whole. German is
+    /// complete too and `both_locales_say_everything` is what keeps it so.
     #[test]
     fn every_string_on_the_screen_is_in_the_english_catalogue() {
         let catalogue = acl_i18n::Catalogue::load(&locales(), "en").expect("the shipped English");

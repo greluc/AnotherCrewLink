@@ -6,15 +6,18 @@
 //!
 //! # They are not translated, and that is worth knowing before the GUI is written
 //!
-//! The client ships 37 locales and 4,736 strings. These four are not among them: they are
-//! English literals in a shared module, shown as-is to everybody. Nobody decided that —
-//! it is what happens when a string is added on the main-process side of a boundary the
-//! translation loader does not cross.
+//! These four are not in the catalogue: they are English literals in a shared module, shown
+//! as-is to everybody. Nobody decided that — it is what happens when a string is added on
+//! the main-process side of a boundary the translation loader does not cross.
 //!
-//! They are ported as literals here rather than quietly turned into locale keys, because
-//! doing that means writing four entries into 37 files, and inventing translations is not
-//! a porting decision. What this module does is make the gap visible at the point where
-//! P6 will have to answer it.
+//! They were ported as literals rather than quietly turned into locale keys, because doing
+//! that meant writing four entries into thirty-seven files and inventing translations for
+//! thirty-five of them, which is not a porting decision.
+//!
+//! **That reason expired on 2026-08-28**, when the tree was cut to English and German. Two
+//! entries in two files is not a translation project. What keeps them literals now is that
+//! nothing shows them: no caller exists, so there is no screen to decide the wording
+//! against. Closing it belongs with the first thing that raises one.
 
 /// The messages, with the identifiers the Electron client gives them.
 ///
@@ -135,9 +138,9 @@ mod tests {
 
     #[test]
     fn none_of_them_is_a_locale_key() {
-        // Recording the gap rather than closing it. The client has 37 locales and these
-        // four are English literals shown to everybody; P6 has to decide whether that
-        // stays true, and it should be a decision rather than an inheritance.
+        // Recording the gap rather than closing it: these four are English literals, and
+        // whoever writes the screen that shows one has to decide whether that stays true.
+        // A decision rather than an inheritance.
         for error in StartupError::ALL {
             let message = error.message();
             assert!(

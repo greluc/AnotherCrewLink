@@ -1708,7 +1708,7 @@ impl Client {
 
         match self.link.state().clone() {
             net::State::Idle => {
-                ui.label("Connecting…");
+                ui.label(translate("client.lobby.connecting"));
                 return;
             }
             net::State::Connecting => {
@@ -1724,7 +1724,7 @@ impl Client {
                     egui::Color32::from_rgb(230, 140, 90),
                     acl_net::retirement::message(&why, translate),
                 );
-                if ui.button("Try again").clicked() {
+                if ui.button(translate("client.buttons.try_again")).clicked() {
                     // Back to idle, which is what makes the arm above connect again.
                     self.link.disconnect();
                 }
@@ -2005,7 +2005,11 @@ impl Client {
                     if ui.button("✕").on_hover_text(say("buttons.close")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("—").on_hover_text("Minimise").clicked() {
+                    if ui
+                        .button("—")
+                        .on_hover_text(say("client.buttons.minimise"))
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
                     // One button rather than two, and it says where it goes rather than
@@ -2034,7 +2038,7 @@ impl Client {
                     }
                     reload = ui
                         .button("⟳")
-                        .on_hover_text("Reload: start the game reader again")
+                        .on_hover_text(say("client.buttons.reload"))
                         .clicked();
                     // The version beside the name, as the shipped client shows it: it is
                     // the first thing anybody is asked for when they report something.
@@ -2372,7 +2376,7 @@ impl Client {
         };
         let code = if state.lobby_code.trim() == "MENU" {
             // The reader reports the word MENU, and the catalogue has it: it is a word on
-            // the screen like any other, and thirty-seven locales already translate it.
+            // the screen like any other, and both locales translate it.
             say("game.menu")
         } else if self.settings.config().bool_at("hideCode") {
             "LOBBY".to_owned()
@@ -2393,10 +2397,24 @@ impl Client {
             return;
         };
         let version = version.clone();
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let say_with = |key: &str, args: &[(&str, &str)]| {
+            self.catalogue.as_ref().map_or_else(
+                || key.to_owned(),
+                |catalogue| catalogue.t_with(key, args).into_owned(),
+            )
+        };
         let mut pressed = false;
         ui.horizontal(|ui| {
-            ui.label(format!("Version {version} is available."));
-            pressed = ui.button("Update and restart").clicked();
+            ui.label(say_with(
+                "client.update.available",
+                &[("version", &version)],
+            ));
+            pressed = ui.button(say("client.update.install")).clicked();
         });
         if !pressed {
             return;
@@ -2425,26 +2443,44 @@ impl Client {
     fn status_strip(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
         const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
 
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let say_with = |key: &str, args: &[(&str, &str)]| {
+            self.catalogue.as_ref().map_or_else(
+                || key.to_owned(),
+                |catalogue| catalogue.t_with(key, args).into_owned(),
+            )
+        };
+
         ui.horizontal(|ui| {
-            ui.label("Game reader:");
+            ui.label(say("client.status.game_reader"));
             ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
             // The server, beside the reader. Both are things that can be down, and only one
             // of them used to be sayable here -- a connection that never happened showed as
             // fifteen crewmates wearing a "no connection" badge and nothing that said why.
-            ui.label("· Server:");
+            ui.label(format!("· {}", say("client.status.server")));
             let (word, colour) = match self.link.state() {
-                net::State::Connected(_) => ("connected", ui.visuals().text_color()),
-                net::State::Connecting => ("connecting…", ui.visuals().weak_text_color()),
-                net::State::Idle => ("not connected", TROUBLE),
-                net::State::Failed(_) => ("failed", TROUBLE),
+                net::State::Connected(_) => ("client.status.connected", ui.visuals().text_color()),
+                net::State::Connecting => {
+                    ("client.status.connecting", ui.visuals().weak_text_color())
+                }
+                net::State::Idle => ("client.status.not_connected", TROUBLE),
+                net::State::Failed(_) => ("client.status.failed", TROUBLE),
             };
+            let word = say(word);
             ui.colored_label(colour, egui::RichText::new(word).strong());
             // How many peers are actually reachable, which is a different question from how
             // many players the game reports. A lobby of six with one connection is the shape
             // of a problem, and it is invisible without a number.
             ui.label(format!(
-                "· {} peer(s) connected",
-                self.link.connected_peers()
+                "· {}",
+                say_with(
+                    "client.status.peers",
+                    &[("count", &self.link.connected_peers().to_string())]
+                )
             ));
         });
         let retired;
@@ -2465,10 +2501,10 @@ impl Client {
         };
         for (what, trouble) in [
             (None, reader.trouble()),
-            (Some("Server"), link_trouble),
-            (Some("Update"), update_trouble),
-            (Some("Hats"), self.hats.trouble()),
-            (Some("Audio"), self.audio.trouble()),
+            (Some(say("client.status.server")), link_trouble),
+            (Some(say("client.status.update")), update_trouble),
+            (Some(say("client.status.hats")), self.hats.trouble()),
+            (Some(say("client.status.audio")), self.audio.trouble()),
         ] {
             let Some(trouble) = trouble else {
                 continue;
@@ -2496,6 +2532,7 @@ impl Client {
         connected: bool,
         local_talking: bool,
         dressed: &std::collections::BTreeMap<usize, egui::TextureId>,
+        say: &dyn Fn(&str) -> String,
     ) {
         let Some((at, me)) = state
             .players
@@ -2531,6 +2568,7 @@ impl Client {
                 muted: switches.muted,
                 deafened: switches.deafened,
             },
+            say,
         );
         ui.separator();
     }
@@ -2698,11 +2736,16 @@ impl eframe::App for Client {
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
-            let catalogue = self.catalogue.as_ref();
-            let say = move |key: &str| {
-                catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+            // Scoped, so the borrow of `self.catalogue` ends here: everything below wants
+            // `self` mutably, and a translator that outlived the title bar would keep it.
+            let reload = {
+                let catalogue = self.catalogue.as_ref();
+                let say = move |key: &str| {
+                    catalogue
+                        .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+                };
+                Self::title_bar(ui, &ctx, &mut page, &say)
             };
-            let reload = Self::title_bar(ui, &ctx, &mut page, &say);
             self.page = page;
             // Stop then start, in that order and on one channel, so the thread does them in
             // that order: the shipped client's ⟳ reloads its renderer, and the nearest
@@ -2738,7 +2781,11 @@ impl eframe::App for Client {
             self.offer_the_update(ui);
 
             let Some(reader) = self.reader.as_ref() else {
-                ui.label("The game reader could not be started.");
+                let catalogue = self.catalogue.as_ref();
+                ui.label(catalogue.map_or_else(
+                    || "client.status.reader_failed".to_owned(),
+                    |catalogue| catalogue.t("client.status.reader_failed").to_owned(),
+                ));
                 return;
             };
 
@@ -2819,6 +2866,13 @@ impl eframe::App for Client {
                     })
                 })
                 .collect();
+            // One translator for both views. Built here rather than passed down from the
+            // panel's own, because that one's borrow of `self.catalogue` ended with the
+            // title bar -- see the scope there.
+            let catalogue = self.catalogue.as_ref();
+            let say_here = move |key: &str| {
+                catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+            };
             Self::draw_you(
                 ui,
                 state,
@@ -2826,8 +2880,9 @@ impl eframe::App for Client {
                 connected_to_server,
                 local_talking,
                 &dressed,
+                &say_here,
             );
-            acl_ui::views::main::draw(ui, &portraits);
+            acl_ui::views::main::draw(ui, &portraits, &say_here);
         });
     }
 }

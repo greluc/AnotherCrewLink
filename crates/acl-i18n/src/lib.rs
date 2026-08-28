@@ -1,6 +1,6 @@
 //! The localisation loader.
 //!
-//! The 37 locale directories under `static/locales` stay i18next JSON and are read as-is.
+//! The locale directories under `static/locales` stay i18next JSON and are read as-is.
 //! `docs/rust-port/04-implementation-plan.md` §4.8 measured all 4,631 strings and found no
 //! plural key and no selector, so every feature that would distinguish a localisation
 //! framework from a flat map is unused. Keeping the JSON also means the Electron client
@@ -44,45 +44,7 @@ pub enum Direction {
 /// In its order, not alphabetical: English first, and after that whatever order the
 /// translations arrived in. Sorting it would be an improvement to make deliberately, in
 /// both clients at once, rather than as a side effect of a port.
-pub const NAMES: [(&str, &str); 37] = [
-    ("en", "English"),
-    ("af", "Afrikaans"),
-    ("ar", "العربية"),
-    ("az", "Azərbaycan"),
-    ("ca", "Català"),
-    ("zh_CN", "简体中文"),
-    ("zh_TW", "繁體中文"),
-    ("cs", "Čeština"),
-    ("da", "Dansk"),
-    ("nl", "Nederlands"),
-    ("eo", "Esperanto"),
-    ("fi", "Suomi"),
-    ("fr", "Français"),
-    ("de", "Deutsch"),
-    ("el", "Ελληνικά"),
-    ("he", "עברית"),
-    ("hu", "Magyar"),
-    ("id", "Bahasa Indonesia"),
-    ("it", "Italiano"),
-    ("ja", "日本語"),
-    ("ko", "한국인"),
-    ("no", "Norsk"),
-    ("fa", "فارسی"),
-    ("pl", "Polski"),
-    ("pt", "Português (Portugal)"),
-    ("pt_BR", "Português (Brasil)"),
-    ("ro", "Română"),
-    ("ru", "Русский"),
-    ("sr", "Српски"),
-    ("sk", "Slovenčina"),
-    ("sl", "Slovenščina"),
-    ("es", "Español"),
-    ("sv", "Svenska"),
-    ("tt", "Татар"),
-    ("tr", "Türkçe"),
-    ("uk", "Українська"),
-    ("vi", "Tiếng Việt"),
-];
+pub const NAMES: [(&str, &str); 2] = [("en", "English"), ("de", "Deutsch")];
 
 /// What a locale calls itself, if it is one this build ships.
 ///
@@ -97,7 +59,13 @@ pub fn name_of(locale: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// The locales in `static/locales` whose script runs right to left.
+/// The language subtags whose script runs right to left.
+///
+/// A table of facts about scripts, not a list of what is shipped. Arabic runs right to left
+/// whether or not `static/locales` has an `ar` in it, and on 2026-08-28 it stopped having
+/// one — the tree was cut to English and German. Emptying this to match would have made a
+/// true function answer falsely, and would leave a locale added back later laying out
+/// silently wrong.
 const RIGHT_TO_LEFT: [&str; 3] = ["ar", "fa", "he"];
 
 /// The base direction for a locale tag.
@@ -378,12 +346,86 @@ mod tests {
         found
     }
 
+    /// Every `client.` key the source asks for is in both catalogues.
+    ///
+    /// The 2.x client's own strings live under that prefix, and they are the ones a key
+    /// audit against the shipped catalogue cannot find: an audit compares the catalogue to
+    /// the *Electron* source, and these keys exist in neither. Without this, a mistyped key
+    /// shows as itself on the screen and no test says a word.
+    ///
+    /// Both locales, not just English. English is the fallback and so must be whole; German
+    /// is the only other one, and a German user reading an English sentence in a German
+    /// window is the thing keeping the tree small was supposed to make easy to avoid.
+    #[test]
+    fn every_client_key_the_source_uses_is_translated() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut wanted: Vec<String> = Vec::new();
+        for crate_name in ["acl-client", "acl-ui"] {
+            collect_client_keys(
+                &root.join("crates").join(crate_name).join("src"),
+                &mut wanted,
+            );
+        }
+        assert!(
+            wanted.len() > 20,
+            "found only {} keys; the scan is not finding the source",
+            wanted.len()
+        );
+
+        for locale in ["en", "de"] {
+            let catalogue = Catalogue::load(&locales(), locale).expect("a shipped locale");
+            let missing: Vec<&String> = wanted
+                .iter()
+                .filter(|key| !catalogue.defines(key))
+                .collect();
+            assert!(missing.is_empty(), "{locale} does not define {missing:?}");
+        }
+    }
+
+    /// Every `"client.…"` literal under a directory.
+    ///
+    /// A scan of the text rather than of the syntax: the keys are string literals passed to
+    /// a closure, so there is no type to ask. It over-collects by design — a key named in a
+    /// comment is still a key somebody expects to exist.
+    fn collect_client_keys(directory: &std::path::Path, into: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_client_keys(&path, into);
+                continue;
+            }
+            if path.extension().is_none_or(|kind| kind != "rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for piece in text.split("\"client.").skip(1) {
+                let Some(end) = piece.find('"') else {
+                    continue;
+                };
+                let key = format!("client.{}", &piece[..end]);
+                // A key built from a prefix is not one this can check.
+                if !key.contains('{') && !into.contains(&key) {
+                    into.push(key);
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_shipped_locale_loads() {
         let names = every_locale();
         // The tree has 37. Fewer means a directory disappeared; the assertion is here so
         // the loop below cannot pass by iterating over nothing.
-        assert!(names.len() >= 37, "found only {} locales", names.len());
+        assert_eq!(
+            names.len(),
+            NAMES.len(),
+            "the tree and `NAMES` disagree about which locales exist"
+        );
         for locale in names {
             let catalogue = Catalogue::load(&locales(), &locale)
                 .unwrap_or_else(|error| panic!("{locale} did not load: {error}"));
@@ -448,17 +490,30 @@ mod tests {
         assert_eq!(direction_for("pt_BR"), Direction::LeftToRight);
     }
 
+    /// Every locale in the tree gets a direction, and it is looked up by language.
+    ///
+    /// This used to assert the other way round -- that everything in [`RIGHT_TO_LEFT`] is
+    /// in the tree -- which stopped being true when the tree was cut to two and was never
+    /// the useful direction anyway: the table is about scripts, and a script does not stop
+    /// running right to left because nobody ships it.
+    ///
+    /// What is checkable is that the lookup works for what *is* shipped, including for a
+    /// tag with a region on it.
     #[test]
-    fn the_rtl_list_matches_what_is_shipped() {
-        // If a right-to-left locale is added to the tree and not to the list, its layout
-        // is silently wrong. This is the check that says so.
-        let shipped = every_locale();
-        for locale in RIGHT_TO_LEFT {
-            assert!(
-                shipped.iter().any(|name| name == locale),
-                "{locale} is in the RTL list but not in static/locales"
-            );
+    fn every_shipped_locale_has_a_direction() {
+        for locale in every_locale() {
+            let direction = direction_for(&locale);
+            let expected = if RIGHT_TO_LEFT.contains(&locale.split(['_', '-']).next().unwrap_or(""))
+            {
+                Direction::RightToLeft
+            } else {
+                Direction::LeftToRight
+            };
+            assert_eq!(direction, expected, "{locale}");
         }
+        // The region is not part of the question: `ar_EG` is still Arabic.
+        assert_eq!(direction_for("ar_EG"), Direction::RightToLeft);
+        assert_eq!(direction_for("de_AT"), Direction::LeftToRight);
     }
 
     #[test]

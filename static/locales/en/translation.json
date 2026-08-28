@@ -163,5 +163,46 @@
 		"microsoft": "Microsoft",
 		"custom": "Custom"
 	},
-	"translator_name": "Translator Name"
+	"translator_name": "Translator Name",
+	"client": {
+		"status": {
+			"game_reader": "Game reader:",
+			"server": "Server:",
+			"peers": "{{count}} peer(s) connected",
+			"connected": "connected",
+			"connecting": "connecting…",
+			"not_connected": "not connected",
+			"failed": "failed",
+			"reader_failed": "The game reader could not be started.",
+			"hats": "Hats",
+			"audio": "Audio",
+			"update": "Update"
+		},
+		"update": {
+			"available": "Version {{version}} is available.",
+			"install": "Update and restart"
+		},
+		"buttons": {
+			"try_again": "Try again",
+			"minimise": "Minimise",
+			"reload": "Reload: start the game reader again"
+		},
+		"lobby": {
+			"nobody_else": "Nobody else is here yet.",
+			"connecting": "Connecting…"
+		},
+		"player": {
+			"no_connection": "no connection",
+			"no_audio": "connected, no audio",
+			"connected": "connected",
+			"speaking": "speaking",
+			"dead": "dead",
+			"radio": "on the impostor radio"
+		},
+		"you": {
+			"not_connected": "not connected to the server",
+			"deafened": "deafened — you cannot hear anybody and nobody can hear you",
+			"muted": "muted — nobody can hear you"
+		}
+	}
 }

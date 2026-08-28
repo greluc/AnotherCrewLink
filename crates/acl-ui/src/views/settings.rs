@@ -320,10 +320,12 @@ fn one(
         warning: control.warning,
     };
     match control.kind {
-        Kind::Toggle => {
-            let mut on = values.bool_at(scope, control.key);
-            if ui.checkbox(&mut on, label).changed() {
-                changes.push(set(json!(on)));
+        Kind::Toggle { inverted } => {
+            // What the box shows, which is not always what is stored. See `Kind::Toggle`.
+            let stored = values.bool_at(scope, control.key);
+            let mut shown = stored != inverted;
+            if ui.checkbox(&mut shown, label).changed() {
+                changes.push(set(json!(shown != inverted)));
             }
         }
         Kind::Slider { min, max, step, .. } => {

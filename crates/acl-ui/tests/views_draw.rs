@@ -261,7 +261,7 @@ fn the_main_view_draws() {
         },
     ];
     let output = run(|ui| {
-        main::draw(ui, &portraits);
+        main::draw(ui, &portraits, &|key| key.to_owned());
     });
     assert!(painted(&output), "the main view painted nothing");
     assert!(clashes(&output).is_empty(), "{:?}", clashes(&output));
@@ -270,7 +270,7 @@ fn the_main_view_draws() {
 #[test]
 fn the_main_view_draws_an_empty_lobby() {
     let output = run(|ui| {
-        main::draw(ui, &[]);
+        main::draw(ui, &[], &|key| key.to_owned());
     });
     assert!(painted(&output), "the empty message should be there");
     assert!(clashes(&output).is_empty(), "{:?}", clashes(&output));
@@ -334,7 +334,7 @@ fn a_dressed_player_and_a_drawn_one_both_get_their_indicators() {
 
     for (what, portrait) in [("dressed", dressed), ("drawn", drawn)] {
         let output = run(|ui| {
-            main::draw(ui, &[portrait]);
+            main::draw(ui, &[portrait], &|key| key.to_owned());
         });
         assert!(painted(&output), "the {what} player painted nothing");
         assert!(
@@ -378,7 +378,7 @@ fn your_own_avatar_draws_in_every_state() {
             deafened,
         };
         let output = run(|ui| {
-            main::draw_own(ui, &own);
+            main::draw_own(ui, &own, &|key| key.to_owned());
         });
         assert!(painted(&output), "{what}: painted nothing");
         assert!(
@@ -409,7 +409,7 @@ fn your_own_avatar_draws_dressed_too() {
         deafened: false,
     };
     let output = run(|ui| {
-        main::draw_own(ui, &own);
+        main::draw_own(ui, &own, &|key| key.to_owned());
     });
     assert!(painted(&output), "painted nothing");
     assert!(clashes(&output).is_empty(), "{:?}", clashes(&output));

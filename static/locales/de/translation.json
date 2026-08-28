@@ -8,21 +8,21 @@
 			"gamehostonly": "Kann nur vom Host bearbeitet werden!",
 			"inlobbyonly": "Kann nur in der Lobby geändert werden!",
 			"voicedistance": "Stimmwahrnehmungsradius",
-			"voicedistance_impostor": "Imposter/Verräter-Stimmwahrnehmungsradius",
+			"voicedistance_impostor": "Impostor-Stimmwahrnehmungsradius",
 			"wallsblockaudio": "Wände blockieren Audio",
 			"visiononly": "Spieler nur in Sichtweite hören",
-			"impostorshearsghost": "Imposter/Verräter hören die Geister",
-			"hear_imposters_invents": "Crew hört Imposter/Verräter in Vents/Schächten",
+			"impostorshearsghost": "Impostoren hören die Geister",
+			"hear_imposters_invents": "Crew hört Impostoren in Vents/Schächten",
 			"private_talk_invents": "Privatgespräche in Vents/Schächten",
 			"comms_sabotage_audio": "Kommunikationssabotage verhindert Unterhaltungen",
 			"hear_through_cameras": "Durch Kameras hören",
 			"ghost_only": "Nur die Geister können sprechen/hören",
 			"ghost_only_warning": "Dies deaktiviert das Audio für lebende Spieler.",
-			"ghost_only_warning2": "Nur die Geister können sprechen aktiviert",
+			"ghost_only_warning2": "„Nur die Geister können sprechen“ ist aktiv.",
 			"meetings_only": "Audio nur in Meetings/Lobby",
-			"meetings_only_warning": "Sound für lebende Mitspieler außerhalb von Meetings deaktivieren.",
-			"meetings_only_warning2": "Sprechen nur in Treffen aktiviert",
-			"impostor_radio": "Impostor Radio",
+			"meetings_only_warning": "Dies deaktiviert das Audio für lebende Spieler außerhalb von Meetings.",
+			"meetings_only_warning2": "„Audio nur in Meetings/Lobby“ ist aktiv.",
+			"impostor_radio": "Impostor-Funk",
 			"public_lobby": {
 				"change_settings": "Lobbyinfo ändern",
 				"title": "Titel",
@@ -37,7 +37,7 @@
 			"title": "Benutzerdefinierte Plattform",
 			"platform_title": "Titel",
 			"path": "EXE-Pfad",
-			"uri": "URI Link",
+			"uri": "URI-Link",
 			"advanced": "Erweitert",
 			"arguments": "Parameter"
 		},
@@ -62,7 +62,7 @@
 			"push_to_talk": "Push-to-Talk",
 			"mute": "Stummschalten",
 			"deafen": "Ausgabe aus",
-			"impostor_radio": "Imposter-Radio"
+			"impostor_radio": "Impostor-Funk"
 		},
 		"overlay": {
 			"title": "Overlay",
@@ -88,25 +88,25 @@
 			"change_server": "Sprachserver wechseln",
 			"voice_server": "Sprachserver",
 			"invalid_url": "Ungültige URL",
-			"voice_server_warning": "Diese Option ist nur für fortgeschrittene Benutzer. Andere Server können Ihre Daten stehlen oder AnotherCrewLink zum Absturz bringen.",
-			"reset_default": "Einstellungen zurücksetzen"
+			"voice_server_warning": "Diese Option ist nur für fortgeschrittene Benutzer. Andere Server können deine Daten stehlen oder AnotherCrewLink zum Absturz bringen.",
+			"reset_default": "Auf Standard zurücksetzen"
 		},
 		"beta": {
 			"title": "BETA/DEBUG",
 			"vad_enabled": "VAD einschalten",
 			"hardware_acceleration": "Hardwarebeschleunigung",
 			"hardware_acceleration_warning": "Dies deaktiviert die Hardwarebeschleunigung (was die CPU-Nutzung erhöhen kann)",
-			"vad_enabled_warning": "Falls VAD deaktivert ist, wird nicht angezeigt, wer derzeit spricht.",
+			"vad_enabled_warning": "Falls VAD deaktiviert ist, wird nicht angezeigt, wer derzeit spricht.",
 			"echocancellation": "Echounterdrückung",
 			"noiseSuppression": "Geräuschunterdrückung",
 			"spatial_audio": "Räumliches Audio",
-			"oldsampledebug": "Samplerate Debug",
-			"oldsampledebug_warning": "Dies ist eine Testfunktion, die nur auf Anfrage aktiviert ist. "
+			"oldsampledebug": "Samplerate-Debug",
+			"oldsampledebug_warning": "Dies ist eine Testfunktion, die nur auf Anfrage aktiviert ist."
 		},
 		"streaming": {
 			"title": "Streamingeinstellungen",
 			"hidecode": "Lobby-Code anzeigen",
-			"voice_server_comp": "VS Kompatibilitätsmodus",
+			"voice_server_comp": "VS-Kompatibilitätsmodus",
 			"voice_server_comp_warning": "Es wird empfohlen, den Sprachserver auf einen AnotherCrewLink Voiceserver (z.B. https://bettercrewl.ink) zu ändern."
 		},
 		"troubleshooting": {
@@ -154,7 +154,8 @@
 		"error": "FEHLER",
 		"error_admin": "Konnte keine Verbindung zu \"Among Us\" herstellen.\nBitte AnotherCrewLink mit Administratorrechten neu starten.",
 		"error_platform": "Keine Plattform erkannt",
-		"error_unsupport": "Deine Version von Among Us wird nicht von AnotherCrewLink unterstützt."
+		"error_unsupport": "Deine Version von Among Us wird nicht von AnotherCrewLink unterstützt.",
+		"error_retired": "Diese Version von AnotherCrewLink wird nicht mehr unterstützt. Bitte aktualisiere, um den Sprachchat weiter nutzen zu können."
 	},
 	"platform": {
 		"steam": "Steam",
@@ -162,5 +163,46 @@
 		"microsoft": "Microsoft",
 		"custom": "Benutzerdefiniert"
 	},
-	"translator_name": "KadenBiel, SirBuvex, Jeddunk und Fauli1221"
+	"translator_name": "KadenBiel, SirBuvex, Jeddunk und Fauli1221",
+	"client": {
+		"status": {
+			"game_reader": "Spielanbindung:",
+			"server": "Server:",
+			"peers": "{{count}} Gegenstellen verbunden",
+			"connected": "verbunden",
+			"connecting": "verbinde …",
+			"not_connected": "nicht verbunden",
+			"failed": "fehlgeschlagen",
+			"reader_failed": "Die Spielanbindung konnte nicht gestartet werden.",
+			"hats": "Hüte",
+			"audio": "Audio",
+			"update": "Aktualisierung"
+		},
+		"update": {
+			"available": "Version {{version}} ist verfügbar.",
+			"install": "Aktualisieren und neu starten"
+		},
+		"buttons": {
+			"try_again": "Erneut versuchen",
+			"minimise": "Minimieren",
+			"reload": "Neu laden: Spielanbindung erneut starten"
+		},
+		"lobby": {
+			"nobody_else": "Sonst ist noch niemand hier.",
+			"connecting": "Verbinde …"
+		},
+		"player": {
+			"no_connection": "keine Verbindung",
+			"no_audio": "verbunden, kein Ton",
+			"connected": "verbunden",
+			"speaking": "spricht",
+			"dead": "tot",
+			"radio": "auf dem Impostor-Funk"
+		},
+		"you": {
+			"not_connected": "nicht mit dem Server verbunden",
+			"deafened": "Ausgabe aus – du hörst niemanden und niemand hört dich",
+			"muted": "stummgeschaltet – niemand hört dich"
+		}
+	}
 }
