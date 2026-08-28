@@ -28,6 +28,21 @@ pub enum Default_ {
     Text(&'static str),
 }
 
+/// What one setting defaults to, if it is one.
+///
+/// The schema is a list rather than a map, and this is the one lookup that needs it by key:
+/// a reset button names the setting it puts back, and the value it puts back has to be the
+/// same one a fresh profile would get. Reading it from anywhere else would be a second
+/// place for a default to live.
+#[must_use]
+pub fn default_for(key: &str) -> Option<Default_> {
+    defaults()
+        .into_iter()
+        .chain(lobby_defaults())
+        .find(|(named, _)| *named == key)
+        .map(|(_, value)| value)
+}
+
 /// Every scalar setting and the value 1.x defaults it to.
 ///
 /// The two `object` entries — `playerConfigMap` and `customPlatforms` — are not here.

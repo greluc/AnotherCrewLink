@@ -33,6 +33,17 @@ pub enum Change {
         /// A warning to confirm before applying it, if the control has one.
         warning: Option<&'static str>,
     },
+    /// One setting goes back to the value the schema gives it.
+    ///
+    /// A `Change` of its own rather than a `Set` with the default in it, because the view
+    /// does not know what any setting defaults to and should not have to: the schema is the
+    /// one place that says, and it is the caller's.
+    Reset {
+        /// Which setting.
+        key: &'static str,
+        /// Whose it is, which is what says where it is written.
+        scope: Scope,
+    },
     /// A button was pressed. Always carries its warning; see
     /// `an_action_is_not_a_setting`.
     Run {
@@ -208,6 +219,46 @@ fn gate_checkbox(
     }
 }
 
+/// A fixed set of values, as a combo box.
+///
+/// Lifted out of `one` so that function stays under the line limit the workspace sets. It
+/// is also the arm with the most in it: a current value to find, a label to translate for
+/// the closed box and one for every entry in the open one.
+fn choice(
+    ui: &mut Ui,
+    control: &'static Control,
+    scope: Scope,
+    options: &'static [crate::settings_screen::Choice],
+    values: &dyn Values,
+    context: &Context<'_>,
+    changes: &mut Vec<Change>,
+) {
+    let current = options
+        .iter()
+        .find(|choice| matches(choice.value, values, scope, control.key));
+    let shown_label = current.map_or_else(String::new, |choice| (context.t)(choice.label));
+    ComboBox::from_id_salt(control.key)
+        .selected_text(shown_label)
+        .show_ui(ui, |ui| {
+            for choice in options {
+                if ui
+                    .selectable_label(
+                        current.is_some_and(|now| now.value == choice.value),
+                        (context.t)(choice.label),
+                    )
+                    .clicked()
+                {
+                    changes.push(Change::Set {
+                        key: control.key,
+                        scope,
+                        value: as_json(choice.value),
+                        warning: control.warning,
+                    });
+                }
+            }
+        });
+}
+
 /// What the microphone is hearing, as a bar.
 ///
 /// A bar rather than a number. The question it answers is "is it hearing me", and the
@@ -268,27 +319,7 @@ fn one(
                 changes.push(set(json!(stored(control.kind, value))));
             }
         }
-        Kind::Choice(options) => {
-            let current = options
-                .iter()
-                .find(|choice| matches(choice.value, values, scope, control.key));
-            let shown_label = current.map_or_else(String::new, |choice| (context.t)(choice.label));
-            ComboBox::from_id_salt(control.key)
-                .selected_text(shown_label)
-                .show_ui(ui, |ui| {
-                    for choice in options {
-                        if ui
-                            .selectable_label(
-                                current.is_some_and(|now| now.value == choice.value),
-                                (context.t)(choice.label),
-                            )
-                            .clicked()
-                        {
-                            changes.push(set(as_json(choice.value)));
-                        }
-                    }
-                });
-        }
+        Kind::Choice(options) => choice(ui, control, scope, options, values, context, changes),
         Kind::Device { capture } => {
             let devices = if capture {
                 context.microphones
@@ -324,6 +355,16 @@ fn one(
                 changes.push(Change::Run {
                     key: control.key,
                     warning: control.warning,
+                });
+            }
+        }
+        Kind::Reset { setting } => {
+            // The schema's own value for that key, which the caller looks up: this view
+            // knows what a control is, not what any setting defaults to.
+            if ui.button(label).clicked() {
+                changes.push(Change::Reset {
+                    key: setting,
+                    scope,
                 });
             }
         }
@@ -399,7 +440,8 @@ fn matches(
 }
 
 /// A choice's value, as `config.json` holds it.
-fn as_json(value: crate::settings::Default_) -> Value {
+#[must_use]
+pub fn as_json(value: crate::settings::Default_) -> Value {
     use crate::settings::Default_::{Bool, Number, Text};
     match value {
         Bool(value) => json!(value),

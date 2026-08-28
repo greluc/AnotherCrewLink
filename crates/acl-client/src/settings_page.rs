@@ -22,7 +22,7 @@
 
 use acl_ui::config::Config;
 use acl_ui::settings_screen::Scope;
-use acl_ui::views::settings::{Change, Context, Entry, Values, draw, path};
+use acl_ui::views::settings::{Change, Context, Entry, Values, as_json, draw, path};
 
 /// What the settings page is currently doing.
 pub(crate) struct Page {
@@ -123,6 +123,26 @@ impl Page {
                     self.apply(&set, effects);
                 }
             }
+            // Applied as an ordinary `Set` of the schema's own value, so everything that
+            // follows a change -- writing the file, and the effects a particular key has --
+            // happens exactly as it would if somebody had typed the default in.
+            Change::Reset { key, scope } => {
+                let Some(default) = acl_ui::settings::default_for(key).map(as_json) else {
+                    // A reset naming a setting the schema does not have. Refused rather
+                    // than written as an empty value, and `a_reset_names_a_setting_that_
+                    // exists` is what makes this unreachable.
+                    return;
+                };
+                self.apply(
+                    &Change::Set {
+                        key,
+                        scope,
+                        value: default,
+                        warning: None,
+                    },
+                    effects,
+                );
+            }
         }
     }
 
@@ -166,7 +186,9 @@ impl Page {
         };
         let warning = match &pending {
             Change::Set { warning, .. } | Change::Run { warning, .. } => *warning,
-            Change::Capture(_) => None,
+            // Neither can be held: a capture is answered by a key press, and a reset puts
+            // back a value the schema gives and so has nothing to confirm.
+            Change::Capture(_) | Change::Reset { .. } => None,
         };
         let Some(warning) = warning else {
             self.pending = None;
@@ -199,7 +221,8 @@ impl Page {
                 match pending {
                     Change::Run { key, .. } => Self::run(key, effects),
                     set @ Change::Set { .. } => self.apply(&set, effects),
-                    Change::Capture(_) => {}
+                    // Unreachable: neither is ever held, for the reason above.
+                    Change::Capture(_) | Change::Reset { .. } => {}
                 }
             }
         }

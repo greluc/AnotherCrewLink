@@ -50,6 +50,21 @@ pub enum Kind {
     },
     /// Free text.
     Text,
+    /// A button that puts one *other* setting back to the value the schema gives it.
+    ///
+    /// The setting is named here rather than being the control's own key, because a key
+    /// with two controls on it is two widgets writing one value — which is what
+    /// `no_setting_has_two_controls` refuses, and it is right to: the field and the button
+    /// would share an id and neither would be the one that wrote.
+    ///
+    /// No warning, which is the one place this differs from [`Kind::Action`]. Those two are
+    /// behind a confirmation because of their reach: one rewrites every preference, the
+    /// other throws away the offsets the reader is using. This is one field going back to a
+    /// value that is written down, and `ServerURLInput.tsx` does not ask either.
+    Reset {
+        /// The setting to put back.
+        setting: &'static str,
+    },
     /// A sentence, drawn where it stands.
     ///
     /// Not a setting and not interactive: some fields need a line beside them that is a
@@ -106,7 +121,10 @@ impl Kind {
     /// once — the way `Note` was, until `the_two_scopes_hold_the_two_lists` caught it.
     #[must_use]
     pub const fn is_a_setting(self) -> bool {
-        !matches!(self, Self::Action | Self::Probe | Self::Note | Self::Meter)
+        !matches!(
+            self,
+            Self::Action | Self::Probe | Self::Note | Self::Meter | Self::Reset { .. }
+        )
     }
 }
 
@@ -490,6 +508,16 @@ const ADVANCED: &[Control] = &[
         Kind::Text,
     )
     .warning("settings.advanced.voice_server_warning"),
+    // Under the field it resets. `ServerURLInput.tsx` offers the same, and offering it
+    // matters more than it looks: somebody who typed a server that does not answer has no
+    // other way back to one that does, short of editing `config.json` by hand.
+    Control::of(
+        "serverURLReset",
+        Some("settings.advanced.reset_default"),
+        Kind::Reset {
+            setting: "serverURL",
+        },
+    ),
 ];
 
 /// The switches that are still being decided about.
@@ -799,6 +827,37 @@ mod tests {
             assert!(
                 control.warning.is_none(),
                 "{} changes nothing, so there is nothing to confirm",
+                control.key
+            );
+        }
+    }
+
+    /// A reset button names a setting the schema has, and is not one itself.
+    ///
+    /// Its own key is a widget id and nothing else. Naming the setting in the kind is what
+    /// keeps `no_setting_has_two_controls` true with a field and a button side by side, and
+    /// this is the check that the name it does carry is real — a reset pointing at nothing
+    /// is a button that quietly does nothing.
+    #[test]
+    fn a_reset_names_a_setting_that_exists() {
+        let schema = schema();
+        for control in controls() {
+            let Kind::Reset { setting } = control.kind else {
+                continue;
+            };
+            assert!(
+                schema.contains_key(setting),
+                "{} resets {setting}, which is not a setting",
+                control.key
+            );
+            assert!(
+                !schema.contains_key(control.key),
+                "{} is both a reset button and a setting",
+                control.key
+            );
+            assert!(
+                control.warning.is_none(),
+                "{} puts back a value the schema gives, so there is nothing to confirm",
                 control.key
             );
         }
