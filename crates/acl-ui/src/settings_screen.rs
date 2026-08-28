@@ -23,7 +23,16 @@ use crate::settings::Default_;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     /// A checkbox.
-    Toggle,
+    Toggle {
+        /// Whether the box shows the *opposite* of what is stored.
+        ///
+        /// True for exactly one setting, and it is not cosmetic. `hideCode` stores whether
+        /// to hide the lobby code, and the label on its box says "Show Lobby Code" —
+        /// `Settings.tsx` renders `checked={!settings.hideCode}` and writes back `!checked`
+        /// for that reason. Drawn straight, ticking "show" hides it, which is a switch that
+        /// does the opposite of what it says.
+        inverted: bool,
+    },
     /// A slider over a numeric setting.
     Slider {
         /// The lowest value the slider offers.
@@ -50,6 +59,21 @@ pub enum Kind {
     },
     /// Free text.
     Text,
+    /// A button that puts one *other* setting back to the value the schema gives it.
+    ///
+    /// The setting is named here rather than being the control's own key, because a key
+    /// with two controls on it is two widgets writing one value — which is what
+    /// `no_setting_has_two_controls` refuses, and it is right to: the field and the button
+    /// would share an id and neither would be the one that wrote.
+    ///
+    /// No warning, which is the one place this differs from [`Kind::Action`]. Those two are
+    /// behind a confirmation because of their reach: one rewrites every preference, the
+    /// other throws away the offsets the reader is using. This is one field going back to a
+    /// value that is written down, and `ServerURLInput.tsx` does not ask either.
+    Reset {
+        /// The setting to put back.
+        setting: &'static str,
+    },
     /// A sentence, drawn where it stands.
     ///
     /// Not a setting and not interactive: some fields need a line beside them that is a
@@ -106,8 +130,20 @@ impl Kind {
     /// once — the way `Note` was, until `the_two_scopes_hold_the_two_lists` caught it.
     #[must_use]
     pub const fn is_a_setting(self) -> bool {
-        !matches!(self, Self::Action | Self::Probe | Self::Note | Self::Meter)
+        !matches!(
+            self,
+            Self::Action | Self::Probe | Self::Note | Self::Meter | Self::Reset { .. }
+        )
     }
+}
+
+/// A label that replaces another when a setting is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Instead {
+    /// The setting that decides.
+    pub when: &'static str,
+    /// What to show while it is on.
+    pub label: &'static str,
 }
 
 /// One control on the screen.
@@ -130,6 +166,13 @@ pub struct Control {
     /// control of its own, because that is what it is: `micSensitivityEnabled` has no
     /// meaning apart from the slider it enables.
     pub gate: Option<&'static str>,
+    /// A label to use instead when another setting is on.
+    ///
+    /// One control has one, and the reason is worth writing down: with `visionHearing` on,
+    /// the crew's hearing range follows their vision and this fixed distance governs only
+    /// impostors — so `Settings.tsx` calls the same slider "Impostor Voice Distance"
+    /// there. A label that lies about what a number does is worse than one that is vague.
+    pub instead: Option<Instead>,
     /// The i18n key of a warning to confirm before the change takes effect.
     ///
     /// Every one of these is a setting that has broken somebody's audio. The Electron
@@ -143,8 +186,9 @@ impl Control {
         Self {
             key,
             label: Some(label),
-            kind: Kind::Toggle,
+            kind: Kind::Toggle { inverted: false },
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -156,6 +200,12 @@ impl Control {
     }
 
     /// A control that is only usable while another setting is on.
+    /// Uses a different label while `when` is on. See [`Instead`].
+    const fn instead_when(mut self, when: &'static str, label: &'static str) -> Self {
+        self.instead = Some(Instead { when, label });
+        self
+    }
+
     const fn gated_by(mut self, key: &'static str) -> Self {
         self.gate = Some(key);
         self
@@ -173,6 +223,7 @@ impl Control {
                 inverted: false,
             },
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -184,6 +235,7 @@ impl Control {
             label,
             kind,
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -236,6 +288,10 @@ const LOBBY: &[Control] = &[
         1.0,
         10.0,
         0.1,
+    )
+    .instead_when(
+        "visionHearing",
+        "settings.lobbysettings.voicedistance_impostor",
     ),
     Control::toggle("wallsBlockAudio", "settings.lobbysettings.wallsblockaudio"),
     Control::toggle("visionHearing", "settings.lobbysettings.visiononly"),
@@ -490,6 +546,16 @@ const ADVANCED: &[Control] = &[
         Kind::Text,
     )
     .warning("settings.advanced.voice_server_warning"),
+    // Under the field it resets. `ServerURLInput.tsx` offers the same, and offering it
+    // matters more than it looks: somebody who typed a server that does not answer has no
+    // other way back to one that does, short of editing `config.json` by hand.
+    Control::of(
+        "serverURLReset",
+        Some("settings.advanced.reset_default"),
+        Kind::Reset {
+            setting: "serverURL",
+        },
+    ),
 ];
 
 /// The switches that are still being decided about.
@@ -509,7 +575,10 @@ const BETA: &[Control] = &[
 ];
 
 /// What to hide from a camera.
-const STREAMING: &[Control] = &[Control::toggle("hideCode", "settings.streaming.hidecode")];
+const STREAMING: &[Control] = &[Control {
+    kind: Kind::Toggle { inverted: true },
+    ..Control::toggle("hideCode", "settings.streaming.hidecode")
+}];
 
 /// The two buttons.
 ///
@@ -663,6 +732,16 @@ pub fn availability(
             reason: scope.unavailable(in_menu_or_lobby),
         };
     }
+    // The host of a running round cannot reset. `Settings.tsx`'s `canResetSettings` is
+    // false in exactly that case, and the reason is everyone else's: throwing away the
+    // offsets or every preference mid-round takes the host's voice out of a game the other
+    // players are still in.
+    if control.kind == Kind::Action && !host_may_change && !in_menu_or_lobby {
+        return Availability {
+            enabled: false,
+            reason: Some("settings.troubleshooting.warning"),
+        };
+    }
     Availability {
         enabled: control.gate.is_none() || gate_is_on,
         reason: None,
@@ -804,6 +883,79 @@ mod tests {
         }
     }
 
+    /// A reset button names a setting the schema has, and is not one itself.
+    ///
+    /// Its own key is a widget id and nothing else. Naming the setting in the kind is what
+    /// keeps `no_setting_has_two_controls` true with a field and a button side by side, and
+    /// this is the check that the name it does carry is real — a reset pointing at nothing
+    /// is a button that quietly does nothing.
+    #[test]
+    fn a_reset_names_a_setting_that_exists() {
+        let schema = schema();
+        for control in controls() {
+            let Kind::Reset { setting } = control.kind else {
+                continue;
+            };
+            assert!(
+                schema.contains_key(setting),
+                "{} resets {setting}, which is not a setting",
+                control.key
+            );
+            assert!(
+                !schema.contains_key(control.key),
+                "{} is both a reset button and a setting",
+                control.key
+            );
+            assert!(
+                control.warning.is_none(),
+                "{} puts back a value the schema gives, so there is nothing to confirm",
+                control.key
+            );
+        }
+    }
+
+    /// The one inverted toggle is the one whose label says the opposite of its key.
+    ///
+    /// `hideCode` stores "hide" and its box says "show". Nothing else in the schema has
+    /// that shape, and a second one added without the flag would be a switch that does the
+    /// opposite of what it says — silently, because both readings look plausible on the
+    /// screen.
+    #[test]
+    fn only_the_setting_whose_label_is_the_opposite_is_inverted() {
+        for control in controls() {
+            let Kind::Toggle { inverted } = control.kind else {
+                continue;
+            };
+            assert_eq!(
+                inverted,
+                control.key == "hideCode",
+                "{} is inverted and should not be, or the other way round",
+                control.key
+            );
+        }
+    }
+
+    /// An alternative label swaps on a setting that exists.
+    ///
+    /// A `when` that is not a setting reads as always off, so the alternative would never
+    /// show and nothing would say so. Its *label* is checked by
+    /// `every_string_on_the_screen_is_in_the_english_catalogue`, which collects it.
+    #[test]
+    fn an_alternative_label_swaps_on_a_real_setting() {
+        let schema = schema();
+        for control in controls() {
+            let Some(instead) = control.instead else {
+                continue;
+            };
+            assert!(
+                schema.contains_key(instead.when),
+                "{} swaps on {}, which is not a setting",
+                control.key,
+                instead.when
+            );
+        }
+    }
+
     /// Every key this screen can write: a control's own key, and any gate it names.
     fn reachable() -> BTreeSet<&'static str> {
         let mut keys = BTreeSet::new();
@@ -894,7 +1046,7 @@ mod tests {
             };
             let agrees = matches!(
                 (control.kind, default),
-                (Kind::Toggle, Default_::Bool(_))
+                (Kind::Toggle { .. }, Default_::Bool(_))
 					| (Kind::Slider { .. }, Default_::Number(_))
 					// A choice may be over either -- the push-to-talk mode is a number and
 					// the overlay position is a string.
@@ -959,9 +1111,9 @@ mod tests {
 
     /// Every label, warning and heading is a key the shipped catalogue has.
     ///
-    /// English rather than all thirty-seven: the other locales are Crowdin's and are
-    /// allowed to be incomplete, and `t` falls back to the key. English is the one that
-    /// must be whole, because it is the fallback.
+    /// English, because it is the fallback: `t` falls back to English for anything a
+    /// locale has not translated, so English is the one that must be whole. German is
+    /// complete too and `both_locales_say_everything` is what keeps it so.
     #[test]
     fn every_string_on_the_screen_is_in_the_english_catalogue() {
         let catalogue = acl_i18n::Catalogue::load(&locales(), "en").expect("the shipped English");
@@ -971,15 +1123,18 @@ mod tests {
             for control in section.controls {
                 wanted.extend(control.label);
                 wanted.extend(control.warning);
+                wanted.extend(control.instead.map(|instead| instead.label));
                 if let Kind::Choice(options) = control.kind {
                     wanted.extend(options.iter().map(|choice: &Choice| choice.label));
                 }
             }
         }
-        // The two tooltips a lobby control shows when it cannot be changed. They are not on
-        // a control, so nothing above would have collected them.
+        // The two tooltips a lobby control shows when it cannot be changed, and the one an
+        // action shows to the host of a running round. None is on a control, so nothing
+        // above would have collected them.
         wanted.extend(Scope::Lobby.unavailable(true));
         wanted.extend(Scope::Lobby.unavailable(false));
+        wanted.push("settings.troubleshooting.warning");
 
         let missing: Vec<&str> = wanted
             .into_iter()

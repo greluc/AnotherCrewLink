@@ -372,6 +372,23 @@ impl Audio {
     ///
     /// Two notes and a fade, generated rather than shipped: an asset would be a file, a
     /// decoder and a licence for something the ear only has to recognise as "that worked".
+    /// Whether a test tone is still playing.
+    ///
+    /// The queue the mixer fills is the same one the tone went into, so "still playing" is
+    /// "there is more of it than the mixer has produced". Approximate on purpose: a queue
+    /// with anything in it while nothing is being received is the tone, and the button only
+    /// has to know whether to say start or stop.
+    pub(crate) fn testing_speaker(&self) -> bool {
+        self.playing.lock().is_ok_and(|playing| !playing.is_empty())
+    }
+
+    /// Stops one, by dropping what has not been played.
+    pub(crate) fn stop_testing_speaker(&self) {
+        if let Ok(mut playing) = self.playing.lock() {
+            playing.clear();
+        }
+    }
+
     pub(crate) fn test_speaker(&self) {
         const A: f32 = 660.0;
         const E: f32 = 880.0;

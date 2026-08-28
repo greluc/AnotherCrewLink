@@ -60,20 +60,20 @@ const AVATAR: f32 = 52.0;
 /// Draws the players.
 ///
 /// Wraps, because the window is 250 pixels wide at its minimum and a lobby holds fifteen.
-pub fn draw(ui: &mut Ui, portraits: &[Portrait<'_>]) {
+pub fn draw(ui: &mut Ui, portraits: &[Portrait<'_>], say: &dyn Fn(&str) -> String) {
     if portraits.is_empty() {
-        ui.label("Nobody else is here yet.");
+        ui.label(say("client.lobby.nobody_else"));
         return;
     }
     ui.horizontal_wrapped(|ui| {
         for portrait in portraits {
-            slot(ui, portrait);
+            slot(ui, portrait, say);
         }
     });
 }
 
 /// One crewmate and their name.
-fn slot(ui: &mut Ui, portrait: &Portrait<'_>) {
+fn slot(ui: &mut Ui, portrait: &Portrait<'_>, say: &dyn Fn(&str) -> String) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(SLOT, SLOT), egui::Sense::hover());
     let centre = Pos2::new(rect.center().x, rect.min.y + AVATAR / 2.0);
     crewmate(ui, centre, portrait);
@@ -88,7 +88,7 @@ fn slot(ui: &mut Ui, portrait: &Portrait<'_>) {
         ui.visuals().text_color(),
     );
 
-    response.on_hover_text(describe(portrait));
+    response.on_hover_text(describe(portrait, say));
 }
 
 /// What the shapes mean, for somebody who cannot tell.
@@ -96,25 +96,24 @@ fn slot(ui: &mut Ui, portrait: &Portrait<'_>) {
 /// The colours and the ring are quick to read once and opaque the first time, so every one
 /// of them is also words on hover. It is the same reason `Avatar.tsx` has a title on its
 /// connection state.
-fn describe(portrait: &Portrait<'_>) -> String {
+fn describe(portrait: &Portrait<'_>, say: &dyn Fn(&str) -> String) -> String {
     let mut said = vec![portrait.name.to_owned()];
-    said.push(
-        match portrait.state.link {
-            Link::Disconnected => "no connection",
-            Link::Silent => "connected, no audio",
-            Link::Connected => "connected",
-        }
-        .to_owned(),
-    );
+    said.push(say(match portrait.state.link {
+        Link::Disconnected => "client.player.no_connection",
+        Link::Silent => "client.player.no_audio",
+        Link::Connected => "client.player.connected",
+    }));
     if portrait.state.talking {
-        said.push("speaking".to_owned());
+        said.push(say("client.player.speaking"));
     }
     if !portrait.state.alive {
-        said.push("dead".to_owned());
+        said.push(say("client.player.dead"));
     }
     if portrait.state.using_radio {
-        said.push("on the impostor radio".to_owned());
+        said.push(say("client.player.radio"));
     }
+    // An em dash between the pieces, joined here rather than in the catalogue: a
+    // translator sees the phrases, not a sentence with holes in it.
     said.join(" — ")
 }
 
@@ -371,7 +370,7 @@ pub const OWN_SLOT: f32 = 96.0;
 const OWN_AVATAR: f32 = 68.0;
 
 /// Draws you.
-pub fn draw_own(ui: &mut Ui, own: &Own<'_>) {
+pub fn draw_own(ui: &mut Ui, own: &Own<'_>, say: &dyn Fn(&str) -> String) {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_SLOT), egui::Sense::hover());
     let centre = Pos2::new(rect.center().x, rect.min.y + OWN_AVATAR / 2.0);
@@ -416,24 +415,21 @@ pub fn draw_own(ui: &mut Ui, own: &Own<'_>) {
         ui.visuals().text_color(),
     );
 
-    response.on_hover_text(describe_own(own));
+    response.on_hover_text(describe_own(own, say));
 }
 
 /// What your own badges mean, spelled out.
-fn describe_own(own: &Own<'_>) -> String {
+fn describe_own(own: &Own<'_>, say: &dyn Fn(&str) -> String) -> String {
     let mut said = vec![own.portrait.name.to_owned()];
-    said.push(
-        match own.portrait.state.link {
-            Link::Disconnected => "not connected to the server",
-            Link::Silent => "connected, no audio",
-            Link::Connected => "connected",
-        }
-        .to_owned(),
-    );
+    said.push(say(match own.portrait.state.link {
+        Link::Disconnected => "client.you.not_connected",
+        Link::Silent => "client.player.no_audio",
+        Link::Connected => "client.player.connected",
+    }));
     if own.deafened {
-        said.push("deafened — you cannot hear anybody and nobody can hear you".to_owned());
+        said.push(say("client.you.deafened"));
     } else if own.muted {
-        said.push("muted — nobody can hear you".to_owned());
+        said.push(say("client.you.muted"));
     }
     if !own.portrait.state.alive {
         said.push("dead".to_owned());
@@ -588,8 +584,13 @@ mod tests {
 
     /// Every state a player can be shown in is also words, because the colours and the ring
     /// are quick to read once and opaque the first time.
+    ///
+    /// Asserted on the *keys*, which is what this function chooses: the words behind them
+    /// are the catalogue's, and `every_string_on_the_screen_is_in_the_english_catalogue`
+    /// checks those. A translator that returns its key is what makes the two separable.
     #[test]
     fn every_state_is_also_said_in_words() {
+        let say = |key: &str| key.to_owned();
         let quiet = Portrait {
             name: "Red",
             color_id: 0,
@@ -597,21 +598,21 @@ mod tests {
             // No artwork in these: the drawn form is what a test can assert about.
             art: None,
         };
-        assert_eq!(describe(&quiet), "Red — connected");
+        assert_eq!(describe(&quiet, &say), "Red — client.player.connected");
 
         let gone = Portrait {
             state: shown(Link::Disconnected, false, false),
             ..quiet
         };
-        assert!(describe(&gone).contains("no connection"));
-        assert!(describe(&gone).contains("dead"));
+        assert!(describe(&gone, &say).contains("client.player.no_connection"));
+        assert!(describe(&gone, &say).contains("client.player.dead"));
 
         let mute = Portrait {
             state: shown(Link::Silent, false, true),
             ..quiet
         };
         assert!(
-            describe(&mute).contains("no audio"),
+            describe(&mute, &say).contains("client.player.no_audio"),
             "the difference between not arrived and not audible has to be sayable"
         );
 
@@ -619,6 +620,6 @@ mod tests {
             state: shown(Link::Connected, true, true),
             ..quiet
         };
-        assert!(describe(&loud).contains("speaking"));
+        assert!(describe(&loud, &say).contains("client.player.speaking"));
     }
 }

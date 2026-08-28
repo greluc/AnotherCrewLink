@@ -40,6 +40,7 @@ mod hat_store;
 mod net;
 mod reader;
 mod settings_page;
+mod updates;
 
 use std::path::PathBuf;
 
@@ -310,6 +311,16 @@ fn named(
         pairs.insert(0, (chosen, shown));
     }
     pairs
+}
+
+/// A platform's fields, owned.
+///
+/// `start_game::Described` borrows, and these are borrowed from `self` -- which the button
+/// press then needs mutably. Owning them for one frame is what lets those two not overlap.
+struct Startable {
+    run_path: String,
+    is_uri: bool,
+    execute: Vec<String>,
 }
 
 /// The machine's microphones and speakers, as the settings screen needs them.
@@ -888,6 +899,13 @@ struct Client {
     /// messages for the one that matters. `None` until the first frame, which is what makes
     /// the setting take effect on the way up as well as when it is changed.
     on_top: Option<bool>,
+    /// The name being typed into the custom-platform editor's add box.
+    ///
+    /// Held here rather than in the view, because the view is redrawn from scratch every
+    /// frame and a half-typed name would not survive one.
+    adding_platform: String,
+    /// Whether there is a newer version, once the check has said.
+    updates: updates::Updates,
     /// Why the game would not start, if somebody pressed the button and it did not.
     ///
     /// Kept rather than shown once: the button is on a screen that repaints five times a
@@ -955,6 +973,8 @@ impl Client {
             reader,
             last_seen: None,
             overlay_shown: false,
+            adding_platform: String::new(),
+            updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
             launch_trouble: None,
             listed: None,
             on_top: None,
@@ -1688,7 +1708,7 @@ impl Client {
 
         match self.link.state().clone() {
             net::State::Idle => {
-                ui.label("Connecting…");
+                ui.label(translate("client.lobby.connecting"));
                 return;
             }
             net::State::Connecting => {
@@ -1704,7 +1724,7 @@ impl Client {
                     egui::Color32::from_rgb(230, 140, 90),
                     acl_net::retirement::message(&why, translate),
                 );
-                if ui.button("Try again").clicked() {
+                if ui.button(translate("client.buttons.try_again")).clicked() {
                     // Back to idle, which is what makes the arm above connect again.
                     self.link.disconnect();
                 }
@@ -1871,22 +1891,50 @@ impl Client {
             .map(|(id, label)| acl_ui::views::settings::Entry { id, label })
             .collect();
         let level = self.audio.input_level();
+        let testing = self.audio.testing_speaker();
+        let (may_change, menu_or_lobby) = self.who_may_change_the_rules();
         let context = acl_ui::views::settings::Context {
             t: &translate,
             input_level: level,
+            testing_speaker: testing,
             microphones: &microphones,
             speakers: &speakers,
             locales: &locales,
-            // Both false until this process has a session: nobody is host of a lobby it
-            // has not joined. Saying so is what puts the "not in a lobby" explanation on
-            // the rules rather than leaving them silently dead.
-            host_may_change: false,
-            in_menu_or_lobby: false,
+            // From the game, not hard-coded. Both were `false` -- with a comment saying
+            // that is what a client with no session looks like -- and the client has had a
+            // session and a reader for a while: every lobby rule on this screen was shown
+            // as unavailable to its host, permanently, with the "not in a lobby"
+            // explanation on it while they were in one.
+            //
+            // `Settings.tsx`'s two conditions, at line 348: in the menu, or host of a
+            // lobby that has not started.
+            host_may_change: may_change,
+            in_menu_or_lobby: menu_or_lobby,
             capturing: self.settings.capturing(),
         };
-        let effects = egui::ScrollArea::vertical()
-            .show(ui, |ui| self.settings.show(ui, &context))
+        let entries = self.custom_platforms();
+        let chosen = self.settings.config().text_at("launchPlatform");
+        let mut adding = std::mem::take(&mut self.adding_platform);
+        let (effects, edits) = egui::ScrollArea::vertical()
+            .show(ui, |ui| {
+                let effects = self.settings.show(ui, &context);
+                ui.separator();
+                let edits = acl_ui::views::platforms::draw(
+                    ui,
+                    &entries,
+                    &mut acl_ui::views::platforms::Context {
+                        t: &translate,
+                        chosen: &chosen,
+                        adding: &mut adding,
+                    },
+                );
+                (effects, edits)
+            })
             .inner;
+        self.adding_platform = adding;
+        for edit in edits {
+            self.apply_platform_edit(&edit);
+        }
 
         for effect in effects {
             match effect {
@@ -1898,8 +1946,15 @@ impl Client {
                     self.catalogue = load_catalogue(&self.settings);
                 }
                 settings_page::Effect::TestSpeaker => {
-                    acl_core::log_info!("audio", "playing a test tone");
-                    self.audio.test_speaker();
+                    // The same button both ways, which is what the two catalogue keys are
+                    // for: one of them was never used because the tone could only start.
+                    if self.audio.testing_speaker() {
+                        acl_core::log_info!("audio", "stopping the test tone");
+                        self.audio.stop_testing_speaker();
+                    } else {
+                        acl_core::log_info!("audio", "playing a test tone");
+                        self.audio.test_speaker();
+                    }
                 }
                 settings_page::Effect::ResetOffsets => {
                     // The offsets belong to the helper, which owns the file and the
@@ -1919,7 +1974,12 @@ impl Client {
     /// `StartDrag`, which hands the move to the window manager rather than repositioning
     /// the window per frame — the difference is visible as smoothness and as whether snap
     /// layouts work at all.
-    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) -> bool {
+    fn title_bar(
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        page: &mut Screen,
+        say: &dyn Fn(&str) -> String,
+    ) -> bool {
         let bar = egui::Rect::from_min_size(
             ui.max_rect().min,
             egui::vec2(ui.max_rect().width(), TITLE_BAR),
@@ -1942,18 +2002,25 @@ impl Client {
                 // other way round -- name first -- a 250-point window pushed the buttons off
                 // the end and clipped the title mid-word as well.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕").on_hover_text("Close").clicked() {
+                    if ui.button("✕").on_hover_text(say("buttons.close")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("—").on_hover_text("Minimise").clicked() {
+                    if ui
+                        .button("—")
+                        .on_hover_text(say("client.buttons.minimise"))
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
                     // One button rather than two, and it says where it goes rather than
                     // where you are: a gear on the settings page reads as "settings are
                     // here", which is where you already were.
+                    // Leaving the settings is what applies the three capture settings a
+                    // device can only be opened with, so the arrow says so -- which is what
+                    // `buttons.exit` is for on the shipped client.
                     let (glyph, hint) = match page {
-                        Screen::Main => ("⚙", "Settings"),
-                        Screen::Settings | Screen::Lobbies => ("⏴", "Back"),
+                        Screen::Main => ("⚙", say("settings.title")),
+                        Screen::Settings | Screen::Lobbies => ("⏴", say("buttons.exit")),
                     };
                     if ui.button(glyph).on_hover_text(hint).clicked() {
                         *page = match page {
@@ -1962,13 +2029,16 @@ impl Client {
                         };
                     }
                     if *page == Screen::Main
-                        && ui.button("🌐").on_hover_text("Public lobbies").clicked()
+                        && ui
+                            .button("🌐")
+                            .on_hover_text(say("buttons.public_lobby"))
+                            .clicked()
                     {
                         *page = Screen::Lobbies;
                     }
                     reload = ui
                         .button("⟳")
-                        .on_hover_text("Reload: start the game reader again")
+                        .on_hover_text(say("client.buttons.reload"))
                         .clicked();
                     // The version beside the name, as the shipped client shows it: it is
                     // the first thing anybody is asked for when they report something.
@@ -2059,13 +2129,20 @@ impl Client {
         ui.label(waiting);
 
         let stored = self.settings.config().text_at("launchPlatform");
-        let Some(platform) = acl_types::platform::Platform::from_key(&stored) else {
-            // No platform, or one this build does not know. `Menu.tsx` says exactly this
-            // rather than offering a button that cannot work.
+        let Some((label, startable)) = self.how_to_start(&stored) else {
+            // No platform, one this build does not know, and nothing in `customPlatforms`
+            // describing it either. `Menu.tsx` says exactly this rather than offering a
+            // button that cannot work.
             ui.label(no_platform);
             return;
         };
-        let name = say(platform.translate_key());
+        // A built-in platform hands back a translation key; a custom one hands back the
+        // title its owner typed, which is already the words to show.
+        let name = if label.starts_with("platform.") {
+            say(&label)
+        } else {
+            label
+        };
 
         let mut pressed = false;
         ui.horizontal(|ui| {
@@ -2075,7 +2152,7 @@ impl Client {
         // Outside the closure, which borrows `self` for the translator above.
         if pressed {
             self.launch_trouble = None;
-            self.start_the_game(platform);
+            self.start_the_game(&stored, &startable);
         }
         if let Some(why) = self.launch_trouble.clone() {
             ui.colored_label(egui::Color32::from_rgb(230, 140, 90), why);
@@ -2089,23 +2166,198 @@ impl Client {
     /// until somebody sets one, so this can refuse — and refusing has to be visible.
     /// `Menu.tsx` shows `game.open_error`, which tells the player to start it themselves,
     /// and that is better than a button that appears to do nothing.
-    fn start_the_game(&mut self, platform: acl_types::platform::Platform) {
-        let execute: Vec<String> = platform
-            .executable()
-            .map(|name| vec![name.to_owned()])
-            .unwrap_or_default();
-        let described = acl_core::start_game::Described {
-            run_path: platform.run_path(),
-            is_uri: matches!(platform.run_type(), acl_types::platform::RunType::Uri),
-            execute: &execute,
-        };
-        let outcome = acl_core::start_game::plan(described)
-            .and_then(|what| acl_core::start_game::start(&what));
+    fn start_the_game(&mut self, key: &str, startable: &Startable) {
+        let outcome = acl_core::start_game::plan(acl_core::start_game::Described {
+            run_path: &startable.run_path,
+            is_uri: startable.is_uri,
+            execute: &startable.execute,
+        })
+        .and_then(|what| acl_core::start_game::start(&what));
         match outcome {
-            Ok(()) => acl_core::log_info!("game", "asked {platform:?} to start Among Us"),
+            Ok(()) => acl_core::log_info!("game", "asked {key} to start Among Us"),
             Err(why) => {
-                acl_core::log_warn!("game", "could not start Among Us on {platform:?}: {why}");
+                acl_core::log_warn!("game", "could not start Among Us on {key}: {why}");
                 self.launch_trouble = Some(why.to_string());
+            }
+        }
+    }
+
+    /// What `launchPlatform` names, as a label and the fields that start it.
+    ///
+    /// One of the three the client knows, or an entry in `customPlatforms` under that same
+    /// key. The second is not an extra: a player who set one up in 1.x has it in the file
+    /// this client reads, and refusing to start it would make this client worse than the
+    /// one they had. Adding a new one is not offered here yet -- only using one.
+    ///
+    /// The label is a translation key for a built-in and the player's own title for a
+    /// custom entry, and the caller tells them apart by the prefix.
+    fn how_to_start(&self, key: &str) -> Option<(String, Startable)> {
+        if let Some(platform) = acl_types::platform::Platform::from_key(key) {
+            return Some((
+                platform.translate_key().to_owned(),
+                Startable {
+                    run_path: platform.run_path().to_owned(),
+                    is_uri: matches!(platform.run_type(), acl_types::platform::RunType::Uri),
+                    execute: platform
+                        .executable()
+                        .map(|name| vec![name.to_owned()])
+                        .unwrap_or_default(),
+                },
+            ));
+        }
+
+        let stored = self.settings.config();
+        let run_path = stored.text_at(&format!("customPlatforms.{key}.runPath"));
+        if run_path.is_empty() {
+            return None;
+        }
+        // `PlatformRunType` is a string enum -- `'URI'` and `'EXE'` -- rather than the
+        // numbers it looks like it should be. Anything else is treated as a program, which
+        // is the branch that can fail visibly; guessing URI would hand an unknown string to
+        // the shell.
+        let is_uri = stored
+            .text_at(&format!("customPlatforms.{key}.launchType"))
+            .eq_ignore_ascii_case("URI");
+        Some((
+            key.to_owned(),
+            Startable {
+                run_path,
+                is_uri,
+                execute: stored.strings_at(&format!("customPlatforms.{key}.execute")),
+            },
+        ))
+    }
+
+    /// Whether the lobby rules may be changed, and whether a lobby exists to explain it.
+    ///
+    /// `Settings.tsx` line 348: the rules are the host's while the round has not started,
+    /// and anybody's in the menu -- where a change is a preference for the next lobby
+    /// rather than an edit to one people are in. The second flag picks which of the two
+    /// explanations a disabled rule gives.
+    ///
+    /// No reader, or no frame yet, reads as the menu: a client that cannot see the game
+    /// should let somebody set their preferences rather than lock the page.
+    fn who_may_change_the_rules(&self) -> (bool, bool) {
+        let Some(state) = self.reader.as_ref().and_then(|reader| reader.latest()) else {
+            return (true, true);
+        };
+        let in_menu = state.game_state == acl_game::GameState::Menu;
+        let in_lobby = state.game_state == acl_game::GameState::Lobby;
+        (in_menu || (state.is_host && in_lobby), in_menu || in_lobby)
+    }
+
+    /// The custom platforms the settings hold, in the shape the editor shows them.
+    fn custom_platforms(&self) -> Vec<acl_ui::platforms::Entry> {
+        let stored = self.settings.config();
+        let Some(serde_json::Value::Object(map)) = stored.get("customPlatforms") else {
+            return Vec::new();
+        };
+        // Sorted, because a JSON object has no order a person can rely on and a list that
+        // rearranges itself between frames is one nobody can click in.
+        let mut names: Vec<&String> = map.keys().collect();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| {
+                let is_uri = stored
+                    .text_at(&format!("customPlatforms.{name}.launchType"))
+                    .eq_ignore_ascii_case("URI");
+                acl_ui::platforms::to_entry(
+                    name,
+                    is_uri,
+                    &acl_ui::platforms::Stored {
+                        run_path: stored.text_at(&format!("customPlatforms.{name}.runPath")),
+                        execute: stored.strings_at(&format!("customPlatforms.{name}.execute")),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Writes one edit through to the settings file.
+    ///
+    /// Every field of an entry is written together, because they are one thing: a
+    /// `launchType` that changed without its `runPath` describes a URI platform holding a
+    /// directory, which starts nothing and reads as a broken entry rather than a half-saved
+    /// one.
+    fn apply_platform_edit(&mut self, edit: &acl_ui::views::platforms::Edit) {
+        use acl_ui::views::platforms::Edit;
+        match edit {
+            Edit::Add(name) => {
+                acl_core::log_info!("platform", "adding {name}");
+                self.write_platform(&acl_ui::platforms::Entry {
+                    name: name.clone(),
+                    ..acl_ui::platforms::Entry::default()
+                });
+            }
+            Edit::Update(entry) => self.write_platform(entry),
+            Edit::Remove(name) => {
+                acl_core::log_info!("platform", "removing {name}");
+                self.settings.forget(&format!("customPlatforms.{name}"));
+                // A platform that is gone cannot stay selected, or the launch button would
+                // name something the file no longer describes.
+                if self.settings.config().text_at("launchPlatform") == *name {
+                    self.settings
+                        .put("launchPlatform", serde_json::json!("STEAM"));
+                }
+            }
+            Edit::Use(name) => {
+                acl_core::log_info!("platform", "launching through {name} from now on");
+                self.settings.put("launchPlatform", serde_json::json!(name));
+            }
+        }
+    }
+
+    /// Stores one entry under its own name.
+    fn write_platform(&mut self, entry: &acl_ui::platforms::Entry) {
+        let stored = acl_ui::platforms::to_stored(entry);
+        let name = &entry.name;
+        // `key` and `translateKey` are both the title, which is what
+        // `CustomPlatformSettings.tsx` writes -- a 1.x client reads them and would show a
+        // nameless entry without them.
+        for (field, value) in [
+            ("key", serde_json::json!(name)),
+            ("translateKey", serde_json::json!(name)),
+            ("default", serde_json::json!(false)),
+            (
+                "launchType",
+                serde_json::json!(if entry.is_uri { "URI" } else { "EXE" }),
+            ),
+            ("runPath", serde_json::json!(stored.run_path)),
+            ("execute", serde_json::json!(stored.execute)),
+        ] {
+            self.settings
+                .put(&format!("customPlatforms.{name}.{field}"), value);
+        }
+    }
+
+    /// The two lobby rules that are worth saying out loud on the main screen.
+    ///
+    /// `Voice.tsx` puts both here, and the reason is support rather than decoration: with
+    /// "only the dead talk" or "only ghosts in meetings" on, a living player hears silence
+    /// and has no way to tell that from a broken microphone. A line saying which rule is in
+    /// force is the difference between a rule and a fault.
+    ///
+    /// Only when on. A list of rules that are off is a list nobody reads.
+    fn say_what_the_lobby_allows(&self, ui: &mut egui::Ui) {
+        let stored = self.settings.config();
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        for (setting, key) in [
+            (
+                "localLobbySettings.deadOnly",
+                "settings.lobbysettings.ghost_only_warning2",
+            ),
+            (
+                "localLobbySettings.meetingGhostOnly",
+                "settings.lobbysettings.meetings_only_warning2",
+            ),
+        ] {
+            if stored.bool_at(setting) {
+                ui.label(egui::RichText::new(say(key)).small().weak());
             }
         }
     }
@@ -2117,13 +2369,69 @@ impl Client {
     /// without showing which one. The menu keeps its own name — there is no code to give
     /// away, and a menu labelled LOBBY would be a lie rather than a redaction.
     fn lobby_line(&self, state: &acl_game::AmongUsState) -> String {
-        let code =
-            if self.settings.config().bool_at("hideCode") && state.lobby_code.trim() != "MENU" {
-                "LOBBY"
-            } else {
-                state.lobby_code.as_str()
-            };
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let code = if state.lobby_code.trim() == "MENU" {
+            // The reader reports the word MENU, and the catalogue has it: it is a word on
+            // the screen like any other, and both locales translate it.
+            say("game.menu")
+        } else if self.settings.config().bool_at("hideCode") {
+            "LOBBY".to_owned()
+        } else {
+            state.lobby_code.clone()
+        };
         format!("{code} — {:?}", state.game_state)
+    }
+
+    /// The one line an update gets, and the button that takes it.
+    ///
+    /// Drawn before the game reader is asked anything, for two reasons. It is not part of
+    /// the reader's status -- a waiting update is a good thing to see, and belongs above the
+    /// list of what is wrong rather than under it -- and `status_strip` holds a borrow of
+    /// the reader, which is what pressing this cannot have.
+    fn offer_the_update(&mut self, ui: &mut egui::Ui) {
+        let Some(updates::Offer::Ready(version)) = self.updates.offer() else {
+            return;
+        };
+        let version = version.clone();
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let say_with = |key: &str, args: &[(&str, &str)]| {
+            self.catalogue.as_ref().map_or_else(
+                || key.to_owned(),
+                |catalogue| catalogue.t_with(key, args).into_owned(),
+            )
+        };
+        let mut pressed = false;
+        ui.horizontal(|ui| {
+            ui.label(say_with(
+                "client.update.available",
+                &[("version", &version)],
+            ));
+            pressed = ui.button(say("client.update.install")).clicked();
+        });
+        if !pressed {
+            return;
+        }
+        match updates::install() {
+            Ok(()) => {
+                acl_core::log_info!("update", "started the updater for {version}");
+                // An installer cannot write over files this process is holding open, so
+                // leaving is part of installing rather than a courtesy.
+                self.write_window_state();
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(why) => {
+                acl_core::log_warn!("update", "could not start the updater: {why}");
+                self.launch_trouble = Some(why);
+            }
+        }
     }
 
     /// The line of things that are wrong, and the one number that says whether it works.
@@ -2135,26 +2443,44 @@ impl Client {
     fn status_strip(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
         const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
 
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let say_with = |key: &str, args: &[(&str, &str)]| {
+            self.catalogue.as_ref().map_or_else(
+                || key.to_owned(),
+                |catalogue| catalogue.t_with(key, args).into_owned(),
+            )
+        };
+
         ui.horizontal(|ui| {
-            ui.label("Game reader:");
+            ui.label(say("client.status.game_reader"));
             ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
             // The server, beside the reader. Both are things that can be down, and only one
             // of them used to be sayable here -- a connection that never happened showed as
             // fifteen crewmates wearing a "no connection" badge and nothing that said why.
-            ui.label("· Server:");
+            ui.label(format!("· {}", say("client.status.server")));
             let (word, colour) = match self.link.state() {
-                net::State::Connected(_) => ("connected", ui.visuals().text_color()),
-                net::State::Connecting => ("connecting…", ui.visuals().weak_text_color()),
-                net::State::Idle => ("not connected", TROUBLE),
-                net::State::Failed(_) => ("failed", TROUBLE),
+                net::State::Connected(_) => ("client.status.connected", ui.visuals().text_color()),
+                net::State::Connecting => {
+                    ("client.status.connecting", ui.visuals().weak_text_color())
+                }
+                net::State::Idle => ("client.status.not_connected", TROUBLE),
+                net::State::Failed(_) => ("client.status.failed", TROUBLE),
             };
+            let word = say(word);
             ui.colored_label(colour, egui::RichText::new(word).strong());
             // How many peers are actually reachable, which is a different question from how
             // many players the game reports. A lobby of six with one connection is the shape
             // of a problem, and it is invisible without a number.
             ui.label(format!(
-                "· {} peer(s) connected",
-                self.link.connected_peers()
+                "· {}",
+                say_with(
+                    "client.status.peers",
+                    &[("count", &self.link.connected_peers().to_string())]
+                )
             ));
         });
         let retired;
@@ -2169,11 +2495,16 @@ impl Client {
             }
             _ => None,
         };
+        let update_trouble = match self.updates.offer() {
+            Some(updates::Offer::Trouble(why)) => Some(why.as_str()),
+            _ => None,
+        };
         for (what, trouble) in [
             (None, reader.trouble()),
-            (Some("Server"), link_trouble),
-            (Some("Hats"), self.hats.trouble()),
-            (Some("Audio"), self.audio.trouble()),
+            (Some(say("client.status.server")), link_trouble),
+            (Some(say("client.status.update")), update_trouble),
+            (Some(say("client.status.hats")), self.hats.trouble()),
+            (Some(say("client.status.audio")), self.audio.trouble()),
         ] {
             let Some(trouble) = trouble else {
                 continue;
@@ -2201,6 +2532,7 @@ impl Client {
         connected: bool,
         local_talking: bool,
         dressed: &std::collections::BTreeMap<usize, egui::TextureId>,
+        say: &dyn Fn(&str) -> String,
     ) {
         let Some((at, me)) = state
             .players
@@ -2236,6 +2568,7 @@ impl Client {
                 muted: switches.muted,
                 deafened: switches.deafened,
             },
+            say,
         );
         ui.separator();
     }
@@ -2303,6 +2636,7 @@ impl eframe::App for Client {
         }
         self.hats.pump();
         self.link.pump();
+        self.updates.pump();
         // Once a frame, and it decays on its own: a peer who stops sending is not in the
         // next one, with nothing having to notice they went quiet.
         self.speaking = self.link.take_speaking();
@@ -2376,6 +2710,10 @@ impl eframe::App for Client {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function because it is one window: the page dispatch and the main                   screen's order are the same decision, and splitting them would put the                   order in two places"
+    )]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Before the panel, because the edge has to beat whatever the panel draws under it.
@@ -2398,7 +2736,16 @@ impl eframe::App for Client {
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
-            let reload = Self::title_bar(ui, &ctx, &mut page);
+            // Scoped, so the borrow of `self.catalogue` ends here: everything below wants
+            // `self` mutably, and a translator that outlived the title bar would keep it.
+            let reload = {
+                let catalogue = self.catalogue.as_ref();
+                let say = move |key: &str| {
+                    catalogue
+                        .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+                };
+                Self::title_bar(ui, &ctx, &mut page, &say)
+            };
             self.page = page;
             // Stop then start, in that order and on one channel, so the thread does them in
             // that order: the shipped client's ⟳ reloads its renderer, and the nearest
@@ -2431,8 +2778,14 @@ impl eframe::App for Client {
                 Screen::Main => {}
             }
 
+            self.offer_the_update(ui);
+
             let Some(reader) = self.reader.as_ref() else {
-                ui.label("The game reader could not be started.");
+                let catalogue = self.catalogue.as_ref();
+                ui.label(catalogue.map_or_else(
+                    || "client.status.reader_failed".to_owned(),
+                    |catalogue| catalogue.t("client.status.reader_failed").to_owned(),
+                ));
                 return;
             };
 
@@ -2445,6 +2798,7 @@ impl eframe::App for Client {
             };
 
             ui.label(self.lobby_line(state));
+            self.say_what_the_lobby_allows(ui);
             ui.add_space(4.0);
 
             // The roster decides who is shown; this only draws them. Nothing here knows
@@ -2512,6 +2866,13 @@ impl eframe::App for Client {
                     })
                 })
                 .collect();
+            // One translator for both views. Built here rather than passed down from the
+            // panel's own, because that one's borrow of `self.catalogue` ended with the
+            // title bar -- see the scope there.
+            let catalogue = self.catalogue.as_ref();
+            let say_here = move |key: &str| {
+                catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+            };
             Self::draw_you(
                 ui,
                 state,
@@ -2519,8 +2880,9 @@ impl eframe::App for Client {
                 connected_to_server,
                 local_talking,
                 &dressed,
+                &say_here,
             );
-            acl_ui::views::main::draw(ui, &portraits);
+            acl_ui::views::main::draw(ui, &portraits, &say_here);
         });
     }
 }

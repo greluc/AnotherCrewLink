@@ -12,4 +12,5 @@
 pub mod colour;
 pub mod lobby_browser;
 pub mod main;
+pub mod platforms;
 pub mod settings;

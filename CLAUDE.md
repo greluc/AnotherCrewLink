@@ -34,7 +34,7 @@ Visual Studio with the "Desktop development with C++" workload, and Python 3.
 | `src/common` | Types and constants shared by both processes |
 | `native/` | Vendored native modules, built from C/C++ at install time |
 | `vendor/structron` | Vendored binary struct parser |
-| `static/locales` | 37 translations |
+| `static/locales` | English and German |
 | `docs/rust-port/` | Assessment and plan for a possible Rust rewrite |
 
 The server is a separate repository: `greluc/AnotherCrewLink-server`.

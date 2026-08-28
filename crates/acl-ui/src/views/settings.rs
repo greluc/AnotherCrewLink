@@ -33,6 +33,17 @@ pub enum Change {
         /// A warning to confirm before applying it, if the control has one.
         warning: Option<&'static str>,
     },
+    /// One setting goes back to the value the schema gives it.
+    ///
+    /// A `Change` of its own rather than a `Set` with the default in it, because the view
+    /// does not know what any setting defaults to and should not have to: the schema is the
+    /// one place that says, and it is the caller's.
+    Reset {
+        /// Which setting.
+        key: &'static str,
+        /// Whose it is, which is what says where it is written.
+        scope: Scope,
+    },
     /// A button was pressed. Always carries its warning; see
     /// `an_action_is_not_a_setting`.
     Run {
@@ -114,6 +125,8 @@ pub struct Context<'a> {
     /// full one: a meter that reads maximum when nothing is listening is worse than one
     /// that reads nothing.
     pub input_level: Option<f32>,
+    /// Whether a test tone is playing, which decides what the button says.
+    pub testing_speaker: bool,
     /// Whether this player may change the lobby rules: host, and in a lobby.
     pub host_may_change: bool,
     /// Whether the player is somewhere a lobby exists, which picks which of the two
@@ -208,6 +221,53 @@ fn gate_checkbox(
     }
 }
 
+/// A fixed set of values, as a combo box.
+///
+/// Lifted out of `one` so that function stays under the line limit the workspace sets. It
+/// is also the arm with the most in it: a current value to find, a label to translate for
+/// the closed box and one for every entry in the open one.
+fn choice(
+    ui: &mut Ui,
+    control: &'static Control,
+    scope: Scope,
+    options: &'static [crate::settings_screen::Choice],
+    values: &dyn Values,
+    context: &Context<'_>,
+    changes: &mut Vec<Change>,
+) {
+    let current = options
+        .iter()
+        .find(|choice| matches(choice.value, values, scope, control.key));
+    // A stored value none of the options offers shows as *something*. The launch platform
+    // is the case that made this visible: choosing a custom one leaves the picker blank,
+    // because the three built-ins are the only entries and none of them matches. A blank
+    // box reads as "nothing is chosen" when something is.
+    let shown_label = current.map_or_else(
+        || (context.t)("platform.custom"),
+        |choice| (context.t)(choice.label),
+    );
+    ComboBox::from_id_salt(control.key)
+        .selected_text(shown_label)
+        .show_ui(ui, |ui| {
+            for choice in options {
+                if ui
+                    .selectable_label(
+                        current.is_some_and(|now| now.value == choice.value),
+                        (context.t)(choice.label),
+                    )
+                    .clicked()
+                {
+                    changes.push(Change::Set {
+                        key: control.key,
+                        scope,
+                        value: as_json(choice.value),
+                        warning: control.warning,
+                    });
+                }
+            }
+        });
+}
+
 /// What the microphone is hearing, as a bar.
 ///
 /// A bar rather than a number. The question it answers is "is it hearing me", and the
@@ -243,7 +303,15 @@ fn one(
     let label = if labelled_by_its_gate {
         String::new()
     } else {
-        control.label.map(context.t).unwrap_or_default()
+        // The alternative first, if its setting is on: one slider says a different thing
+        // about the same number depending on a neighbour. See `settings_screen::Instead`.
+        control
+            .instead
+            .filter(|instead| values.bool_at(scope, instead.when))
+            .map_or_else(
+                || control.label.map(context.t).unwrap_or_default(),
+                |instead| (context.t)(instead.label),
+            )
     };
     let set = |value: Value| Change::Set {
         key: control.key,
@@ -252,10 +320,12 @@ fn one(
         warning: control.warning,
     };
     match control.kind {
-        Kind::Toggle => {
-            let mut on = values.bool_at(scope, control.key);
-            if ui.checkbox(&mut on, label).changed() {
-                changes.push(set(json!(on)));
+        Kind::Toggle { inverted } => {
+            // What the box shows, which is not always what is stored. See `Kind::Toggle`.
+            let stored = values.bool_at(scope, control.key);
+            let mut shown = stored != inverted;
+            if ui.checkbox(&mut shown, label).changed() {
+                changes.push(set(json!(shown != inverted)));
             }
         }
         Kind::Slider { min, max, step, .. } => {
@@ -268,27 +338,7 @@ fn one(
                 changes.push(set(json!(stored(control.kind, value))));
             }
         }
-        Kind::Choice(options) => {
-            let current = options
-                .iter()
-                .find(|choice| matches(choice.value, values, scope, control.key));
-            let shown_label = current.map_or_else(String::new, |choice| (context.t)(choice.label));
-            ComboBox::from_id_salt(control.key)
-                .selected_text(shown_label)
-                .show_ui(ui, |ui| {
-                    for choice in options {
-                        if ui
-                            .selectable_label(
-                                current.is_some_and(|now| now.value == choice.value),
-                                (context.t)(choice.label),
-                            )
-                            .clicked()
-                        {
-                            changes.push(set(as_json(choice.value)));
-                        }
-                    }
-                });
-        }
+        Kind::Choice(options) => choice(ui, control, scope, options, values, context, changes),
         Kind::Device { capture } => {
             let devices = if capture {
                 context.microphones
@@ -327,12 +377,29 @@ fn one(
                 });
             }
         }
+        Kind::Reset { setting } => {
+            // The schema's own value for that key, which the caller looks up: this view
+            // knows what a control is, not what any setting defaults to.
+            if ui.button(label).clicked() {
+                changes.push(Change::Reset {
+                    key: setting,
+                    scope,
+                });
+            }
+        }
         Kind::Note => {
             // Weak and wrapped: it is a rule to be read once, not a label competing with
             // the fields above it.
             ui.label(egui::RichText::new(label).weak().small());
         }
         Kind::Probe => {
+            // One button, two sentences. The shipped catalogue has both and only one was
+            // ever shown, because the tone could start and not stop.
+            let label = if control.key == "testSpeaker" && context.testing_speaker {
+                (context.t)("settings.audio.test_speaker_stop")
+            } else {
+                label
+            };
             // The same `Run`, and never a warning: a `Probe` has none by construction, and
             // `nothing_that_writes_nothing_shadows_a_setting` is what keeps it that way.
             if ui.button(label).clicked() {
@@ -399,7 +466,8 @@ fn matches(
 }
 
 /// A choice's value, as `config.json` holds it.
-fn as_json(value: crate::settings::Default_) -> Value {
+#[must_use]
+pub fn as_json(value: crate::settings::Default_) -> Value {
     use crate::settings::Default_::{Bool, Number, Text};
     match value {
         Bool(value) => json!(value),
