@@ -40,6 +40,15 @@ use acl_ui::views::{lobby_browser, main, settings};
 /// once the first has put the id in the store.
 fn run(mut view: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
     let context = egui::Context::default();
+    // Id-clash reporting is a debug-only facility by default: egui only looks for a
+    // duplicate when `Options::warn_on_id_clash` is set, and that field is initialised to
+    // `cfg!(debug_assertions)`. Under `cargo test --release` it is therefore off, and every
+    // `clashes` assertion below would pass by egui never having looked rather than by there
+    // being nothing to find -- which is the difference between a check and a decoration.
+    // It is a runtime option rather than a `cfg`, so the fix is to ask for it instead of
+    // giving up on the release profile. Do not delete this line to make a build quieter:
+    // `a_real_clash_is_seen` is what fails when it goes, and it fails for the right reason.
+    context.options_mut(|options| options.warn_on_id_clash = true);
     let mut first = context.run_ui(egui::RawInput::default(), &mut view);
     // The font atlas comes back as a texture the renderer is expected to upload, and
     // epaint panics on dropping one that nobody took. There is no renderer here, so it is
