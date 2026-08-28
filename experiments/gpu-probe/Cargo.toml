@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 # The decision this probe supplies evidence for. The probe reports what the machine has;
 # `renderer::choose` decides what to do with it, and is tested without a GPU.
-acl-ui = { path = "../../crates/acl-ui", version = "2.0.0-alpha.2" }
+acl-ui = { path = "../../crates/acl-ui", version = "2.0.0-alpha.3" }
 # Direct, and the only place in the workspace that is. Everywhere else wgpu arrives
 # through `eframe`, which is where it belongs; this probe has to enumerate adapters
 # *before* a window exists, which is not something eframe exposes.

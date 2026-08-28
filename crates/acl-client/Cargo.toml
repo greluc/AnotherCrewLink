@@ -28,14 +28,14 @@ audio = ["dep:cpal"]
 # `acl-core` is the unelevated process §3.2 describes; this crate is the binary that *is*
 # it. Separate so that no library in the workspace has to carry a GUI dependency -- in
 # particular `acl-helper`, whose tests depend on `acl-core` and have no use for a window.
-acl-core = { path = "../acl-core", version = "2.0.0-alpha.2" }
+acl-core = { path = "../acl-core", version = "2.0.0-alpha.3" }
 # The relay configuration the mesh is built from, and the connection state it reports. Both
 # are `acl-core`'s types; these are the two crates they come from.
-acl-net = { path = "../acl-net", version = "2.0.0-alpha.2" }
+acl-net = { path = "../acl-net", version = "2.0.0-alpha.3" }
 # The three steps of an update check that have no side effects: fetch, verify, decide. The
 # installing stays in the `acl-updater` binary -- it replaces this program's files, so it
 # must not be this program -- and the client only ever asks and then starts it.
-acl-updater = { path = "../acl-updater", version = "2.0.0-alpha.2" }
+acl-updater = { path = "../acl-updater", version = "2.0.0-alpha.3" }
 # To compare this build's version against the one a manifest offers. The same crate the
 # updater's policy compares with, so the two agree about what "newer" means.
 semver = "1.0"
@@ -46,8 +46,8 @@ acl-audio.workspace = true
 # versions of `cpal` in one process is two host handles fighting over one device.
 cpal = { workspace = true, optional = true }
 webrtc.workspace = true
-acl-game = { path = "../acl-game", version = "2.0.0-alpha.2" }
-acl-ui = { path = "../acl-ui", version = "2.0.0-alpha.2" }
+acl-game = { path = "../acl-game", version = "2.0.0-alpha.3" }
+acl-ui = { path = "../acl-ui", version = "2.0.0-alpha.3" }
 # The 37 locale names and the catalogue the settings screen reads its strings from.
 acl-i18n.workspace = true
 # The pinned hat collection: the commit the artwork comes from, and the only origin the

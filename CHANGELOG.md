@@ -1,5 +1,112 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.3
+
+The long one. alpha.1 was the rewrite and alpha.2 fixed what running it turned up; this is
+the release where the client stops feeling unfinished — it looks the way it is meant to,
+it can start the game, check for its own updates and write a log, and two voice rules that
+had been doing half their job since the port began now do all of it.
+
+Still an alpha, and the caveat that has survived every release below survives this one:
+**nobody has used this to talk to anybody.** Every piece is tested; the whole has not been.
+
+### Fixed — what you hear
+
+- **A vent sounded exactly like standing next to someone.** Three rules were only half
+  applied. A player in a vent, a player on a camera and an impostor on the radio were each
+  made quieter, and none of them was filtered. The volume half working is why this went
+  unnoticed for so long: somebody in a vent *was* further away. They just did not sound
+  like they were in a vent.
+
+  And once anybody had used the impostor radio, every vent and camera after it was
+  filtered the wrong way round for the rest of the session — taking the speech out and
+  leaving the hiss.
+
+- **A haunting ghost stood in the same room as everybody else.** When you are an impostor
+  and the lobby allows haunting, the dead reach you through three seconds of reverb, which
+  is how you tell a ghost from the living without looking. The volume was right and walls
+  correctly stopped blocking them. The room was missing.
+
+### Fixed — the window and the overlay
+
+- **The overlay opened on the wrong monitor.** It measured the screen in different units
+  than the game did, so on any machine not at 100% scaling it landed somewhere else — very
+  often a different display.
+
+- **"Always on top" did nothing.** The setting was stored, defaulted, translated and
+  tested, and never reached a window.
+
+- **"Show lobby code" hid it.** The tick box was drawn the wrong way round, so it did the
+  opposite of what it says.
+
+- **Every lobby rule looked unavailable to the host.** The host is the one person allowed
+  to change them, and the client greyed them out.
+
+- **Your hat and your suit were the wrong colours.** Red and blue came out swapped between
+  the game's artwork and the screen.
+
+- **The window could not be moved or resized,** and forgot whatever size you dragged it to
+  last time.
+
+- **Your speaker and microphone had no names.** The settings listed devices as blanks, two
+  tick boxes on the overlay page had no words beside them, and nothing said which version
+  you were running.
+
+- **Your crewmate's name was read from the wrong place,** and so was one field on 32-bit
+  builds of the game.
+
+### Added
+
+- **Start the game from the client.** Steam, Epic and the Microsoft Store, plus a custom
+  entry if you launch it some other way. The waiting screen has the button on it.
+
+- **A speaker test and a microphone meter.** You can now find out which device is which
+  without asking somebody to talk to you.
+
+- **A way back when the voice server does not answer.** Instead of a client sitting there,
+  you are asked, and can pick a server that does.
+
+- **It checks for its own updates** — and see the note below about which releases it can
+  see.
+
+- **A log file,** which this client had never written. If something goes wrong there is now
+  something to send.
+
+- **German, all of it.** Fourteen things the catalogue had words for and the client had
+  never said out loud are now said, in both languages.
+
+- **It tells you why it stopped working** if the voice server retires the protocol this
+  version speaks, in your own language, rather than failing to connect.
+
+### Faster
+
+Four things the client was doing far more often than anything needed it to: taking a
+snapshot of every process on the machine on every repaint, asking the operating system for
+its list of audio devices on every frame, looking up where the game is installed five times
+a second, and redrawing at a fixed rate whether or not anybody was looking. All four now
+happen when there is a reason to.
+
+### Security
+
+- **A dependency had been withdrawn.** Not a weakness in the encryption: the version in use
+  called a processor instruction from a code path that promised not to need it, which is a
+  crash on older hardware rather than a way in. Moved to the fixed release.
+
+### Still not proven
+
+- **Two people, on two machines, hearing each other.** Unchanged from alpha.1, and still
+  the one thing an alpha is for.
+
+- **Five game situations** the recordings never reached: meetings, cameras, doors, comms
+  sabotage, and what the lights do to how far you can hear. They need four people in a real
+  round.
+
+- **Updating, for this release.** The update check works, and it looks at the newest
+  release that is not marked as a pre-release. Every 2.0.0 alpha *is* marked as one, so it
+  will not find alpha.3 or its successor and will tell you that you are up to date. You
+  will have to come and get the next alpha too. This starts working by itself when 2.0.0
+  stops being a pre-release.
+
 ## v2.0.0-alpha.2
 
 Three things people found by running alpha.1, which is what an alpha is for. Still an
