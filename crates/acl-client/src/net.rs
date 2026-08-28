@@ -69,6 +69,16 @@ pub(crate) enum Command {
         client_id: i64,
         /// Whether this player is the game's host.
         is_host: bool,
+        /// When the window asked, so the worker can say how long it waited.
+        ///
+        /// Nothing else on this channel is timed and nothing else needs to be. This one is,
+        /// because it is the command the whole peer handshake waits behind -- the server
+        /// cannot tell anybody else this client is here until it lands -- and because a
+        /// queue that delayed it was ruled out on 2026-08-28 by checking the wrong thing.
+        /// The check was "there is no `Command::Signal`", which is true; the join is not a
+        /// signal and it gates every signal there will be. Two testers measured thirty
+        /// seconds to connect and this number says whether that was the queue or not.
+        asked: std::time::Instant,
     },
     /// Say whether this player is speaking, for everybody else's indicator.
     VoiceActivity(bool),
@@ -485,6 +495,7 @@ impl Link {
             player_id,
             client_id,
             is_host,
+            asked: std::time::Instant::now(),
         });
     }
 
@@ -918,7 +929,19 @@ fn obey(
             player_id,
             client_id,
             is_host,
+            asked,
         } => {
+            // How long it waited, which is the number that says whether the thirty seconds
+            // two testers measured were this queue. Nothing can be signalled to anybody
+            // before this lands: the server has not been told this client is in the lobby,
+            // so no peer is offered to and no handshake begins. A few milliseconds here and
+            // the delay is elsewhere; seconds and it was the backlog, which was fixed on
+            // 2026-08-28 after being ruled out for the wrong reason.
+            acl_core::log_info!(
+                "lobby",
+                "joining {code} after {} ms in the queue",
+                asked.elapsed().as_millis()
+            );
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.join(&code, player_id, client_id, is_host));
             }

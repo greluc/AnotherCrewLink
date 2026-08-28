@@ -483,7 +483,6 @@ impl PeerSet {
             || Arc::new(AtomicU64::new(0)),
             |existing| Arc::clone(&existing.current),
         );
-        current.store(generation.raw(), Ordering::Release);
 
         // `0.0.0.0:0` rather than a named interface: the client does not know which one a
         // player's traffic will leave by, and binding one is how a machine with a VPN or a
@@ -525,6 +524,21 @@ impl PeerSet {
         // ICE, which is the failure recorded at the top of this file.
         connection.add_track(microphone.clone()).await?;
 
+        // Only now, and that is the whole of a fix made on 2026-08-29.
+        //
+        // It used to be stored the moment the generation was worked out, before the four
+        // fallible steps above -- registering the codecs, making the track, building the
+        // connection, adding the track. `current` is shared with the *predecessor's*
+        // handler by `Arc::clone`, and `Handler::forward` drops every event whose generation
+        // is not the current one. So a failure at any of those four left the old connection
+        // in the map, still holding the old generation, while `current` had already moved
+        // past it: that peer's state changes, candidates and audio were discarded for the
+        // rest of the session. Silently. `holds` still said they were there.
+        //
+        // Raised here it is still before the predecessor is dropped, which is the ordering
+        // the generation exists for -- a late event from the connection being replaced must
+        // not be taken for one from its replacement.
+        current.store(generation.raw(), Ordering::Release);
         if let Some(previous) = self.peers.insert(
             peer.to_owned(),
             Peer {
