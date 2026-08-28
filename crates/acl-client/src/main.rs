@@ -1891,17 +1891,25 @@ impl Client {
             .map(|(id, label)| acl_ui::views::settings::Entry { id, label })
             .collect();
         let level = self.audio.input_level();
+        let testing = self.audio.testing_speaker();
+        let (may_change, menu_or_lobby) = self.who_may_change_the_rules();
         let context = acl_ui::views::settings::Context {
             t: &translate,
             input_level: level,
+            testing_speaker: testing,
             microphones: &microphones,
             speakers: &speakers,
             locales: &locales,
-            // Both false until this process has a session: nobody is host of a lobby it
-            // has not joined. Saying so is what puts the "not in a lobby" explanation on
-            // the rules rather than leaving them silently dead.
-            host_may_change: false,
-            in_menu_or_lobby: false,
+            // From the game, not hard-coded. Both were `false` -- with a comment saying
+            // that is what a client with no session looks like -- and the client has had a
+            // session and a reader for a while: every lobby rule on this screen was shown
+            // as unavailable to its host, permanently, with the "not in a lobby"
+            // explanation on it while they were in one.
+            //
+            // `Settings.tsx`'s two conditions, at line 348: in the menu, or host of a
+            // lobby that has not started.
+            host_may_change: may_change,
+            in_menu_or_lobby: menu_or_lobby,
             capturing: self.settings.capturing(),
         };
         let entries = self.custom_platforms();
@@ -1938,8 +1946,15 @@ impl Client {
                     self.catalogue = load_catalogue(&self.settings);
                 }
                 settings_page::Effect::TestSpeaker => {
-                    acl_core::log_info!("audio", "playing a test tone");
-                    self.audio.test_speaker();
+                    // The same button both ways, which is what the two catalogue keys are
+                    // for: one of them was never used because the tone could only start.
+                    if self.audio.testing_speaker() {
+                        acl_core::log_info!("audio", "stopping the test tone");
+                        self.audio.stop_testing_speaker();
+                    } else {
+                        acl_core::log_info!("audio", "playing a test tone");
+                        self.audio.test_speaker();
+                    }
                 }
                 settings_page::Effect::ResetOffsets => {
                     // The offsets belong to the helper, which owns the file and the
@@ -1959,7 +1974,12 @@ impl Client {
     /// `StartDrag`, which hands the move to the window manager rather than repositioning
     /// the window per frame — the difference is visible as smoothness and as whether snap
     /// layouts work at all.
-    fn title_bar(ui: &mut egui::Ui, ctx: &egui::Context, page: &mut Screen) -> bool {
+    fn title_bar(
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        page: &mut Screen,
+        say: &dyn Fn(&str) -> String,
+    ) -> bool {
         let bar = egui::Rect::from_min_size(
             ui.max_rect().min,
             egui::vec2(ui.max_rect().width(), TITLE_BAR),
@@ -1982,7 +2002,7 @@ impl Client {
                 // other way round -- name first -- a 250-point window pushed the buttons off
                 // the end and clipped the title mid-word as well.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕").on_hover_text("Close").clicked() {
+                    if ui.button("✕").on_hover_text(say("buttons.close")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("—").on_hover_text("Minimise").clicked() {
@@ -1991,9 +2011,12 @@ impl Client {
                     // One button rather than two, and it says where it goes rather than
                     // where you are: a gear on the settings page reads as "settings are
                     // here", which is where you already were.
+                    // Leaving the settings is what applies the three capture settings a
+                    // device can only be opened with, so the arrow says so -- which is what
+                    // `buttons.exit` is for on the shipped client.
                     let (glyph, hint) = match page {
-                        Screen::Main => ("⚙", "Settings"),
-                        Screen::Settings | Screen::Lobbies => ("⏴", "Back"),
+                        Screen::Main => ("⚙", say("settings.title")),
+                        Screen::Settings | Screen::Lobbies => ("⏴", say("buttons.exit")),
                     };
                     if ui.button(glyph).on_hover_text(hint).clicked() {
                         *page = match page {
@@ -2002,7 +2025,10 @@ impl Client {
                         };
                     }
                     if *page == Screen::Main
-                        && ui.button("🌐").on_hover_text("Public lobbies").clicked()
+                        && ui
+                            .button("🌐")
+                            .on_hover_text(say("buttons.public_lobby"))
+                            .clicked()
                     {
                         *page = Screen::Lobbies;
                     }
@@ -2198,6 +2224,24 @@ impl Client {
         ))
     }
 
+    /// Whether the lobby rules may be changed, and whether a lobby exists to explain it.
+    ///
+    /// `Settings.tsx` line 348: the rules are the host's while the round has not started,
+    /// and anybody's in the menu -- where a change is a preference for the next lobby
+    /// rather than an edit to one people are in. The second flag picks which of the two
+    /// explanations a disabled rule gives.
+    ///
+    /// No reader, or no frame yet, reads as the menu: a client that cannot see the game
+    /// should let somebody set their preferences rather than lock the page.
+    fn who_may_change_the_rules(&self) -> (bool, bool) {
+        let Some(state) = self.reader.as_ref().and_then(|reader| reader.latest()) else {
+            return (true, true);
+        };
+        let in_menu = state.game_state == acl_game::GameState::Menu;
+        let in_lobby = state.game_state == acl_game::GameState::Lobby;
+        (in_menu || (state.is_host && in_lobby), in_menu || in_lobby)
+    }
+
     /// The custom platforms the settings hold, in the shape the editor shows them.
     fn custom_platforms(&self) -> Vec<acl_ui::platforms::Entry> {
         let stored = self.settings.config();
@@ -2283,6 +2327,37 @@ impl Client {
         }
     }
 
+    /// The two lobby rules that are worth saying out loud on the main screen.
+    ///
+    /// `Voice.tsx` puts both here, and the reason is support rather than decoration: with
+    /// "only the dead talk" or "only ghosts in meetings" on, a living player hears silence
+    /// and has no way to tell that from a broken microphone. A line saying which rule is in
+    /// force is the difference between a rule and a fault.
+    ///
+    /// Only when on. A list of rules that are off is a list nobody reads.
+    fn say_what_the_lobby_allows(&self, ui: &mut egui::Ui) {
+        let stored = self.settings.config();
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        for (setting, key) in [
+            (
+                "localLobbySettings.deadOnly",
+                "settings.lobbysettings.ghost_only_warning2",
+            ),
+            (
+                "localLobbySettings.meetingGhostOnly",
+                "settings.lobbysettings.meetings_only_warning2",
+            ),
+        ] {
+            if stored.bool_at(setting) {
+                ui.label(egui::RichText::new(say(key)).small().weak());
+            }
+        }
+    }
+
     /// The lobby's code and what the game is doing, as one line.
     ///
     /// `hideCode` is applied here: `Voice.tsx` line 277 replaces the code with the word
@@ -2290,12 +2365,20 @@ impl Client {
     /// without showing which one. The menu keeps its own name — there is no code to give
     /// away, and a menu labelled LOBBY would be a lie rather than a redaction.
     fn lobby_line(&self, state: &acl_game::AmongUsState) -> String {
-        let code =
-            if self.settings.config().bool_at("hideCode") && state.lobby_code.trim() != "MENU" {
-                "LOBBY"
-            } else {
-                state.lobby_code.as_str()
-            };
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
+        let code = if state.lobby_code.trim() == "MENU" {
+            // The reader reports the word MENU, and the catalogue has it: it is a word on
+            // the screen like any other, and thirty-seven locales already translate it.
+            say("game.menu")
+        } else if self.settings.config().bool_at("hideCode") {
+            "LOBBY".to_owned()
+        } else {
+            state.lobby_code.clone()
+        };
         format!("{code} — {:?}", state.game_state)
     }
 
@@ -2589,6 +2672,10 @@ impl eframe::App for Client {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function because it is one window: the page dispatch and the main                   screen's order are the same decision, and splitting them would put the                   order in two places"
+    )]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Before the panel, because the edge has to beat whatever the panel draws under it.
@@ -2611,7 +2698,11 @@ impl eframe::App for Client {
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
-            let reload = Self::title_bar(ui, &ctx, &mut page);
+            let catalogue = self.catalogue.as_ref();
+            let say = move |key: &str| {
+                catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+            };
+            let reload = Self::title_bar(ui, &ctx, &mut page, &say);
             self.page = page;
             // Stop then start, in that order and on one channel, so the thread does them in
             // that order: the shipped client's ⟳ reloads its renderer, and the nearest
@@ -2660,6 +2751,7 @@ impl eframe::App for Client {
             };
 
             ui.label(self.lobby_line(state));
+            self.say_what_the_lobby_allows(ui);
             ui.add_space(4.0);
 
             // The roster decides who is shown; this only draws them. Nothing here knows

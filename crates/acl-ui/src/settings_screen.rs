@@ -128,6 +128,15 @@ impl Kind {
     }
 }
 
+/// A label that replaces another when a setting is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Instead {
+    /// The setting that decides.
+    pub when: &'static str,
+    /// What to show while it is on.
+    pub label: &'static str,
+}
+
 /// One control on the screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Control {
@@ -148,6 +157,13 @@ pub struct Control {
     /// control of its own, because that is what it is: `micSensitivityEnabled` has no
     /// meaning apart from the slider it enables.
     pub gate: Option<&'static str>,
+    /// A label to use instead when another setting is on.
+    ///
+    /// One control has one, and the reason is worth writing down: with `visionHearing` on,
+    /// the crew's hearing range follows their vision and this fixed distance governs only
+    /// impostors — so `Settings.tsx` calls the same slider "Impostor Voice Distance"
+    /// there. A label that lies about what a number does is worse than one that is vague.
+    pub instead: Option<Instead>,
     /// The i18n key of a warning to confirm before the change takes effect.
     ///
     /// Every one of these is a setting that has broken somebody's audio. The Electron
@@ -163,6 +179,7 @@ impl Control {
             label: Some(label),
             kind: Kind::Toggle,
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -174,6 +191,12 @@ impl Control {
     }
 
     /// A control that is only usable while another setting is on.
+    /// Uses a different label while `when` is on. See [`Instead`].
+    const fn instead_when(mut self, when: &'static str, label: &'static str) -> Self {
+        self.instead = Some(Instead { when, label });
+        self
+    }
+
     const fn gated_by(mut self, key: &'static str) -> Self {
         self.gate = Some(key);
         self
@@ -191,6 +214,7 @@ impl Control {
                 inverted: false,
             },
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -202,6 +226,7 @@ impl Control {
             label,
             kind,
             gate: None,
+            instead: None,
             warning: None,
         }
     }
@@ -254,6 +279,10 @@ const LOBBY: &[Control] = &[
         1.0,
         10.0,
         0.1,
+    )
+    .instead_when(
+        "visionHearing",
+        "settings.lobbysettings.voicedistance_impostor",
     ),
     Control::toggle("wallsBlockAudio", "settings.lobbysettings.wallsblockaudio"),
     Control::toggle("visionHearing", "settings.lobbysettings.visiononly"),
@@ -691,6 +720,16 @@ pub fn availability(
             reason: scope.unavailable(in_menu_or_lobby),
         };
     }
+    // The host of a running round cannot reset. `Settings.tsx`'s `canResetSettings` is
+    // false in exactly that case, and the reason is everyone else's: throwing away the
+    // offsets or every preference mid-round takes the host's voice out of a game the other
+    // players are still in.
+    if control.kind == Kind::Action && !host_may_change && !in_menu_or_lobby {
+        return Availability {
+            enabled: false,
+            reason: Some("settings.troubleshooting.warning"),
+        };
+    }
     Availability {
         enabled: control.gate.is_none() || gate_is_on,
         reason: None,
@@ -863,6 +902,27 @@ mod tests {
         }
     }
 
+    /// An alternative label swaps on a setting that exists.
+    ///
+    /// A `when` that is not a setting reads as always off, so the alternative would never
+    /// show and nothing would say so. Its *label* is checked by
+    /// `every_string_on_the_screen_is_in_the_english_catalogue`, which collects it.
+    #[test]
+    fn an_alternative_label_swaps_on_a_real_setting() {
+        let schema = schema();
+        for control in controls() {
+            let Some(instead) = control.instead else {
+                continue;
+            };
+            assert!(
+                schema.contains_key(instead.when),
+                "{} swaps on {}, which is not a setting",
+                control.key,
+                instead.when
+            );
+        }
+    }
+
     /// Every key this screen can write: a control's own key, and any gate it names.
     fn reachable() -> BTreeSet<&'static str> {
         let mut keys = BTreeSet::new();
@@ -1030,15 +1090,18 @@ mod tests {
             for control in section.controls {
                 wanted.extend(control.label);
                 wanted.extend(control.warning);
+                wanted.extend(control.instead.map(|instead| instead.label));
                 if let Kind::Choice(options) = control.kind {
                     wanted.extend(options.iter().map(|choice: &Choice| choice.label));
                 }
             }
         }
-        // The two tooltips a lobby control shows when it cannot be changed. They are not on
-        // a control, so nothing above would have collected them.
+        // The two tooltips a lobby control shows when it cannot be changed, and the one an
+        // action shows to the host of a running round. None is on a control, so nothing
+        // above would have collected them.
         wanted.extend(Scope::Lobby.unavailable(true));
         wanted.extend(Scope::Lobby.unavailable(false));
+        wanted.push("settings.troubleshooting.warning");
 
         let missing: Vec<&str> = wanted
             .into_iter()

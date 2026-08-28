@@ -76,8 +76,15 @@ pub fn draw(ui: &mut Ui, entries: &[Entry], context: &mut Context<'_>) -> Vec<Ed
         // program on the way to the file; see `platforms::to_stored`.
         ui.text_edit_singleline(&mut changed.path);
         if !changed.is_uri {
-            ui.label(say("settings.customplatforms.arguments"));
-            ui.text_edit_singleline(&mut changed.arguments);
+            // Behind a disclosure, as `CustomPlatformSettings.tsx` puts it: most people
+            // need a path and nothing else, and a field they will not use is one more thing
+            // to read past before the one they will.
+            egui::CollapsingHeader::new(say("settings.customplatforms.advanced"))
+                .id_salt((&entry.name, "advanced"))
+                .show(ui, |ui| {
+                    ui.label(say("settings.customplatforms.arguments"));
+                    ui.text_edit_singleline(&mut changed.arguments);
+                });
         }
         if changed != *entry {
             edits.push(Edit::Update(changed));

@@ -125,6 +125,8 @@ pub struct Context<'a> {
     /// full one: a meter that reads maximum when nothing is listening is worse than one
     /// that reads nothing.
     pub input_level: Option<f32>,
+    /// Whether a test tone is playing, which decides what the button says.
+    pub testing_speaker: bool,
     /// Whether this player may change the lobby rules: host, and in a lobby.
     pub host_may_change: bool,
     /// Whether the player is somewhere a lobby exists, which picks which of the two
@@ -236,7 +238,14 @@ fn choice(
     let current = options
         .iter()
         .find(|choice| matches(choice.value, values, scope, control.key));
-    let shown_label = current.map_or_else(String::new, |choice| (context.t)(choice.label));
+    // A stored value none of the options offers shows as *something*. The launch platform
+    // is the case that made this visible: choosing a custom one leaves the picker blank,
+    // because the three built-ins are the only entries and none of them matches. A blank
+    // box reads as "nothing is chosen" when something is.
+    let shown_label = current.map_or_else(
+        || (context.t)("platform.custom"),
+        |choice| (context.t)(choice.label),
+    );
     ComboBox::from_id_salt(control.key)
         .selected_text(shown_label)
         .show_ui(ui, |ui| {
@@ -294,7 +303,15 @@ fn one(
     let label = if labelled_by_its_gate {
         String::new()
     } else {
-        control.label.map(context.t).unwrap_or_default()
+        // The alternative first, if its setting is on: one slider says a different thing
+        // about the same number depending on a neighbour. See `settings_screen::Instead`.
+        control
+            .instead
+            .filter(|instead| values.bool_at(scope, instead.when))
+            .map_or_else(
+                || control.label.map(context.t).unwrap_or_default(),
+                |instead| (context.t)(instead.label),
+            )
     };
     let set = |value: Value| Change::Set {
         key: control.key,
@@ -374,6 +391,13 @@ fn one(
             ui.label(egui::RichText::new(label).weak().small());
         }
         Kind::Probe => {
+            // One button, two sentences. The shipped catalogue has both and only one was
+            // ever shown, because the tone could start and not stop.
+            let label = if control.key == "testSpeaker" && context.testing_speaker {
+                (context.t)("settings.audio.test_speaker_stop")
+            } else {
+                label
+            };
             // The same `Run`, and never a warning: a `Probe` has none by construction, and
             // `nothing_that_writes_nothing_shadows_a_setting` is what keeps it that way.
             if ui.button(label).clicked() {

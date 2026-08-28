@@ -105,6 +105,7 @@ fn the_settings_screen_draws() {
     }];
     let context = settings::Context {
         input_level: None,
+        testing_speaker: false,
         t: &translate,
         microphones: &devices,
         speakers: &devices,
@@ -128,6 +129,7 @@ fn the_settings_screen_draws_with_everything_disabled() {
     let translate = |key: &str| key.to_owned();
     let context = settings::Context {
         input_level: None,
+        testing_speaker: false,
         t: &translate,
         microphones: &[],
         speakers: &[],
