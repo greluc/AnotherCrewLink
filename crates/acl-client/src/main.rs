@@ -86,6 +86,38 @@ const DEFAULT_HEIGHT: i32 = 520;
 /// nothing is happening, so this is noticed within a frame of expiring.
 const SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How often the overlay is recomposed, whatever the window is repainting at.
+///
+/// [`Client::compose_overlay`] opens with `find_process("Among Us.exe")`, and that is a
+/// `CreateToolhelp32Snapshot` over every process on the machine. Measured on 2026-08-28:
+/// **18.3ms**, against 0.9ms for the window lookup after it. Eighteen milliseconds is the
+/// whole budget of a 50Hz frame, spent before anything is drawn.
+///
+/// It ran once per repaint, under a comment saying it ran at the helper's five a second.
+/// Those are the same number only while nothing moves: egui repaints on every mouse event,
+/// so dragging the window put a hundred process-table snapshots a second in front of the
+/// paint, and the window juddered under the pointer that was moving it.
+const OVERLAY_TICK: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Something that happens at most this often, however often it is asked.
+///
+/// A timestamp rather than a counter of frames, because the thing it paces is a wall-clock
+/// cadence -- the game reports five times a second -- and the frames it is asked from are
+/// however many the mouse generates.
+#[derive(Default)]
+struct Cadence(Option<std::time::Instant>);
+
+impl Cadence {
+    /// Whether it is due, and marks it done when it is.
+    fn due(&mut self, now: std::time::Instant, period: std::time::Duration) -> bool {
+        if self.0.is_some_and(|last| now.duration_since(last) < period) {
+            return false;
+        }
+        self.0 = Some(now);
+        true
+    }
+}
+
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = acl_ui::views::theme::TITLEBAR_H;
 
@@ -884,6 +916,8 @@ struct Client {
     written: Option<WindowState>,
     /// When the geometry last changed. `None` once it has been written.
     moved_at: Option<std::time::Instant>,
+    /// Holds the overlay to [`OVERLAY_TICK`]. See what it costs.
+    overlay_due: Cadence,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
@@ -1025,6 +1059,7 @@ impl Client {
             last_seen: None,
             written: None,
             moved_at: None,
+            overlay_due: Cadence::default(),
             overlay_shown: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
@@ -2784,13 +2819,16 @@ impl eframe::App for Client {
             self.write_window_state();
         }
 
-        // Composed on the same cadence the frames arrive at, which is the helper's five a
-        // second: there is nothing new to draw between them.
+        // Five times a second, and now actually five times a second: see [`OVERLAY_TICK`]
+        // for what one of these costs and what asking for it every repaint did. The tick is
+        // taken before the state, because cloning the state is itself work this does not
+        // need to do a hundred times a second either.
         #[cfg(windows)]
-        if let Some(state) = self
-            .reader
-            .as_ref()
-            .and_then(|reader| reader.latest().cloned())
+        if self.overlay_due.due(std::time::Instant::now(), OVERLAY_TICK)
+            && let Some(state) = self
+                .reader
+                .as_ref()
+                .and_then(|reader| reader.latest().cloned())
         {
             self.compose_overlay(&state);
         }
@@ -3034,6 +3072,28 @@ mod tests {
     /// binary is a console application whatever this file says: the attribute applies to
     /// the executable it is compiled into, and that is not this one. What can be checked
     /// here is that nobody has removed the line again, which is how it was lost.
+    /// A cadence lets the first through and holds the rest until its period is up.
+    ///
+    /// Driven with made-up instants rather than by sleeping, so it says something about the
+    /// arithmetic rather than about how busy the machine was.
+    #[test]
+    fn a_cadence_holds_everything_between_its_ticks() {
+        use std::time::Duration;
+
+        let period = Duration::from_millis(200);
+        let start = std::time::Instant::now();
+        let mut cadence = super::Cadence::default();
+
+        assert!(cadence.due(start, period), "the first is always due");
+        assert!(!cadence.due(start + Duration::from_millis(1), period));
+        assert!(!cadence.due(start + Duration::from_millis(199), period));
+        assert!(cadence.due(start + period, period));
+        // The next window is measured from when it last fired, not from the first ask --
+        // otherwise a burst of repaints walks the deadline forward and it never fires.
+        assert!(!cadence.due(start + period + Duration::from_millis(1), period));
+        assert!(cadence.due(start + period + period, period));
+    }
+
     #[test]
     fn the_console_window_is_still_switched_off() {
         let source = include_str!("main.rs");
