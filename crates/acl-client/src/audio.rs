@@ -985,17 +985,31 @@ fn mix(
         // rather than once: the decision above is the same for all of them -- it is
         // recomputed five times a second and describes where people are, not what the next
         // twenty milliseconds sound like -- so it is read once and the mixing repeats.
-        let behind = {
-            let depth = ready.lock().map_or(0, |queue| queue.len());
-            (TARGET_DEPTH.saturating_sub(depth) / (FRAME_SAMPLES * 2)).max(1)
-        };
-        for _ in 0..behind.min(MOST_AT_ONCE) {
+        for _ in 0..frames_wanted(ready) {
             mixer.begin();
-            let mut anything = false;
+            // Two questions, and they were one variable until 2026-08-28.
+            //
+            // `heard` is whether any peer handed over a frame. `mixed` is whether any of
+            // those frames went into the mix. They differ exactly when somebody is speaking
+            // and inaudible -- out of range, behind a wall, in a menu, between rounds -- and
+            // `next_frame` has already *taken* their packet by the time the gain says so.
+            //
+            // Ending a round on the second therefore stopped it after one packet per peer,
+            // while fifty a second kept arriving. Nothing in the jitter buffer evicts, so it
+            // grew by about a third of a second of audio for every second nobody was
+            // audible, and then froze there once somebody was: at the right speed, at the
+            // right pitch, and two seconds late for the rest of the session. Two testers
+            // measured two to three seconds and that is where it was.
+            let mut heard = false;
+            let mut anything_to_hear = false;
             for (peer, listener) in &mut listeners {
                 let Ok(true) = listener.next_frame(&mut mono) else {
                     continue;
                 };
+                // Before the gain is consulted, because the packet is already out of the
+                // buffer. What follows decides whether it is *played*, never whether it was
+                // taken.
+                heard = true;
                 let placement = placed.get(peer).copied().unwrap_or_default();
                 if placement.gain <= 0.0 && !placement.reverb {
                     // Out of range, dead, behind a wall -- whatever the rule was, it was
@@ -1041,7 +1055,7 @@ fn mix(
                     );
                 if heard_wet {
                     mixer.add(&wet);
-                    anything = true;
+                    anything_to_hear = true;
                 }
 
                 // The direct path, and it is only there when nothing replaced it: `applyEffect`
@@ -1067,27 +1081,27 @@ fn mix(
                         *slot = *sample;
                     }
                     mixer.add(&stereo);
-                    anything = true;
+                    anything_to_hear = true;
                 }
             }
-            if anything {
+            if anything_to_hear {
                 frames_made += 1;
             }
-            if !anything {
-                // Nobody had a frame to give, so there is nothing to catch up on and another
-                // round would only ask the same question again.
+            if !heard {
+                // Nobody had a frame to give, so there is nothing left to catch up on and
+                // another round would only ask the same question again. On `heard` and not
+                // and not on the other: a round that took packets and played none has still
+                // done work, and stopping there is what let the backlog build.
                 break;
             }
-            let finished = mixer.finish();
-            if let Ok(mut ready) = ready.lock() {
-                // A cap, because a speaker that has stopped consuming must not turn into a
-                // queue that grows without limit. Two hundred milliseconds is well past what
-                // any device buffers and well short of a memory problem.
-                const CAP: usize = FRAME_SAMPLES * 2 * 10;
-                if ready.len() < CAP {
-                    ready.extend(finished.iter().copied());
-                }
+            if !anything_to_hear {
+                // Every peer was silent to us this round. Their packets are consumed -- that
+                // is the point -- but there is nothing to hand the speaker, and a frame of
+                // digital silence in the queue would be a frame of latency for the next
+                // person who does speak.
+                continue;
             }
+            hand_over(ready, mixer.finish());
         }
 
         if reported.elapsed() >= std::time::Duration::from_secs(1) {
@@ -1096,6 +1110,34 @@ fn mix(
             frames_made = 0;
         }
     }
+}
+
+/// Puts one finished frame where the speaker will find it.
+///
+/// Capped, because a speaker that has stopped consuming must not turn its queue into one
+/// that grows without limit. Two hundred milliseconds is well past what any device buffers
+/// and well short of a memory problem.
+#[cfg(feature = "audio")]
+fn hand_over(ready: &Arc<Mutex<std::collections::VecDeque<f32>>>, finished: &[f32]) {
+    const CAP: usize = FRAME_SAMPLES * 2 * 10;
+    if let Ok(mut ready) = ready.lock()
+        && ready.len() < CAP
+    {
+        ready.extend(finished.iter().copied());
+    }
+}
+
+/// How many frames the speaker still wants.
+///
+/// The speaker is the clock: it drains its queue at real time whether or not a packet
+/// arrived, so this is the difference between what it holds and what it should. At least
+/// one, so a round always does something, and never more than [`MOST_AT_ONCE`] -- catching
+/// up a long gap in a single round would mix for a quarter of a second with the packet
+/// channel unattended.
+#[cfg(feature = "audio")]
+fn frames_wanted(ready: &Arc<Mutex<std::collections::VecDeque<f32>>>) -> usize {
+    let depth = ready.lock().map_or(0, |queue| queue.len());
+    (TARGET_DEPTH.saturating_sub(depth) / (FRAME_SAMPLES * 2)).clamp(1, MOST_AT_ONCE)
 }
 
 /// Says how far behind the pipeline is, once a second.
