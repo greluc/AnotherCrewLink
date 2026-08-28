@@ -164,21 +164,10 @@ impl Controls {
     /// Reads the keyboard and applies the rules.
     pub(crate) fn poll(&mut self, keys: &impl KeyState) -> State {
         if self.deafen.poll(keys) == Edge::Pressed {
-            self.state.deafened = !self.state.deafened;
-            // Deafening implies muting: `Voice.tsx` closes the microphone on either, and a
-            // player who cannot hear the lobby is not expecting to still be heard by it.
-            if self.state.deafened {
-                self.state.muted = true;
-            }
+            self.toggle_deafen();
         }
         if self.mute.poll(keys) == Edge::Pressed {
-            if self.state.deafened {
-                // The way out. See the module documentation.
-                self.state.deafened = false;
-                self.state.muted = false;
-            } else {
-                self.state.muted = !self.state.muted;
-            }
+            self.toggle_mute();
         }
         // Levels, not edges: these two are held rather than toggled.
         let _ = self.talk.poll(keys);
@@ -186,6 +175,35 @@ impl Controls {
         let _ = self.radio.poll(keys);
         self.state.on_radio = self.radio.is_down();
         self.state
+    }
+
+    /// Deafen, once.
+    ///
+    /// Its own method rather than the body of the key's arm, because there are two ways to
+    /// press it now -- the key and the button in the top row -- and a rule written twice is
+    /// a rule that gets changed once.
+    ///
+    /// Deafening implies muting: `Voice.tsx` closes the microphone on either, and a player
+    /// who cannot hear the lobby is not expecting to still be heard by it.
+    pub(crate) const fn toggle_deafen(&mut self) {
+        self.state.deafened = !self.state.deafened;
+        if self.state.deafened {
+            self.state.muted = true;
+        }
+    }
+
+    /// Mute, once, including the odd rule.
+    ///
+    /// Mute while deafened clears **both**. See the module documentation: it is the way out
+    /// for somebody who reached for the nearer key, and a button that did not do it would be
+    /// a second control with different rules.
+    pub(crate) const fn toggle_mute(&mut self) {
+        if self.state.deafened {
+            self.state.deafened = false;
+            self.state.muted = false;
+        } else {
+            self.state.muted = !self.state.muted;
+        }
     }
 
     /// What the switches say, without reading the keyboard.
@@ -221,6 +239,31 @@ mod tests {
     const F4: u16 = 0x73;
 
     /// Nothing held, nothing changed.
+    /// The buttons and the keys are the same two rules.
+    ///
+    /// They are, because the key arms call the methods the buttons call -- and this is the
+    /// check that they still do. The interesting case is the odd one: mute while deafened
+    /// clears both, and a top-row button that toggled `muted` on its own would leave
+    /// somebody deafened with the microphone open and no way back that they would find.
+    #[test]
+    fn a_button_press_and_a_key_press_are_the_same_press() {
+        for keys in [vec![], vec![0x11_u16], vec![0x12], vec![0x11, 0x12]] {
+            let mut by_key = controls();
+            let mut by_button = controls();
+            // Deafen, then mute: the pair that clears both.
+            by_key.poll(&Held(vec![0x12]));
+            by_key.poll(&Held(vec![]));
+            by_key.poll(&Held(vec![0x11]));
+            by_button.toggle_deafen();
+            by_button.toggle_mute();
+            assert_eq!(
+                by_key.state(),
+                by_button.state(),
+                "the button and the key disagree after {keys:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_client_starts_able_to_talk_and_hear() {
         let mut controls = controls();

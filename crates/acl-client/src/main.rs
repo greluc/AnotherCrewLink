@@ -2715,7 +2715,6 @@ impl Client {
             },
             say,
         );
-        ui.separator();
     }
 
     /// Everything the frame needs settled before anything is painted.
@@ -3039,6 +3038,8 @@ impl eframe::App for Client {
             // name, the lobby code, and where this client stands. §2, minus the mute and
             // deafen buttons on the right, which are not built yet.
             let me = state.players.iter().find(|player| player.is_local);
+            let switches = controls.state();
+            let mut pressed = None;
             ui.horizontal(|ui| {
                 Self::draw_you(
                     ui,
@@ -3049,22 +3050,36 @@ impl eframe::App for Client {
                     &dressed,
                     &say_here,
                 );
-                ui.vertical(|ui| {
-                    if let Some(me) = me {
-                        // Truncated rather than wrapped: a long name is worth one line and
-                        // an ellipsis, and the row below it is the code somebody is reading
-                        // aloud.
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&me.name).size(20.0)).truncate(),
+                // 30px of button and the spec's 5px of padding beside it, taken off the
+                // right before the column is given the rest. A `vertical` in a row takes
+                // the whole remainder, so built the other way round there is no width left
+                // for them to be in.
+                let column = (ui.available_width() - 35.0).max(0.0);
+                ui.allocate_ui(egui::vec2(column, ui.available_height()), |ui| {
+                    ui.vertical(|ui| {
+                        // **Your own name is not drawn**, which is a deviation from §2 --
+                        // "your name (20px, ellipsised) and the lobby code stacked centre"
+                        // -- decided by the maintainer on 2026-08-28. It is the one label
+                        // on this screen whose reader already knows what it says, and the
+                        // crewmate beside it is yours whether or not it is written out.
+                        acl_ui::views::main::lobby_code(
+                            ui,
+                            &self.lobby_code(state),
+                            me.map_or(-1, |me| i32::try_from(me.color_id).unwrap_or(-1)),
                         );
-                    }
-                    acl_ui::views::main::lobby_code(
-                        ui,
-                        &self.lobby_code(state),
-                        me.map_or(-1, |me| i32::try_from(me.color_id).unwrap_or(-1)),
-                    );
-                    self.status_lines(ui, reader);
+                        self.status_lines(ui, reader);
+                    });
                 });
+                // Against the right edge. `allocate_ui` gives back only what the column
+                // actually used, not what it was offered, so without this the pair sits
+                // against the longest line of text instead of against the window.
+                ui.add_space((ui.available_width() - 30.0).max(0.0));
+                pressed = acl_ui::views::main::draw_switches(
+                    ui,
+                    switches.muted,
+                    switches.deafened,
+                    &say_here,
+                );
             });
 
             ui.separator();
@@ -3072,6 +3087,16 @@ impl eframe::App for Client {
             self.trouble_lines(ui, reader);
             ui.add_space(4.0);
             acl_ui::views::main::draw(ui, &portraits, &say_here);
+
+            // Applied here rather than where it was pressed, which is the rule the settings
+            // screen states and the same reason: the rules of these two are not the view's.
+            // Mute while deafened clears both, and a button that wrote its own boolean
+            // would be a second set of rules to keep in step with the keys.
+            match pressed {
+                Some(acl_ui::views::main::Switch::Mute) => self.controls.toggle_mute(),
+                Some(acl_ui::views::main::Switch::Deafen) => self.controls.toggle_deafen(),
+                None => {}
+            }
         });
     }
 }

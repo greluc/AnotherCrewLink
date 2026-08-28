@@ -308,6 +308,60 @@ const OWN_ROW: f32 = OWN_AVATAR + 8.0;
 /// How much of it the crewmate takes.
 const OWN_AVATAR: f32 = 68.0;
 
+/// Which of your own switches you just pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Switch {
+    /// Your microphone.
+    Mute,
+    /// Everybody else's voice, and your microphone with it.
+    Deafen,
+}
+
+/// The two switches only you have, at the right of the top row.
+///
+/// §2: "mute and deafen icon buttons in a 2-row grid at the right with 26px of top
+/// padding". Until now they were readable and not reachable — the state was drawn on your
+/// crewmate and the only way to change it was a keyboard shortcut somebody had to know was
+/// there.
+///
+/// **This does not flip anything.** It says which one was pressed and the caller applies
+/// it, for the reason `views::settings` gives at length: the rules of these two are not the
+/// view's — mute while deafened clears both — and a control that wrote its own boolean
+/// would be a second set of rules to keep in step.
+pub fn draw_switches(
+    ui: &mut Ui,
+    muted: bool,
+    deafened: bool,
+    say: &dyn Fn(&str) -> String,
+) -> Option<Switch> {
+    let mut pressed = None;
+    ui.vertical(|ui| {
+        // The spec's 26px, which is what puts the pair beside the name and the code rather
+        // than beside the top of the crewmate.
+        ui.add_space(26.0);
+        // Three states for two icons, because of the rule in `controls`: pressing mute
+        // while deafened clears *both*, so while deafened this button is the way back and
+        // the hint has to say so rather than promising only a microphone.
+        let (mic, hint) = match (muted, deafened) {
+            (_, true) => (theme::icon::MIC_OFF, "client.buttons.undeafen"),
+            (true, false) => (theme::icon::MIC_OFF, "client.buttons.unmute"),
+            (false, false) => (theme::icon::MIC, "client.buttons.mute"),
+        };
+        if theme::icon_button(ui, mic, muted, &say(hint)).clicked() {
+            pressed = Some(Switch::Mute);
+        }
+        let (ear, hint) = if deafened {
+            (theme::icon::VOLUME_OFF, "client.buttons.undeafen")
+        } else {
+            (theme::icon::VOLUME_UP, "client.buttons.deafen")
+        };
+        if theme::icon_button(ui, ear, deafened, &say(hint)).clicked() {
+            pressed = Some(Switch::Deafen);
+        }
+    });
+    pressed
+}
+
 /// The lobby code, as `game/LobbyCode.jsx` draws it.
 ///
 /// The only monospace text in the product, and it is that because people read it aloud and
