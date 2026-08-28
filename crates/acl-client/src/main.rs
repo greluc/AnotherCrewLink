@@ -2497,13 +2497,13 @@ impl Client {
     /// LOBBY rather than blanking it, so somebody streaming shows that there *is* a lobby
     /// without showing which one. The menu keeps its own name — there is no code to give
     /// away, and a menu labelled LOBBY would be a lie rather than a redaction.
-    fn lobby_line(&self, state: &acl_game::AmongUsState) -> String {
+    fn lobby_code(&self, state: &acl_game::AmongUsState) -> String {
         let say = |key: &str| {
             self.catalogue
                 .as_ref()
                 .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
         };
-        let code = if state.lobby_code.trim() == "MENU" {
+        if state.lobby_code.trim() == "MENU" {
             // The reader reports the word MENU, and the catalogue has it: it is a word on
             // the screen like any other, and both locales translate it.
             say("game.menu")
@@ -2511,8 +2511,7 @@ impl Client {
             "LOBBY".to_owned()
         } else {
             state.lobby_code.clone()
-        };
-        format!("{code} — {:?}", state.game_state)
+        }
     }
 
     /// The one line an update gets, and the button that takes it.
@@ -2569,7 +2568,7 @@ impl Client {
     /// opened this window, and each is worth knowing about when it applies. A client with
     /// no microphone is a working client with half its voice, and it is the first thing
     /// somebody asks about when nobody can hear them.
-    fn status_strip(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
+    fn status_lines(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
         const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
 
         let say = |key: &str| {
@@ -2584,13 +2583,19 @@ impl Client {
             )
         };
 
+        // One line each, stacked, rather than the single row this was until 2026-08-28.
+        // Three phrases and a window that is 250px wide at its minimum: the row ran off the
+        // right edge and the peer count -- the one number here that answers "can anybody
+        // hear me" -- was the half that fell off it.
         ui.horizontal(|ui| {
             ui.label(say("client.status.game_reader"));
             ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
-            // The server, beside the reader. Both are things that can be down, and only one
-            // of them used to be sayable here -- a connection that never happened showed as
-            // fifteen crewmates wearing a "no connection" badge and nothing that said why.
-            ui.label(format!("· {}", say("client.status.server")));
+        });
+        // The server, under the reader. Both are things that can be down, and only one of
+        // them used to be sayable here -- a connection that never happened showed as fifteen
+        // crewmates wearing a "no connection" badge and nothing that said why.
+        ui.horizontal(|ui| {
+            ui.label(say("client.status.server"));
             let (word, colour) = match self.link.state() {
                 net::State::Connected(_) => ("client.status.connected", ui.visuals().text_color()),
                 net::State::Connecting => {
@@ -2599,19 +2604,30 @@ impl Client {
                 net::State::Idle => ("client.status.not_connected", TROUBLE),
                 net::State::Failed(_) => ("client.status.failed", TROUBLE),
             };
-            let word = say(word);
-            ui.colored_label(colour, egui::RichText::new(word).strong());
-            // How many peers are actually reachable, which is a different question from how
-            // many players the game reports. A lobby of six with one connection is the shape
-            // of a problem, and it is invisible without a number.
-            ui.label(format!(
-                "· {}",
-                say_with(
-                    "client.status.peers",
-                    &[("count", &self.link.connected_peers().to_string())]
-                )
-            ));
+            ui.colored_label(colour, egui::RichText::new(say(word)).strong());
         });
+        // How many peers are actually reachable, which is a different question from how many
+        // players the game reports. A lobby of six with one connection is the shape of a
+        // problem, and it is invisible without a number.
+        ui.label(say_with(
+            "client.status.peers",
+            &[("count", &self.link.connected_peers().to_string())],
+        ));
+    }
+
+    /// Everything that is currently wrong, one line each.
+    ///
+    /// Separate from [`Self::status_lines`] because they go in different places: the three
+    /// status lines sit in the column beside your crewmate, and a fault is full width under
+    /// the divider, where a sentence has room to be read.
+    fn trouble_lines(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
+        const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
+
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
         let retired;
         let link_trouble = match self.link.state() {
             net::State::Failed(why) => {
@@ -2936,17 +2952,16 @@ impl eframe::App for Client {
                 return;
             };
 
-            self.status_strip(ui, reader);
-
-            ui.separator();
             let Some(state) = reader.latest() else {
+                // No game yet, so no crewmate to put the status beside. It keeps its own
+                // block here, which is also where it is most worth reading: this is the
+                // screen somebody stares at when the server will not come up.
+                self.status_lines(ui, reader);
+                self.trouble_lines(ui, reader);
+                ui.separator();
                 self.waiting_for_the_game(ui);
                 return;
             };
-
-            ui.label(self.lobby_line(state));
-            self.say_what_the_lobby_allows(ui);
-            ui.add_space(4.0);
 
             // The roster decides who is shown; this only draws them. Nothing here knows
             // anything about audio yet, so the voice layer is answered with the truth as
@@ -3020,15 +3035,42 @@ impl eframe::App for Client {
             let say_here = move |key: &str| {
                 catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
             };
-            Self::draw_you(
-                ui,
-                state,
-                controls,
-                connected_to_server,
-                local_talking,
-                &dressed,
-                &say_here,
-            );
+            // The spec's top row: your crewmate on the left, and stacked beside it your
+            // name, the lobby code, and where this client stands. §2, minus the mute and
+            // deafen buttons on the right, which are not built yet.
+            let me = state.players.iter().find(|player| player.is_local);
+            ui.horizontal(|ui| {
+                Self::draw_you(
+                    ui,
+                    state,
+                    controls,
+                    connected_to_server,
+                    local_talking,
+                    &dressed,
+                    &say_here,
+                );
+                ui.vertical(|ui| {
+                    if let Some(me) = me {
+                        // Truncated rather than wrapped: a long name is worth one line and
+                        // an ellipsis, and the row below it is the code somebody is reading
+                        // aloud.
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&me.name).size(20.0)).truncate(),
+                        );
+                    }
+                    acl_ui::views::main::lobby_code(
+                        ui,
+                        &self.lobby_code(state),
+                        me.map_or(-1, |me| i32::try_from(me.color_id).unwrap_or(-1)),
+                    );
+                    self.status_lines(ui, reader);
+                });
+            });
+
+            ui.separator();
+            self.say_what_the_lobby_allows(ui);
+            self.trouble_lines(ui, reader);
+            ui.add_space(4.0);
             acl_ui::views::main::draw(ui, &portraits, &say_here);
         });
     }

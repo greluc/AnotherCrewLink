@@ -298,14 +298,75 @@ pub struct Own<'a> {
 /// How wide your own slot is.
 pub const OWN_SLOT: f32 = 96.0;
 
+/// The height the slot needs now that the name has left it.
+///
+/// The spec's top row is "your crewmate (left, ~100px column), your name and the lobby code
+/// stacked centre". The name used to be painted under the crewmate here as well, which put
+/// it on screen twice as soon as the column beside it existed.
+const OWN_ROW: f32 = OWN_AVATAR + 8.0;
+
 /// How much of it the crewmate takes.
 const OWN_AVATAR: f32 = 68.0;
+
+/// The lobby code, as `game/LobbyCode.jsx` draws it.
+///
+/// The only monospace text in the product, and it is that because people read it aloud and
+/// type it in: 28px, spaced, and never in the UI face.
+///
+/// **The shadow half of the crew pair, not the body half.** The component file says why
+/// and the type guidelines repeat it: white 28px text on a bright crew tint -- cyan, lime,
+/// yellow, white -- burns out. The shadow half is the same hue at a weight the text can
+/// sit on, so one rule covers all eighteen colours instead of four exceptions.
+///
+/// A code is a credential. `hideCode` is applied by the caller, which is where the setting
+/// is: this draws whatever it is handed.
+pub fn lobby_code(ui: &mut Ui, code: &str, color_id: i32) {
+    /// `padding: 5px`, and the same number is the plate's own top and bottom margin.
+    const PAD: i8 = 5;
+    /// `--tracking-code`, which is .02em of 28px.
+    const TRACKING: f32 = 0.56;
+
+    let (_, shadow) = colour::crew(color_id);
+    // Laid out once and then both measured and drawn, because `width: fit-content` needs a
+    // width before the frame is built and `margin: auto` needs it again to find the middle.
+    // Centring by layout does not do it: a `Frame` in a centred column still takes the
+    // column, and a six-character code came out as a bar the width of the window.
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        code,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::TextStyle::Monospace.resolve(ui.style()),
+            color: Color32::WHITE,
+            extra_letter_spacing: TRACKING,
+            ..Default::default()
+        },
+    );
+    let galley = ui.painter().layout_job(job);
+    let width = galley.size().x + f32::from(PAD) * 2.0;
+
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        egui::Frame::new()
+            .fill(shadow)
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_SM))
+            .inner_margin(PAD)
+            .outer_margin(egui::Margin {
+                top: PAD,
+                bottom: PAD,
+                ..egui::Margin::ZERO
+            })
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(galley));
+            });
+    });
+}
 
 /// Draws you.
 pub fn draw_own(ui: &mut Ui, own: &Own<'_>, say: &dyn Fn(&str) -> String) {
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_SLOT), egui::Sense::hover());
-    let centre = Pos2::new(rect.center().x, rect.min.y + OWN_AVATAR / 2.0);
+        ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_ROW), egui::Sense::hover());
+    let centre = rect.center();
 
     if let Some(art) = own.portrait.art {
         let square = Rect::from_center_size(centre, Vec2::splat(OWN_AVATAR));
@@ -328,17 +389,6 @@ pub fn draw_own(ui: &mut Ui, own: &Own<'_>, say: &dyn Fn(&str) -> String) {
         ui.painter()
             .circle_stroke(centre, OWN_AVATAR / 2.0 - 1.0, Stroke::new(2.5, colour));
     }
-
-    // Your name, where the words "muted" and "deafened" used to be stacked. The slot
-    // already reserves the room and everybody else's row has one, so leaving yours blank
-    // made the list look like it started with an unlabelled crewmate.
-    ui.painter().text(
-        Pos2::new(rect.center().x, rect.max.y - 10.0),
-        Align2::CENTER_CENTER,
-        own.portrait.name,
-        FontId::proportional(12.0),
-        ui.visuals().text_color(),
-    );
 
     response.on_hover_text(describe_own(own, say));
 }
