@@ -26,6 +26,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Ui, Vec2};
 
 use crate::roster::{Link, Shown};
 use crate::views::colour;
+use crate::views::theme;
 
 /// One player, as this view needs them.
 ///
@@ -149,96 +150,30 @@ fn dressed(ui: &Ui, centre: Pos2, art: egui::TextureId) {
     );
 }
 
-/// What speaking looks like.
-///
-/// `#2ecc71`, which is the colour `Voice.tsx` passes as `borderColor` — the shipped client
-/// draws a ring for exactly one thing, and this is it.
-const SPEAKING: Color32 = Color32::from_rgb(0x2e, 0xcc, 0x71);
-
 /// The ring round a crewmate, or `None` when there is nothing to say.
 ///
-/// Speaking, and nothing else. That is `Avatar.tsx`'s own rule —
-/// `borderColor={talking ? borderColor : 'transparent'}` — and it is what makes the ring
-/// readable: it means one thing, it changes several times a second, and it is the thing
-/// somebody is watching for. The connection is a [`Badge`], which is where the shipped
-/// client puts it too.
+/// **A ring, not a badge**, and that is this GUI's answer rather than the shipped client's.
+/// `design/guidelines/client-gui-spec.md` §4 gives both: Electron draws a `wifi_off` badge
+/// where the Rust port draws a `#d25a5a` ring, and `egui-implementation.md` §3 says the
+/// same of `StatusBadge` — "egui draws a ring, not a badge; keep the pairing of colour and
+/// hover text". A badge sits on top of the artwork and hides the thing it is about; a ring
+/// goes outside it.
+///
+/// Speaking wins, and the precedence is the point: it is the one state that changes several
+/// times a second and the one somebody is watching for. Below it the connection, which does
+/// not change while you look at it.
+///
+/// A healthy connection draws nothing. "An indicator that is always on is one nobody
+/// reads."
 const fn ring_for(state: Shown) -> Option<Color32> {
-    if state.talking { Some(SPEAKING) } else { None }
-}
-
-/// The red disc the shipped client puts a status icon on, and the darker ring round it.
-const ALARM: (Color32, Color32) = (
-    Color32::from_rgb(0xea, 0x3c, 0x2a),
-    Color32::from_rgb(0x69, 0x0a, 0x00),
-);
-
-/// The orange one, which it uses for exactly one state.
-const WARNING: (Color32, Color32) = (
-    Color32::from_rgb(0xe6, 0x7e, 0x22),
-    Color32::from_rgb(0x69, 0x49, 0x00),
-);
-
-/// One status icon on a crewmate.
-pub struct Badge {
-    /// What is drawn on it.
-    glyph: &'static str,
-    /// The disc.
-    fill: Color32,
-    /// Its rim.
-    border: Color32,
-}
-
-/// The one status icon a crewmate gets, if any.
-///
-/// Transliterated from `Avatar.tsx`'s switch, including that it is *one* icon rather than a
-/// row of them and including the order: being unreachable is said instead of being muted,
-/// not as well as, because a player you cannot reach is not muted — you simply cannot hear
-/// them either way, and two badges would make you look for two problems.
-///
-/// The glyphs are not the shipped client's. It draws Material icons; this has the fonts egui
-/// ships, so each is the nearest thing on the same red disc — which is what carries the
-/// meaning in both. The words are still in the hover text.
-#[must_use]
-pub fn badge_for(state: Shown, muted: bool, deafened: bool) -> Option<Badge> {
+    if state.talking {
+        return Some(theme::TALKING);
+    }
     match state.link {
-        Link::Disconnected => Some(Badge {
-            // `WifiOff`: nothing is getting through.
-            glyph: "📶",
-            fill: ALARM.0,
-            border: ALARM.1,
-        }),
-        Link::Silent => Some(Badge {
-            // `LinkOff`: connected, and carrying no voice.
-            glyph: "🔗",
-            fill: WARNING.0,
-            border: WARNING.1,
-        }),
-        Link::Connected if deafened => Some(Badge {
-            glyph: "🔇",
-            fill: ALARM.0,
-            border: ALARM.1,
-        }),
-        Link::Connected if muted => Some(Badge {
-            glyph: "🎤",
-            fill: ALARM.0,
-            border: ALARM.1,
-        }),
+        Link::Disconnected => Some(theme::LINK_DOWN),
+        Link::Silent => Some(theme::LINK_SILENT),
         Link::Connected => None,
     }
-}
-
-/// Draws one, centred on the crewmate the way the shipped client centres it.
-fn draw_badge(ui: &Ui, centre: Pos2, badge: &Badge, radius: f32) {
-    let painter = ui.painter();
-    painter.circle_filled(centre, radius, badge.fill);
-    painter.circle_stroke(centre, radius, Stroke::new(2.0, badge.border));
-    painter.text(
-        centre,
-        Align2::CENTER_CENTER,
-        badge.glyph,
-        FontId::proportional(radius * 1.2),
-        Color32::WHITE,
-    );
 }
 
 /// The crewmate as shapes, for when there is no artwork.
@@ -294,20 +229,17 @@ fn indicators(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
         painter.circle_stroke(centre, AVATAR / 2.0 - 1.0, Stroke::new(2.0, colour));
     }
 
-    // Muted and deafened are false here: those are things only you are, and everybody in
-    // this list is somebody else. What a peer can be is unreachable or voiceless, which is
-    // what `link` carries.
-    if let Some(badge) = badge_for(portrait.state, false, false) {
-        draw_badge(ui, centre, &badge, AVATAR * 0.22);
-    }
-
+    // The impostor radio, drawn white over the lower part of the avatar, which is where
+    // the shipped client puts its one bespoke SVG. An icon rather than the 📻 that stood
+    // here: the design system's rule is "No emoji", and an emoji is drawn by whatever font
+    // the machine happens to have.
     if portrait.state.using_radio {
         painter.text(
             Pos2::new(centre.x, centre.y + radius),
             Align2::CENTER_CENTER,
-            "📻",
-            FontId::proportional(12.0),
-            ui.visuals().text_color(),
+            theme::icon::RADIO,
+            theme::icon_font(14.0),
+            Color32::WHITE,
         );
     }
 }
@@ -366,14 +298,129 @@ pub struct Own<'a> {
 /// How wide your own slot is.
 pub const OWN_SLOT: f32 = 96.0;
 
+/// The height the slot needs now that the name has left it.
+///
+/// The spec's top row is "your crewmate (left, ~100px column), your name and the lobby code
+/// stacked centre". The name used to be painted under the crewmate here as well, which put
+/// it on screen twice as soon as the column beside it existed.
+const OWN_ROW: f32 = OWN_AVATAR + 8.0;
+
 /// How much of it the crewmate takes.
 const OWN_AVATAR: f32 = 68.0;
+
+/// Which of your own switches you just pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Switch {
+    /// Your microphone.
+    Mute,
+    /// Everybody else's voice, and your microphone with it.
+    Deafen,
+}
+
+/// The two switches only you have, at the right of the top row.
+///
+/// §2: "mute and deafen icon buttons in a 2-row grid at the right with 26px of top
+/// padding". Until now they were readable and not reachable — the state was drawn on your
+/// crewmate and the only way to change it was a keyboard shortcut somebody had to know was
+/// there.
+///
+/// **This does not flip anything.** It says which one was pressed and the caller applies
+/// it, for the reason `views::settings` gives at length: the rules of these two are not the
+/// view's — mute while deafened clears both — and a control that wrote its own boolean
+/// would be a second set of rules to keep in step.
+pub fn draw_switches(
+    ui: &mut Ui,
+    muted: bool,
+    deafened: bool,
+    say: &dyn Fn(&str) -> String,
+) -> Option<Switch> {
+    let mut pressed = None;
+    ui.vertical(|ui| {
+        // The spec's 26px, which is what puts the pair beside the name and the code rather
+        // than beside the top of the crewmate.
+        ui.add_space(26.0);
+        // Three states for two icons, because of the rule in `controls`: pressing mute
+        // while deafened clears *both*, so while deafened this button is the way back and
+        // the hint has to say so rather than promising only a microphone.
+        let (mic, hint) = match (muted, deafened) {
+            (_, true) => (theme::icon::MIC_OFF, "client.buttons.undeafen"),
+            (true, false) => (theme::icon::MIC_OFF, "client.buttons.unmute"),
+            (false, false) => (theme::icon::MIC, "client.buttons.mute"),
+        };
+        if theme::icon_button(ui, mic, muted, &say(hint)).clicked() {
+            pressed = Some(Switch::Mute);
+        }
+        let (ear, hint) = if deafened {
+            (theme::icon::VOLUME_OFF, "client.buttons.undeafen")
+        } else {
+            (theme::icon::VOLUME_UP, "client.buttons.deafen")
+        };
+        if theme::icon_button(ui, ear, deafened, &say(hint)).clicked() {
+            pressed = Some(Switch::Deafen);
+        }
+    });
+    pressed
+}
+
+/// The lobby code, as `game/LobbyCode.jsx` draws it.
+///
+/// The only monospace text in the product, and it is that because people read it aloud and
+/// type it in: 28px, spaced, and never in the UI face.
+///
+/// **The shadow half of the crew pair, not the body half.** The component file says why
+/// and the type guidelines repeat it: white 28px text on a bright crew tint -- cyan, lime,
+/// yellow, white -- burns out. The shadow half is the same hue at a weight the text can
+/// sit on, so one rule covers all eighteen colours instead of four exceptions.
+///
+/// A code is a credential. `hideCode` is applied by the caller, which is where the setting
+/// is: this draws whatever it is handed.
+pub fn lobby_code(ui: &mut Ui, code: &str, color_id: i32) {
+    /// `padding: 5px`, and the same number is the plate's own top and bottom margin.
+    const PAD: i8 = 5;
+    /// `--tracking-code`, which is .02em of 28px.
+    const TRACKING: f32 = 0.56;
+
+    let (_, shadow) = colour::crew(color_id);
+    // Laid out once and then both measured and drawn, because `width: fit-content` needs a
+    // width before the frame is built and `margin: auto` needs it again to find the middle.
+    // Centring by layout does not do it: a `Frame` in a centred column still takes the
+    // column, and a six-character code came out as a bar the width of the window.
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        code,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::TextStyle::Monospace.resolve(ui.style()),
+            color: Color32::WHITE,
+            extra_letter_spacing: TRACKING,
+            ..Default::default()
+        },
+    );
+    let galley = ui.painter().layout_job(job);
+    let width = galley.size().x + f32::from(PAD) * 2.0;
+
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        egui::Frame::new()
+            .fill(shadow)
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_SM))
+            .inner_margin(PAD)
+            .outer_margin(egui::Margin {
+                top: PAD,
+                bottom: PAD,
+                ..egui::Margin::ZERO
+            })
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(galley));
+            });
+    });
+}
 
 /// Draws you.
 pub fn draw_own(ui: &mut Ui, own: &Own<'_>, say: &dyn Fn(&str) -> String) {
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_SLOT), egui::Sense::hover());
-    let centre = Pos2::new(rect.center().x, rect.min.y + OWN_AVATAR / 2.0);
+        ui.allocate_exact_size(Vec2::new(OWN_SLOT, OWN_ROW), egui::Sense::hover());
+    let centre = rect.center();
 
     if let Some(art) = own.portrait.art {
         let square = Rect::from_center_size(centre, Vec2::splat(OWN_AVATAR));
@@ -396,24 +443,6 @@ pub fn draw_own(ui: &mut Ui, own: &Own<'_>, say: &dyn Fn(&str) -> String) {
         ui.painter()
             .circle_stroke(centre, OWN_AVATAR / 2.0 - 1.0, Stroke::new(2.5, colour));
     }
-
-    // The same icon everybody else gets, with the two states only you can be in. It
-    // replaces the words "muted" and "deafened" under the avatar: they said the same thing
-    // in a place nobody was looking, and the shipped client puts them here.
-    if let Some(badge) = badge_for(own.portrait.state, own.muted, own.deafened) {
-        draw_badge(ui, centre, &badge, OWN_AVATAR * 0.22);
-    }
-
-    // Your name, where the words "muted" and "deafened" used to be stacked. The slot
-    // already reserves the room and everybody else's row has one, so leaving yours blank
-    // made the list look like it started with an unlabelled crewmate.
-    ui.painter().text(
-        Pos2::new(rect.center().x, rect.max.y - 10.0),
-        Align2::CENTER_CENTER,
-        own.portrait.name,
-        FontId::proportional(12.0),
-        ui.visuals().text_color(),
-    );
 
     response.on_hover_text(describe_own(own, say));
 }
@@ -441,11 +470,9 @@ fn describe_own(own: &Own<'_>, say: &dyn Fn(&str) -> String) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{
-        ALARM, Portrait, SLOT, SPEAKING, WARNING, badge_for, describe, height_for, ring_for,
-        slot_rect,
-    };
+    use super::{Portrait, SLOT, describe, height_for, ring_for, slot_rect};
     use crate::roster::{Link, Shown};
+    use crate::views::theme;
     use egui::Pos2;
 
     /// A tenth of a pixel. These are laid-out coordinates, so exact equality is a test
@@ -464,68 +491,44 @@ mod tests {
         for link in [Link::Connected, Link::Silent, Link::Disconnected] {
             assert_eq!(
                 ring_for(shown(link, true, true)),
-                Some(SPEAKING),
+                Some(theme::TALKING),
                 "talking over {link:?}"
             );
         }
     }
 
-    /// A quiet player gets no ring at all now.
+    /// A quiet player still says what their connection is, and a good one says nothing.
     ///
-    /// The connection moved to a badge, which is where `Avatar.tsx` has always had it. A
-    /// ring that meant two things meant neither reliably.
+    /// The design system gives this GUI a ring where the shipped client draws a badge —
+    /// `client-gui-spec.md` §4, and `egui-implementation.md` §3 in as many words: "egui
+    /// draws a ring, not a badge". A badge sits on the artwork and hides the thing it is
+    /// about.
     #[test]
-    fn a_quiet_player_has_no_ring() {
-        for link in [Link::Connected, Link::Silent, Link::Disconnected] {
-            assert_eq!(
-                ring_for(shown(link, false, true)),
-                None,
-                "quiet on {link:?}"
-            );
-        }
+    fn a_quiet_player_shows_the_connection_as_a_ring() {
+        assert_eq!(
+            ring_for(shown(Link::Disconnected, false, true)),
+            Some(theme::LINK_DOWN)
+        );
+        assert_eq!(
+            ring_for(shown(Link::Silent, false, true)),
+            Some(theme::LINK_SILENT)
+        );
+        // "An indicator that is always on is one nobody reads."
+        assert_eq!(ring_for(shown(Link::Connected, false, true)), None);
     }
 
-    /// One badge, and being unreachable is said instead of being muted rather than as well.
+    /// The three ring colours are three, and they are the system's.
     ///
-    /// The order is `Avatar.tsx`'s switch. Two badges would have somebody looking for two
-    /// problems where there is one: a peer you cannot reach is not also muted, you simply
-    /// cannot hear them either way.
+    /// Two states sharing a colour is two states nobody can tell apart, and a colour that
+    /// is not a token is one nobody chose.
     #[test]
-    fn the_connection_is_said_before_the_microphone() {
-        let disconnected = badge_for(shown(Link::Disconnected, false, true), true, true)
-            .expect("a disconnected peer has something to say");
-        assert_eq!(disconnected.fill, ALARM.0);
-        let silent = badge_for(shown(Link::Silent, false, true), true, true)
-            .expect("a voiceless peer has something to say");
-        assert_eq!(silent.fill, WARNING.0, "no voice is the orange one");
-        assert_ne!(
-            disconnected.glyph, silent.glyph,
-            "unreachable and voiceless are different states"
-        );
-    }
-
-    /// Deafened outranks muted, and a working quiet connection says nothing at all.
-    #[test]
-    fn your_own_states_are_ordered_and_optional() {
-        let state = shown(Link::Connected, false, true);
-        assert!(badge_for(state, false, false).is_none(), "nothing is wrong");
-        let muted = badge_for(state, true, false).expect("muted shows");
-        let deafened = badge_for(state, true, true).expect("deafened shows");
-        assert_ne!(
-            muted.glyph, deafened.glyph,
-            "deafened is not drawn as muted, and it wins when both are set"
-        );
-    }
-
-    /// A quiet player says what their connection is, and a good one says nothing.
-    #[test]
-    fn a_quiet_player_shows_the_connection() {
-        // As a badge, not as a ring: the ring is the speaking colour or nothing.
-        for link in [Link::Silent, Link::Disconnected] {
-            assert!(badge_for(shown(link, false, true), false, false).is_some());
-            assert_ne!(ring_for(shown(link, false, true)), Some(SPEAKING));
+    fn the_three_rings_are_distinct_tokens() {
+        let all = [theme::TALKING, theme::LINK_DOWN, theme::LINK_SILENT];
+        for (at, one) in all.iter().enumerate() {
+            for other in all.iter().skip(at + 1) {
+                assert_ne!(one, other, "two states share a ring colour");
+            }
         }
-        assert!(badge_for(shown(Link::Connected, false, true), false, false).is_none());
     }
 
     fn shown(link: Link, talking: bool, alive: bool) -> Shown {

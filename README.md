@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/images/logos/sizes/256-BCL-Logo-shadow.png" alt="AnotherCrewLink" width="128">
+  <img src="assets/logo.svg" alt="AnotherCrewLink" width="320">
 </p>
 
 <h1 align="center">AnotherCrewLink</h1>

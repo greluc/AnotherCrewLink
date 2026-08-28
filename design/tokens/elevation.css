@@ -1,0 +1,9 @@
+/* There is no shadow system. Depth comes from flat value steps, a 2px border
+   and — in the in-game meeting overlay — a coloured glow keyed to the player. */
+:root{
+  --shadow-none:none;
+  --glow-meeting:0 0 8px 8px var(--acl-talking);   /* pattern: 0 0 h/100 h/100 <crew colour> */
+  --blur-scrim:blur(4px); /* @kind other */                          /* the settings panel, and only it */
+  --dead-fade:.35; /* @kind other */                                 /* acl-ui gamma_multiply for a dead player */
+  --dead-tint-alpha:90; /* @kind other */                            /* from_white_alpha for dead artwork */
+}

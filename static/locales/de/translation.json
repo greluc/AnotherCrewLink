@@ -1,208 +1,212 @@
 {
-	"settings": {
-		"title": "Einstellungen",
-		"language": "Sprache",
-		"warning": "Bist du sicher?",
-		"lobbysettings": {
-			"title": "Lobby-Einstellungen",
-			"gamehostonly": "Kann nur vom Host bearbeitet werden!",
-			"inlobbyonly": "Kann nur in der Lobby geändert werden!",
-			"voicedistance": "Stimmwahrnehmungsradius",
-			"voicedistance_impostor": "Impostor-Stimmwahrnehmungsradius",
-			"wallsblockaudio": "Wände blockieren Audio",
-			"visiononly": "Spieler nur in Sichtweite hören",
-			"impostorshearsghost": "Impostoren hören die Geister",
-			"hear_imposters_invents": "Crew hört Impostoren in Vents/Schächten",
-			"private_talk_invents": "Privatgespräche in Vents/Schächten",
-			"comms_sabotage_audio": "Kommunikationssabotage verhindert Unterhaltungen",
-			"hear_through_cameras": "Durch Kameras hören",
-			"ghost_only": "Nur die Geister können sprechen/hören",
-			"ghost_only_warning": "Dies deaktiviert das Audio für lebende Spieler.",
-			"ghost_only_warning2": "„Nur die Geister können sprechen“ ist aktiv.",
-			"meetings_only": "Audio nur in Meetings/Lobby",
-			"meetings_only_warning": "Dies deaktiviert das Audio für lebende Spieler außerhalb von Meetings.",
-			"meetings_only_warning2": "„Audio nur in Meetings/Lobby“ ist aktiv.",
-			"impostor_radio": "Impostor-Funk",
-			"public_lobby": {
-				"change_settings": "Lobbyinfo ändern",
-				"title": "Titel",
-				"enabled": "Diese Lobby ist öffentlich",
-				"mods": "Mods",
-				"language": "Sprache",
-				"enable_warning": "Wenn aktiviert, ist deine Lobby für andere AnotherCrewLink-Nutzer sichtbar!",
-				"ban_warning": "Unangebrachter Text führt zu einer Sperre auf AnotherCrewLink."
-			}
-		},
-		"customplatforms": {
-			"title": "Benutzerdefinierte Plattform",
-			"platform_title": "Titel",
-			"path": "EXE-Pfad",
-			"uri": "URI-Link",
-			"advanced": "Erweitert",
-			"arguments": "Parameter"
-		},
-		"audio": {
-			"title": "Audio",
-			"microphone": "Mikrofon",
-			"speaker": "Lautsprecher",
-			"voice_activity": "Sprachaktivität",
-			"push_to_talk": "Push-to-Talk",
-			"push_to_mute": "Push-to-Mute",
-			"microphone_volume": "Mikrofonlautstärke",
-			"microphone_sens": "Mikrofonempfindlichkeit",
-			"microphone_sens_warning": "Falls die Empfindlichkeit zu niedrig eingestellt ist, kann es zu Problemen führen.",
-			"mastervolume": "Hauptlautstärke",
-			"crewvolume": "Crew-Lautstärke wenn tot",
-			"ghostvolumeasimpostor": "Lautstärke der Geister als Impostor",
-			"test_speaker_start": "Lautsprecher testen",
-			"test_speaker_stop": "Lautsprechertest stoppen"
-		},
-		"keyboard": {
-			"title": "Tastenkürzel",
-			"push_to_talk": "Push-to-Talk",
-			"mute": "Stummschalten",
-			"deafen": "Ausgabe aus",
-			"impostor_radio": "Impostor-Funk"
-		},
-		"overlay": {
-			"title": "Overlay",
-			"always_on_top": "AnotherCrewLink immer im Vordergrund",
-			"enabled": "Overlay aktivieren",
-			"compact": "Kompaktes Overlay",
-			"meeting": "Meeting-Overlay",
-			"pos": "Overlay-Position",
-			"locations": {
-				"hidden": "Versteckt",
-				"top": "Oben zentriert",
-				"bottom": "Unten links",
-				"right": "Rechts",
-				"right1": "Rechts mit Hintergrund",
-				"left": "Links",
-				"left1": "Links mit Hintergrund"
-			}
-		},
-		"advanced": {
-			"title": "Erweitert",
-			"nat_fix": "NAT-Fix",
-			"nat_fix_warning": "Behebt Probleme bezüglich NAT, kann jedoch Verzögerungen verursachen, da die Verbindung nicht direkt (P2P), sondern über einen Server aufgebaut wird.",
-			"change_server": "Sprachserver wechseln",
-			"voice_server": "Sprachserver",
-			"invalid_url": "Ungültige URL",
-			"voice_server_warning": "Diese Option ist nur für fortgeschrittene Benutzer. Andere Server können deine Daten stehlen oder AnotherCrewLink zum Absturz bringen.",
-			"reset_default": "Auf Standard zurücksetzen"
-		},
-		"beta": {
-			"title": "BETA/DEBUG",
-			"vad_enabled": "VAD einschalten",
-			"hardware_acceleration": "Hardwarebeschleunigung",
-			"hardware_acceleration_warning": "Dies deaktiviert die Hardwarebeschleunigung (was die CPU-Nutzung erhöhen kann)",
-			"vad_enabled_warning": "Falls VAD deaktiviert ist, wird nicht angezeigt, wer derzeit spricht.",
-			"echocancellation": "Echounterdrückung",
-			"noiseSuppression": "Geräuschunterdrückung",
-			"spatial_audio": "Räumliches Audio",
-			"oldsampledebug": "Samplerate-Debug",
-			"oldsampledebug_warning": "Dies ist eine Testfunktion, die nur auf Anfrage aktiviert ist."
-		},
-		"streaming": {
-			"title": "Streamingeinstellungen",
-			"hidecode": "Lobby-Code anzeigen",
-			"voice_server_comp": "VS-Kompatibilitätsmodus",
-			"voice_server_comp_warning": "Es wird empfohlen, den Sprachserver auf einen AnotherCrewLink Voiceserver (z.B. https://bettercrewl.ink) zu ändern."
-		},
-		"troubleshooting": {
-			"title": "Fehlerbehebung",
-			"restore": "Einstellungen zurücksetzen",
-			"restore_warning": "Dadurch werden ALLE Einstellungen auf die Standardwerte zurückgesetzt.",
-			"warning": "Nicht als Host im Spiel verfügbar!",
-			"reset_offsets": "Spiel-Offsets zurücksetzen",
-			"reset_offsets_warning": "Verwirft die heruntergeladenen Spiel-Offsets, greift auf die in dieser Version enthaltenen zurück und lädt sie anschließend neu. Hilft, wenn die App das Spiel nach einem Update nicht mehr richtig ausliest.",
-			"reset_offsets_done": "Offsets zurückgesetzt. Aktiv ist jetzt das Paket für {{version}}."
-		}
-	},
-	"lobbybrowser": {
-		"header": "Öffentliche Lobbys",
-		"code": "Lobbycode",
-		"code_tooltips": {
-			"in_progress": "Spiel läuft",
-			"full_lobby": "Lobby ist voll",
-			"incompatible": "Inkompatible Mods",
-			"and": "und"
-		},
-		"list": {
-			"title": "Titel",
-			"host": "Host",
-			"players": "Spieler",
-			"mods": "Mods",
-			"language": "Sprache"
-		}
-	},
-	"buttons": {
-		"default": "Standard",
-		"confirm": "OK",
-		"cancel": "Abbrechen",
-		"close": "Schließen",
-		"exit": "Einstellungen verlassen, um Änderungen anzuwenden",
-		"public_lobby": "Öffentliche Lobbys",
-		"delete": "Löschen",
-		"file_select": "Datei auswählen"
-	},
-	"game": {
-		"menu": "MENÜ",
-		"open": "Öffnen mit",
-		"open_error": "Starte Among Us manuell.",
-		"waiting": "Warten auf Among Us",
-		"error": "FEHLER",
-		"error_admin": "Konnte keine Verbindung zu \"Among Us\" herstellen.\nBitte AnotherCrewLink mit Administratorrechten neu starten.",
-		"error_platform": "Keine Plattform erkannt",
-		"error_unsupport": "Deine Version von Among Us wird nicht von AnotherCrewLink unterstützt.",
-		"error_retired": "Diese Version von AnotherCrewLink wird nicht mehr unterstützt. Bitte aktualisiere, um den Sprachchat weiter nutzen zu können."
-	},
-	"platform": {
-		"steam": "Steam",
-		"epicgames": "Epic Games",
-		"microsoft": "Microsoft",
-		"custom": "Benutzerdefiniert"
-	},
-	"translator_name": "KadenBiel, SirBuvex, Jeddunk und Fauli1221",
-	"client": {
-		"status": {
-			"game_reader": "Spielanbindung:",
-			"server": "Server:",
-			"peers": "{{count}} Gegenstellen verbunden",
-			"connected": "verbunden",
-			"connecting": "verbinde …",
-			"not_connected": "nicht verbunden",
-			"failed": "fehlgeschlagen",
-			"reader_failed": "Die Spielanbindung konnte nicht gestartet werden.",
-			"hats": "Hüte",
-			"audio": "Audio",
-			"update": "Aktualisierung"
-		},
-		"update": {
-			"available": "Version {{version}} ist verfügbar.",
-			"install": "Aktualisieren und neu starten"
-		},
-		"buttons": {
-			"try_again": "Erneut versuchen",
-			"minimise": "Minimieren",
-			"reload": "Neu laden: Spielanbindung erneut starten"
-		},
-		"lobby": {
-			"nobody_else": "Sonst ist noch niemand hier.",
-			"connecting": "Verbinde …"
-		},
-		"player": {
-			"no_connection": "keine Verbindung",
-			"no_audio": "verbunden, kein Ton",
-			"connected": "verbunden",
-			"speaking": "spricht",
-			"dead": "tot",
-			"radio": "auf dem Impostor-Funk"
-		},
-		"you": {
-			"not_connected": "nicht mit dem Server verbunden",
-			"deafened": "Ausgabe aus – du hörst niemanden und niemand hört dich",
-			"muted": "stummgeschaltet – niemand hört dich"
-		}
-	}
+  "settings": {
+    "title": "Einstellungen",
+    "language": "Sprache",
+    "warning": "Bist du sicher?",
+    "lobbysettings": {
+      "title": "Lobby-Einstellungen",
+      "gamehostonly": "Kann nur vom Host bearbeitet werden!",
+      "inlobbyonly": "Kann nur in der Lobby geändert werden!",
+      "voicedistance": "Stimmwahrnehmungsradius",
+      "voicedistance_impostor": "Impostor-Stimmwahrnehmungsradius",
+      "wallsblockaudio": "Wände blockieren Audio",
+      "visiononly": "Spieler nur in Sichtweite hören",
+      "impostorshearsghost": "Impostoren hören die Geister",
+      "hear_imposters_invents": "Crew hört Impostoren in Vents/Schächten",
+      "private_talk_invents": "Privatgespräche in Vents/Schächten",
+      "comms_sabotage_audio": "Kommunikationssabotage verhindert Unterhaltungen",
+      "hear_through_cameras": "Durch Kameras hören",
+      "ghost_only": "Nur die Geister können sprechen/hören",
+      "ghost_only_warning": "Dies deaktiviert das Audio für lebende Spieler.",
+      "ghost_only_warning2": "„Nur die Geister können sprechen“ ist aktiv.",
+      "meetings_only": "Audio nur in Meetings/Lobby",
+      "meetings_only_warning": "Dies deaktiviert das Audio für lebende Spieler außerhalb von Meetings.",
+      "meetings_only_warning2": "„Audio nur in Meetings/Lobby“ ist aktiv.",
+      "impostor_radio": "Impostor-Funk",
+      "public_lobby": {
+        "change_settings": "Lobbyinfo ändern",
+        "title": "Titel",
+        "enabled": "Diese Lobby ist öffentlich",
+        "mods": "Mods",
+        "language": "Sprache",
+        "enable_warning": "Wenn aktiviert, ist deine Lobby für andere AnotherCrewLink-Nutzer sichtbar!",
+        "ban_warning": "Unangebrachter Text führt zu einer Sperre auf AnotherCrewLink."
+      }
+    },
+    "customplatforms": {
+      "title": "Benutzerdefinierte Plattform",
+      "platform_title": "Titel",
+      "path": "EXE-Pfad",
+      "uri": "URI-Link",
+      "advanced": "Erweitert",
+      "arguments": "Parameter"
+    },
+    "audio": {
+      "title": "Audio",
+      "microphone": "Mikrofon",
+      "speaker": "Lautsprecher",
+      "voice_activity": "Sprachaktivität",
+      "push_to_talk": "Push-to-Talk",
+      "push_to_mute": "Push-to-Mute",
+      "microphone_volume": "Mikrofonlautstärke",
+      "microphone_sens": "Mikrofonempfindlichkeit",
+      "microphone_sens_warning": "Falls die Empfindlichkeit zu niedrig eingestellt ist, kann es zu Problemen führen.",
+      "mastervolume": "Hauptlautstärke",
+      "crewvolume": "Crew-Lautstärke wenn tot",
+      "ghostvolumeasimpostor": "Lautstärke der Geister als Impostor",
+      "test_speaker_start": "Lautsprecher testen",
+      "test_speaker_stop": "Lautsprechertest stoppen"
+    },
+    "keyboard": {
+      "title": "Tastenkürzel",
+      "push_to_talk": "Push-to-Talk",
+      "mute": "Stummschalten",
+      "deafen": "Ausgabe aus",
+      "impostor_radio": "Impostor-Funk"
+    },
+    "overlay": {
+      "title": "Overlay",
+      "always_on_top": "AnotherCrewLink immer im Vordergrund",
+      "enabled": "Overlay aktivieren",
+      "compact": "Kompaktes Overlay",
+      "meeting": "Meeting-Overlay",
+      "pos": "Overlay-Position",
+      "locations": {
+        "hidden": "Versteckt",
+        "top": "Oben zentriert",
+        "bottom": "Unten links",
+        "right": "Rechts",
+        "right1": "Rechts mit Hintergrund",
+        "left": "Links",
+        "left1": "Links mit Hintergrund"
+      }
+    },
+    "advanced": {
+      "title": "Erweitert",
+      "nat_fix": "NAT-Fix",
+      "nat_fix_warning": "Behebt Probleme bezüglich NAT, kann jedoch Verzögerungen verursachen, da die Verbindung nicht direkt (P2P), sondern über einen Server aufgebaut wird.",
+      "change_server": "Sprachserver wechseln",
+      "voice_server": "Sprachserver",
+      "invalid_url": "Ungültige URL",
+      "voice_server_warning": "Diese Option ist nur für fortgeschrittene Benutzer. Andere Server können deine Daten stehlen oder AnotherCrewLink zum Absturz bringen.",
+      "reset_default": "Auf Standard zurücksetzen"
+    },
+    "beta": {
+      "title": "BETA/DEBUG",
+      "vad_enabled": "VAD einschalten",
+      "hardware_acceleration": "Hardwarebeschleunigung",
+      "hardware_acceleration_warning": "Dies deaktiviert die Hardwarebeschleunigung (was die CPU-Nutzung erhöhen kann)",
+      "vad_enabled_warning": "Falls VAD deaktiviert ist, wird nicht angezeigt, wer derzeit spricht.",
+      "echocancellation": "Echounterdrückung",
+      "noiseSuppression": "Geräuschunterdrückung",
+      "spatial_audio": "Räumliches Audio",
+      "oldsampledebug": "Samplerate-Debug",
+      "oldsampledebug_warning": "Dies ist eine Testfunktion, die nur auf Anfrage aktiviert ist."
+    },
+    "streaming": {
+      "title": "Streamingeinstellungen",
+      "hidecode": "Lobby-Code anzeigen",
+      "voice_server_comp": "VS-Kompatibilitätsmodus",
+      "voice_server_comp_warning": "Es wird empfohlen, den Sprachserver auf einen AnotherCrewLink Voiceserver (z.B. https://bettercrewl.ink) zu ändern."
+    },
+    "troubleshooting": {
+      "title": "Fehlerbehebung",
+      "restore": "Einstellungen zurücksetzen",
+      "restore_warning": "Dadurch werden ALLE Einstellungen auf die Standardwerte zurückgesetzt.",
+      "warning": "Nicht als Host im Spiel verfügbar!",
+      "reset_offsets": "Spiel-Offsets zurücksetzen",
+      "reset_offsets_warning": "Verwirft die heruntergeladenen Spiel-Offsets, greift auf die in dieser Version enthaltenen zurück und lädt sie anschließend neu. Hilft, wenn die App das Spiel nach einem Update nicht mehr richtig ausliest.",
+      "reset_offsets_done": "Offsets zurückgesetzt. Aktiv ist jetzt das Paket für {{version}}."
+    }
+  },
+  "lobbybrowser": {
+    "header": "Öffentliche Lobbys",
+    "code": "Lobbycode",
+    "code_tooltips": {
+      "in_progress": "Spiel läuft",
+      "full_lobby": "Lobby ist voll",
+      "incompatible": "Inkompatible Mods",
+      "and": "und"
+    },
+    "list": {
+      "title": "Titel",
+      "host": "Host",
+      "players": "Spieler",
+      "mods": "Mods",
+      "language": "Sprache"
+    }
+  },
+  "buttons": {
+    "default": "Standard",
+    "confirm": "OK",
+    "cancel": "Abbrechen",
+    "close": "Schließen",
+    "exit": "Einstellungen verlassen, um Änderungen anzuwenden",
+    "public_lobby": "Öffentliche Lobbys",
+    "delete": "Löschen",
+    "file_select": "Datei auswählen"
+  },
+  "game": {
+    "menu": "MENÜ",
+    "open": "Öffnen mit",
+    "open_error": "Starte Among Us manuell.",
+    "waiting": "Warten auf Among Us",
+    "error": "FEHLER",
+    "error_admin": "Konnte keine Verbindung zu \"Among Us\" herstellen.\nBitte AnotherCrewLink mit Administratorrechten neu starten.",
+    "error_platform": "Keine Plattform erkannt",
+    "error_unsupport": "Deine Version von Among Us wird nicht von AnotherCrewLink unterstützt.",
+    "error_retired": "Diese Version von AnotherCrewLink wird nicht mehr unterstützt. Bitte aktualisiere, um den Sprachchat weiter nutzen zu können."
+  },
+  "platform": {
+    "steam": "Steam",
+    "epicgames": "Epic Games",
+    "microsoft": "Microsoft",
+    "custom": "Benutzerdefiniert"
+  },
+  "translator_name": "KadenBiel, SirBuvex, Jeddunk und Fauli1221",
+  "client": {
+    "status": {
+      "game_reader": "Spielanbindung:",
+      "server": "Server:",
+      "peers": "{{count}} Gegenstellen verbunden",
+      "connected": "verbunden",
+      "connecting": "verbinde …",
+      "not_connected": "nicht verbunden",
+      "failed": "fehlgeschlagen",
+      "reader_failed": "Die Spielanbindung konnte nicht gestartet werden.",
+      "hats": "Hüte",
+      "audio": "Audio",
+      "update": "Aktualisierung"
+    },
+    "update": {
+      "available": "Version {{version}} ist verfügbar.",
+      "install": "Aktualisieren und neu starten"
+    },
+    "buttons": {
+      "try_again": "Erneut versuchen",
+      "minimise": "Minimieren",
+      "reload": "Neu laden: Spielanbindung erneut starten",
+      "mute": "Mikrofon stummschalten",
+      "unmute": "Mikrofon wieder einschalten",
+      "deafen": "Lobby nicht mehr hören",
+      "undeafen": "Lobby wieder hören"
+    },
+    "lobby": {
+      "nobody_else": "Sonst ist noch niemand hier.",
+      "connecting": "Verbinde …"
+    },
+    "player": {
+      "no_connection": "keine Verbindung",
+      "no_audio": "verbunden, kein Ton",
+      "connected": "verbunden",
+      "speaking": "spricht",
+      "dead": "tot",
+      "radio": "auf dem Impostor-Funk"
+    },
+    "you": {
+      "not_connected": "nicht mit dem Server verbunden",
+      "deafened": "Ausgabe aus – du hörst niemanden und niemand hört dich",
+      "muted": "stummgeschaltet – niemand hört dich"
+    }
+  }
 }

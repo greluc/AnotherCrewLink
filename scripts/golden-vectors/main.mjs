@@ -25,6 +25,20 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
 const outputDirectory = join(repo, 'test', 'golden');
 
+/**
+ * The one vector that is not only a vector.
+ *
+ * The impulse response is what `acl-audio` convolves with at run time: the reverb an
+ * impostor hears a haunting ghost through is this file, embedded. So it is written where
+ * the crate that ships it can find it, and the corpus reads it from there. One decode, one
+ * file -- a second copy would let the response the gate measures drift away from the one
+ * players hear, and the drift would be inaudible until somebody compared them.
+ */
+const SHIPPED = {
+	name: 'impulse-response',
+	path: join(repo, 'crates', 'acl-audio', 'assets', 'reverb-48k.wav'),
+};
+
 /** The rate every vector is rendered at, and the one the client's context runs at. */
 const SAMPLE_RATE = 48000;
 
@@ -87,7 +101,9 @@ app.whenReady().then(async () => {
 		const samples = Float32Array.from(vector.samples);
 		const wav = encodeWav(samples, vector.channels, SAMPLE_RATE);
 		const name = `${vector.name}.wav`;
-		writeFileSync(join(outputDirectory, name), wav);
+		const destination = vector.name === SHIPPED.name ? SHIPPED.path : join(outputDirectory, name);
+		mkdirSync(dirname(destination), { recursive: true });
+		writeFileSync(destination, wav);
 		manifest.push({
 			name: vector.name,
 			node: vector.node,
@@ -100,7 +116,10 @@ app.whenReady().then(async () => {
 			frames: samples.length / vector.channels,
 			sha256: createHash('sha256').update(wav).digest('hex'),
 		});
-		console.log(`${name}: ${samples.length / vector.channels} frames, ${vector.channels}ch`);
+		console.log(
+			`${name}: ${samples.length / vector.channels} frames, ${vector.channels}ch` +
+				(vector.name === SHIPPED.name ? ' -> crates/acl-audio/assets/reverb-48k.wav' : '')
+		);
 	}
 
 	writeFileSync(

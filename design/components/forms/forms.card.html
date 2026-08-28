@@ -1,0 +1,38 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Forms" subtitle="Settings rows: toggles, radios, sliders, fields" -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;background:var(--surface-app);color:var(--text-body);font-family:var(--font-ui)}.wrap{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:16px}.lbl{font-size:11px;color:var(--text-quiet)}.col{display:flex;flex-direction:column;gap:6px;align-items:flex-start}</style>
+<div id="root"></div>
+<script type="text/babel">
+const { Checkbox, RadioOption, Slider, SelectField, TextField } = window.ACL_9b5df9;
+function Demo(){
+  const [walls,setWalls]=React.useState(true);
+  const [mode,setMode]=React.useState(1);
+  const [dist,setDist]=React.useState(5.3);
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,padding:16}}>
+      <div>
+        <Checkbox label="Walls Block Audio" checked={walls} onChange={setWalls}/>
+        <Checkbox label="Hear People in Vision Only" checked={false} onChange={()=>{}}/>
+        <Checkbox label="Hear Through Cameras" checked={false} disabled/>
+        <div style={{marginTop:8}}>
+          <RadioOption label="Voice Activity" value={0} selected={mode===0} onSelect={setMode}/>
+          <RadioOption label="Push to Talk" value={1} selected={mode===1} onSelect={setMode}/>
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <Slider label="Voice Distance" suffix={': '+dist.toFixed(1)} value={dist} min={1} max={10} step={0.1} onChange={setDist}/>
+        <Slider label="Microphone Sensitivity" value={40} color="secondary" onChange={()=>{}}/>
+        <SelectField label="Microphone" value="default" options={[{value:'default',label:'Default'}]} />
+        <TextField label="Voice Server" value="https://aucl.greluc.me" />
+        <TextField label="Push to Talk" value="V" readOnly fullWidth={false} />
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>

@@ -1,0 +1,10 @@
+Material Symbols Rounded
+https://github.com/google/material-design-icons
+
+Copyright Google Inc.
+Licensed under the Apache License, Version 2.0.
+https://www.apache.org/licenses/LICENSE-2.0
+
+This file is a subset: eleven glyphs, cut with fontTools from the static instance Google
+Fonts serves for opsz 24 / wght 400 / FILL 0 / GRAD 0. The full family is ~480 KB and the
+client draws eleven icons.

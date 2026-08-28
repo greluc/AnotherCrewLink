@@ -1,0 +1,30 @@
+<!-- @dsCard group="Client mockups" viewport="900x560" name="Overlay · meeting" subtitle="A talking player's tile glows in their crew colour, derived from the game height" -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>window.ACL_ASSETS='../assets'</script>
+<script src="../_ds_bundle.js"></script>
+<style>@keyframes acl-spin{to{transform:rotate(360deg)}}::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--acl-scroll-thumb);border-radius:5px}</style>
+<script src="mockup-frame.js"></script>
+<script type="text/babel" src="../ui_kits/client/MeetingOverlay.jsx"></script>
+<script type="text/babel">
+let root;
+ACLMockup.mount({
+  name: 'Overlay · meeting',
+  note: 'A separate layer over the discussion tablet. The glow is 0 0 h/100 h/100 in the player\u2019s crew colour and fades in over 400ms — derived from the game height, because a fixed blur swamps the tablet at 1080p. Nothing else is drawn.',
+  width: 880, height: 495, minWidth: 480, minHeight: 300,
+  presets: [{ label: '854×579 (old hud)', w: 854, h: 579 }, { label: '880×495', w: 880, h: 495 }, { label: '1280×720', w: 1280, h: 720 }],
+  annotations: () => [],
+  render: (frame, size) => {
+    root = root || ReactDOM.createRoot(frame);
+    root.render(
+      <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(120% 100% at 30% 0%,#2b3b4e,#101418 70%)' }}>
+        <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: '64%', height: '76%', border: '1px dashed rgba(255,255,255,.18)', borderRadius: 18, display: 'grid', placeItems: 'start center', paddingTop: 6, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'rgba(255,255,255,.3)' }}>the game's own discussion tablet</div>
+        <MeetingOverlay height={size.height} />
+      </div>
+    );
+  },
+});
+</script>

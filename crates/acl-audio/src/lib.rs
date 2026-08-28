@@ -20,6 +20,7 @@ pub mod mixer;
 pub mod neteq_bridge;
 pub mod panner;
 pub mod resample;
+pub mod reverb;
 pub mod ring;
 pub mod stream;
 pub mod vad;

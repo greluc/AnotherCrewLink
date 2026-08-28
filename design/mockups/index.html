@@ -1,0 +1,78 @@
+<!-- @dsCard group="Client mockups" viewport="1000x760" name="All client views" subtitle="Contact sheet — every mockup an implementation is checked against" -->
+<meta charset="utf-8">
+<title>AnotherCrewLink — client mockups</title>
+<link rel="stylesheet" href="../styles.css">
+<style>
+*{box-sizing:border-box}html,body{margin:0}
+body{background:#141218;color:#fff;font-family:var(--font-ui),system-ui,sans-serif}
+main{padding:28px 24px 48px;max-width:1180px;margin:0 auto}
+h1{font-size:30px;margin:0;font-weight:400}
+.lede{max-width:70ch;color:#fff;font-size:var(--size-lede);line-height:1.6;margin:14px 0 0}
+.lede b{color:var(--accent-primary);font-weight:400}
+.note{max-width:78ch;color:var(--text-quiet);font-size:13px;line-height:1.65;margin:14px 0 0;font-family:var(--font-mono)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px;margin-top:28px}
+.cell{display:flex;flex-direction:column;gap:8px;text-decoration:none;color:#fff}
+.shot{position:relative;height:200px;overflow:hidden;background:var(--surface-app);border:2px solid rgba(255,255,255,.14);border-radius:var(--radius-md);transition:border-color 200ms ease-out;display:grid;place-items:center}
+.inner{position:relative;overflow:hidden}
+.cell:hover .shot{border-color:var(--accent-action)}
+.shot iframe{position:absolute;top:0;left:0;border:0;transform-origin:top left;pointer-events:none}
+.name{font-size:14px}
+.sub{font-size:11px;color:var(--text-quiet);font-family:var(--font-mono)}
+h2{font:var(--text-heading);margin:40px 0 0}
+table{border-collapse:collapse;margin-top:12px;font-size:13px;width:100%;max-width:900px}
+td,th{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border-hairline);vertical-align:top}
+th{font-weight:400;color:var(--text-quiet)}
+td:first-child{font-family:var(--font-mono);white-space:nowrap;color:#fff}
+a{color:var(--accent-primary)}
+</style>
+<main>
+<h1>Client mockups</h1>
+<p class="lede">Every view of the AnotherCrewLink client, at the size it really is, built from the same components as the design system. <b>These exist to be compared against an implementation</b> — open one beside your build and check it, or screenshot both and diff.</p>
+<p class="note">The client window is resizable: frameless, 250px minimum, ~400 typical, no maximum. So no window mockup is one fixed picture — drag the purple grip, hit a preset, or pass ?w=&amp;h=. A layout that only works at 400px is not finished.</p>
+<div class="grid">
+<a class="cell" href="window-waiting.html">
+<div class="shot"><div class="inner" style="width:154px;height:200px"><iframe src="window-waiting.html?bare=1" style="width:400px;height:520px;transform:scale(0.385)" loading="lazy" title="Window · waiting for Among Us"></iframe></div></div>
+<span class="name">Window · waiting for Among Us</span><span class="sub">400×520 · MENU state</span></a>
+<a class="cell" href="window-error.html">
+<div class="shot"><div class="inner" style="width:200px;height:200px"><iframe src="window-error.html?bare=1" style="width:400px;height:400px;transform:scale(0.500)" loading="lazy" title="Window · error"></iframe></div></div>
+<span class="name">Window · error</span><span class="sub">400×400 · the fix is always named</span></a>
+<a class="cell" href="window-lobby.html">
+<div class="shot"><div class="inner" style="width:154px;height:200px"><iframe src="window-lobby.html?bare=1" style="width:400px;height:520px;transform:scale(0.385)" loading="lazy" title="Window · in a lobby"></iframe></div></div>
+<span class="name">Window · in a lobby</span><span class="sub">400×520 · VOICE state, the reflow view</span></a>
+<a class="cell" href="window-self-states.html">
+<div class="shot"><div class="inner" style="width:300px;height:113px"><iframe src="window-self-states.html?bare=1" style="width:900px;height:340px;transform:scale(0.333)" loading="lazy" title="Window · your own states"></iframe></div></div>
+<span class="name">Window · your own states</span><span class="sub">900×340 · live · muted · deafened</span></a>
+<a class="cell" href="window-settings.html">
+<div class="shot"><div class="inner" style="width:143px;height:200px"><iframe src="window-settings.html?bare=1" style="width:400px;height:560px;transform:scale(0.357)" loading="lazy" title="Window · settings sheet"></iframe></div></div>
+<span class="name">Window · settings sheet</span><span class="sub">400×560 · eight sections, one scroll</span></a>
+<a class="cell" href="lobby-browser.html">
+<div class="shot"><div class="inner" style="width:300px;height:139px"><iframe src="lobby-browser.html?bare=1" style="width:780px;height:360px;transform:scale(0.385)" loading="lazy" title="Lobby browser window"></iframe></div></div>
+<span class="name">Lobby browser window</span><span class="sub">780×360 · the only table in the product</span></a>
+<a class="cell" href="overlay-positions.html">
+<div class="shot"><div class="inner" style="width:300px;height:169px"><iframe src="overlay-positions.html?bare=1" style="width:800px;height:450px;transform:scale(0.375)" loading="lazy" title="Overlay · positions"></iframe></div></div>
+<span class="name">Overlay · positions</span><span class="sub">800×450 · four veils over the game</span></a>
+<a class="cell" href="overlay-compact.html">
+<div class="shot"><div class="inner" style="width:300px;height:150px"><iframe src="overlay-compact.html?bare=1" style="width:800px;height:400px;transform:scale(0.375)" loading="lazy" title="Overlay · compact"></iframe></div></div>
+<span class="name">Overlay · compact</span><span class="sub">800×400 · talkers only</span></a>
+<a class="cell" href="overlay-meeting.html">
+<div class="shot"><div class="inner" style="width:300px;height:169px"><iframe src="overlay-meeting.html?bare=1" style="width:880px;height:495px;transform:scale(0.341)" loading="lazy" title="Overlay · meeting"></iframe></div></div>
+<span class="name">Overlay · meeting</span><span class="sub">880×495 · crew-colour glow</span></a>
+<a class="cell" href="player-states.html">
+<div class="shot"><div class="inner" style="width:296px;height:200px"><iframe src="player-states.html?bare=1" style="width:800px;height:540px;transform:scale(0.370)" loading="lazy" title="Player states"></iframe></div></div>
+<span class="name">Player states</span><span class="sub">800×540 · every state, and its words</span></a>
+<a class="cell" href="crew-colours.html">
+<div class="shot"><div class="inner" style="width:300px;height:120px"><iframe src="crew-colours.html?bare=1" style="width:800px;height:320px;transform:scale(0.375)" loading="lazy" title="Crew colours · all twelve"></iframe></div></div>
+<span class="name">Crew colours · all twelve</span><span class="sub">800×320 · colour-id order</span></a>
+</div>
+<h2>How to verify with these</h2>
+<table>
+<tr><th>Step</th><th></th></tr>
+<tr><td>?bare=1</td><td>Strips the toolbar and the callouts: the frame alone, at exactly the stated size. This is the reference to screenshot against your build.</td></tr>
+<tr><td>?w=250&amp;h=520</td><td>Any size. Verify the 250px minimum with a full fifteen-player lobby, not just the default width.</td></tr>
+<tr><td>measures · a</td><td>Dimension callouts, measured off the live DOM rather than written down, so they cannot drift from the layout.</td></tr>
+<tr><td>8px grid · g</td><td>The client's spacing step. Everything structural should land on it; MUI's own 4px radius does not.</td></tr>
+<tr><td>[ · ]</td><td>Step the width by 10px and watch for the reflow break — the roster changes count per row, the lobby table starts scrolling sideways.</td></tr>
+</table>
+<h2>What to check, and what not to</h2>
+<p class="note">Check: what every control does, what each state communicates, the order of things, the reflow, the colour meanings, and that nothing is drawn for a healthy state.<br><br>Do not check: pixel parity. The client is being reimplemented in Rust with egui, and <a href="../guidelines/client-gui-spec.md">the spec</a> grants that layout, spacing and control affordances will differ. Numbers here are intent, not contract — see <a href="../guidelines/egui-implementation.md">egui-implementation.md</a>.</p>
+</main>

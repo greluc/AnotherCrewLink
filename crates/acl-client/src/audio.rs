@@ -195,6 +195,46 @@ impl Tuning {
     }
 }
 
+/// The filter `voice_params` asked for, as one this crate can run.
+///
+/// Two `FilterKind`s exist and they are not the same type on purpose: one is a decision
+/// about what a player should sound like, the other is a biquad. This is the one place they
+/// meet.
+#[cfg(feature = "audio")]
+fn biquad_for(muffle: acl_audio::voice::Muffle) -> acl_audio::biquad::Biquad {
+    let kind = match muffle.kind {
+        acl_audio::voice::FilterKind::LowPass => acl_audio::biquad::FilterKind::LowPass,
+        acl_audio::voice::FilterKind::HighPass => acl_audio::biquad::FilterKind::HighPass,
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a sample rate of 48 000, which is exact in an f32"
+    )]
+    acl_audio::biquad::Biquad::new(
+        kind,
+        muffle.frequency,
+        muffle.q,
+        acl_audio::stream::WANTED_RATE as f32,
+    )
+}
+
+/// Whether the peer's unaltered voice still reaches the mix.
+///
+/// `Voice.tsx` inserts an effect with `applyEffect`, which connects the effect to the
+/// destination *and* disconnects `gain -> destination` -- and tolerates the disconnect
+/// failing, because another effect may have done it already. What comes out of that is a
+/// graph of parallel branches: every connected effect reaches the destination, and the
+/// direct path reaches it only while no effect has taken it away.
+///
+/// So the reverb does not replace the muffle and the muffle does not replace the reverb. A
+/// dead impostor holding the radio is high-passed *and* haunting, and is heard through both
+/// at once. Reading it as a chain, or as one-or-the-other, are the two ways to get this
+/// wrong, and both produce sound.
+#[cfg(feature = "audio")]
+const fn direct_path_survives(muffled: bool, reverb_applied: bool) -> bool {
+    muffled || !reverb_applied
+}
+
 /// One per audible peer, replaced wholesale each frame. The gain is
 /// `acl_audio::voice::voice_params`' answer — every rule about distance, walls, vision, the
 /// dead and the vents is already in it — and the position is where the panner should put
@@ -217,6 +257,22 @@ pub(crate) struct Placement {
     /// `enableSpatialAudio` off means centred: the gain still falls with distance, because
     /// that is a different setting and turning off panning is not turning off distance.
     pub(crate) spatial: bool,
+    /// The filter to put in this peer's path, if any.
+    ///
+    /// `voice_params` has decided this since the port began -- the vent's low pass, the
+    /// camera's, the impostor radio's high pass -- and nothing carried it here, so nothing
+    /// applied it. The *gain* half of those rules worked, which is what made it hard to
+    /// notice: a player in a vent was quieter, and no more muffled than one standing next
+    /// to you.
+    pub(crate) muffle: Option<acl_audio::voice::Muffle>,
+    /// Whether this peer is a ghost an impostor is haunted by.
+    ///
+    /// `voice_params` has decided this for as long as it has decided the muffle, and it was
+    /// thrown away for the same reason: nothing carried it. The gain half of the rule worked
+    /// -- `ghostVolumeAsImpostor` was applied, and walls stopped blocking the ghost -- so a
+    /// haunting ghost was audible at the right volume, in the same dry room as everybody
+    /// else, and the setting looked like it was doing its job.
+    pub(crate) reverb: bool,
 }
 
 /// How deep the jitter buffer is, in packets.
@@ -266,6 +322,20 @@ impl Audio {
         // test go through the device the client is actually playing on.
         let playing: Arc<Mutex<std::collections::VecDeque<f32>>> =
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        // Three hundred transforms to cut the reverb's impulse response into blocks, which
+        // is a tenth of a second the mixing loop does not have -- it has twenty
+        // milliseconds. Done here, on a thread of its own, so it is ready long before the
+        // first ghost; until it is, `reverb::ready` says no and the mixer leaves the dry
+        // path alone, which is what `Voice.tsx` does with a convolver whose buffer has not
+        // arrived.
+        std::thread::spawn(|| {
+            if !acl_audio::reverb::warm() {
+                acl_core::log_warn!(
+                    "audio",
+                    "the reverb impulse response did not load; haunting ghosts will be dry"
+                );
+            }
+        });
 
         match Self::open(
             packets,
@@ -800,7 +870,20 @@ fn mix(
         std::collections::BTreeMap::new();
     let mut mixer = Mixer::new(FRAME_SAMPLES);
     let mut mono = vec![0.0_f32; FRAME_SAMPLES];
+    // One filter per peer that has one, with the settings it was built from so a change
+    // can be told from a repeat.
+    let mut muffles: std::collections::BTreeMap<
+        String,
+        (acl_audio::voice::Muffle, acl_audio::biquad::Biquad),
+    > = std::collections::BTreeMap::new();
     let mut stereo = vec![0.0_f32; FRAME_SAMPLES * 2];
+    // One convolver per haunted peer, and one buffer for what comes out of it. Both are
+    // state for the same reason the filters above are: a convolver is three seconds of
+    // history, and rebuilding it every frame would be rebuilding the room every frame.
+    let mut reverbs: std::collections::BTreeMap<String, acl_audio::reverb::Reverb> =
+        std::collections::BTreeMap::new();
+    let mut wet = vec![0.0_f32; FRAME_SAMPLES * 2];
+    let mut said_it_was_not_loaded = false;
 
     loop {
         // Blocks until something arrives, then takes everything else that has. A frame is
@@ -833,6 +916,29 @@ fn mix(
             .lock()
             .map(|held| held.clone())
             .unwrap_or_default();
+        // A filter is state: it remembers the last two samples. So it lives here, beside
+        // the decoder it filters, rather than in `Placement` -- which is rebuilt from the
+        // window's thread every frame and would reset the filter with it, turning a
+        // continuous low pass into a click every twenty milliseconds.
+        muffles.retain(|peer, _| placed.get(peer).is_some_and(|p| p.muffle.is_some()));
+        // Dropped the moment the decision stops asking for it, which is what cuts the tail.
+        // That is `restoreEffect`: a ghost who stops haunting -- the round ends, the
+        // impostor dies, the ghost is revived -- has their reverb disconnected in the
+        // Electron client too, and the tail goes with it. What does *not* cut it is the gain
+        // reaching zero, which is why a peer out of range keeps a placement for as long as
+        // the reverb is connected. See where the placements are built.
+        //
+        // Two cases here are a tail rather than the same tail. `Voice.tsx` restores on
+        // `!other.isDead || state !== TASKS || !me.isImpostor || me.isDead`, which is *not*
+        // the negation of the four conditions that connected it -- `haunting` is missing
+        // from the list. So a host who switches haunting off mid-round leaves the Electron
+        // client with a convolver that is still connected and now fed a gain of zero, and it
+        // rings out; this drops it and stops it. The same goes for deafening, which never
+        // reaches a placement at all. Both are silent either way -- the rule that turns the
+        // reverb off is also the rule that sets the gain to zero -- so what differs is three
+        // seconds of decay after a switch is flicked, and modelling it would mean carrying a
+        // "still connected" flag that no longer answers to any rule.
+        reverbs.retain(|peer, _| placed.get(peer).is_some_and(|p| p.reverb));
         mixer.begin();
         let mut anything = false;
         for (peer, listener) in &mut listeners {
@@ -840,10 +946,14 @@ fn mix(
                 continue;
             };
             let placement = placed.get(peer).copied().unwrap_or_default();
-            if placement.gain <= 0.0 {
+            if placement.gain <= 0.0 && !placement.reverb {
                 // Out of range, dead, behind a wall -- whatever the rule was, it was
                 // applied on the frame loop and the answer is silence. Not mixing is
                 // cheaper than mixing zero and sounds the same.
+                //
+                // Unless a reverb is connected, in which case zero is not silence: the
+                // convolver still has three seconds of this peer in it, and feeding it the
+                // zeroes is what lets the tail ring out rather than stop dead.
                 continue;
             }
             // The gain first, then the panner, which is the order the Electron graph has:
@@ -863,17 +973,51 @@ fn mix(
                     z: -placement.source.length(),
                 }
             };
-            let panned = placement.panner.process_block(&mono, source);
-            // Copied rather than sliced: `process_block` returns two samples per input and
-            // `stereo` is sized for exactly that, so these agree -- but a length that is
-            // asserted by construction is one a later change can break silently, and this
-            // does not panic when it does.
-            stereo.fill(0.0);
-            for (slot, sample) in stereo.iter_mut().zip(panned.iter()) {
-                *slot = *sample;
+
+            // The wet branch is taken here, from the gain and *before* the muffle. In
+            // `Voice.tsx` both effects hang off the same gain node and each connects to the
+            // destination, so the two are branches that get summed -- not a chain. A dead
+            // impostor holding the radio is heard through both at once.
+            let heard_wet = placement.reverb
+                && haunt(
+                    peer,
+                    &mono,
+                    &placement,
+                    source,
+                    &mut reverbs,
+                    &mut wet,
+                    &mut said_it_was_not_loaded,
+                );
+            if heard_wet {
+                mixer.add(&wet);
+                anything = true;
             }
-            mixer.add(&stereo);
-            anything = true;
+
+            // The direct path, and it is only there when nothing replaced it: `applyEffect`
+            // disconnects `gain -> destination` as it connects an effect. So a peer with a
+            // muffle is heard through the muffle, a peer with only the reverb is heard
+            // through the reverb alone, and a peer with neither is heard as they are.
+            if direct_path_survives(placement.muffle.is_some(), heard_wet) {
+                // After the gain and before the panner, which is where `Voice.tsx` puts it:
+                // `applyEffect(gain, muffle, destination)` inserts it between the two. The
+                // panner here runs after the gain rather than before it, and that changes
+                // nothing -- a gain is a scalar, and so is each side of an equal-power pan,
+                // so filtering the mono signal is the same signal either way.
+                if let Some(wanted) = placement.muffle {
+                    muffle_for(peer, wanted, &mut muffles).process_block(&mut mono);
+                }
+                let panned = placement.panner.process_block(&mono, source);
+                // Copied rather than sliced: `process_block` returns two samples per input
+                // and `stereo` is sized for exactly that, so these agree -- but a length
+                // that is asserted by construction is one a later change can break
+                // silently, and this does not panic when it does.
+                stereo.fill(0.0);
+                for (slot, sample) in stereo.iter_mut().zip(panned.iter()) {
+                    *slot = *sample;
+                }
+                mixer.add(&stereo);
+                anything = true;
+            }
         }
         if !anything {
             continue;
@@ -889,6 +1033,89 @@ fn mix(
             }
         }
     }
+}
+
+/// This peer's filter, built if they had none and rebuilt if the shape changed.
+///
+/// Kept between frames because a biquad is two samples of history, and rebuilding one every
+/// frame turns a continuous low pass into a click every twenty milliseconds.
+#[cfg(feature = "audio")]
+fn muffle_for<'a>(
+    peer: &str,
+    wanted: acl_audio::voice::Muffle,
+    muffles: &'a mut std::collections::BTreeMap<
+        String,
+        (acl_audio::voice::Muffle, acl_audio::biquad::Biquad),
+    >,
+) -> &'a mut acl_audio::biquad::Biquad {
+    match muffles.entry(peer.to_owned()) {
+        std::collections::btree_map::Entry::Occupied(held) => {
+            let held = held.into_mut();
+            if held.0 != wanted {
+                *held = (wanted, biquad_for(wanted));
+            }
+            &mut held.1
+        }
+        std::collections::btree_map::Entry::Vacant(empty) => {
+            &mut empty.insert((wanted, biquad_for(wanted))).1
+        }
+    }
+}
+
+/// One haunting ghost through the reverb, into `into`, and whether anything came out.
+///
+/// `false` means the impulse response has not finished loading, and the caller should leave
+/// this peer's direct path where it is. That is `Voice.tsx`'s own answer to a convolver with
+/// no buffer: it declines to connect the effect and says so, because a `ConvolverNode`
+/// without a response emits silence rather than passing audio through, and routing a voice
+/// into one makes that player inaudible.
+#[cfg(feature = "audio")]
+fn haunt(
+    peer: &str,
+    mono: &[f32],
+    placement: &Placement,
+    source: acl_audio::panner::Position,
+    reverbs: &mut std::collections::BTreeMap<String, acl_audio::reverb::Reverb>,
+    into: &mut [f32],
+    said_it_was_not_loaded: &mut bool,
+) -> bool {
+    let Some(response) = acl_audio::reverb::ready() else {
+        if !*said_it_was_not_loaded {
+            // Once. `Voice.tsx` warns per player per frame, and this thread would say it
+            // fifty times a second.
+            *said_it_was_not_loaded = true;
+            acl_core::log_warn!(
+                "audio",
+                "a ghost is haunting before the impulse response finished loading, so they are dry for now"
+            );
+        }
+        return false;
+    };
+
+    let convolver = match reverbs.entry(peer.to_owned()) {
+        std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
+        std::collections::btree_map::Entry::Vacant(empty) => {
+            empty.insert(acl_audio::reverb::Reverb::new(response))
+        }
+    };
+    convolver.process(mono, into);
+
+    // The convolver sits after the panner in the Electron graph, so what it returns is
+    // already placed. Panning a mono source is one scalar per side, so applying the two
+    // afterwards is the same signal -- and it has to be afterwards here, because the
+    // convolver's two sides came through different halves of the response and are no longer
+    // the same signal to pan.
+    let (left, right) = placement.panner.gains(source);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "narrowing a pair of gains back to the sample format"
+    )]
+    let (left, right) = (left as f32, right as f32);
+    for [on_the_left, on_the_right] in into.as_chunks_mut::<2>().0 {
+        *on_the_left *= left;
+        *on_the_right *= right;
+    }
+    true
 }
 
 /// One peer's receiving end.
@@ -970,6 +1197,95 @@ pub(crate) fn encode_frame(
 mod tests {
 
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// The two `FilterKind`s do not get crossed on the way between them.
+    ///
+    /// A transposition here is silent: both shapes are filters, both change the sound, and
+    /// a vent that high-passes still sounds like *something* happened. The last time two
+    /// enums were mapped across a boundary in this project it was red and blue, and that
+    /// shipped.
+    #[test]
+    fn the_decisions_filter_shape_survives_the_crossing() {
+        use acl_audio::voice::{FilterKind, Muffle};
+
+        // A low pass keeps a low tone and takes a high one away; a high pass does the
+        // reverse. Asserted on what the filter *does*, because the kinds are different
+        // types and there is nothing to compare directly.
+        for (kind, keeps, removes) in [
+            (FilterKind::LowPass, 300.0_f32, 9000.0_f32),
+            (FilterKind::HighPass, 9000.0, 300.0),
+        ] {
+            let mut filter = super::biquad_for(Muffle {
+                kind,
+                frequency: 2000.0,
+                q: 0.7,
+            });
+            let mut kept = tone(keeps);
+            filter.process_block(&mut kept);
+            let mut filter = super::biquad_for(Muffle {
+                kind,
+                frequency: 2000.0,
+                q: 0.7,
+            });
+            let mut gone = tone(removes);
+            filter.process_block(&mut gone);
+
+            assert!(
+                peak(&kept) > peak(&gone) * 3.0,
+                "{kind:?} kept {:.4} of {keeps} Hz and {:.4} of {removes} Hz",
+                peak(&kept),
+                peak(&gone)
+            );
+        }
+    }
+
+    /// The four ways a peer's path can be wired, and which of them keep the dry signal.
+    ///
+    /// The whole table, because the interesting rows are the ones nobody pictures. Two
+    /// effects at once is a real state -- a dead impostor holding the radio is haunting and
+    /// high-passed -- and the direct path being gone while *neither* effect is audible is
+    /// how a player goes silent for no visible reason.
+    #[test]
+    fn an_effect_takes_the_direct_path_and_two_effects_do_not_take_it_twice() {
+        use super::direct_path_survives;
+
+        // Nothing in the way: the voice is heard as it is.
+        assert!(direct_path_survives(false, false));
+        // The muffle carries it, so the direct path is gone and nothing is lost.
+        assert!(direct_path_survives(true, false));
+        // The reverb carries it, and only the reverb: a haunting ghost is heard wet, not
+        // wet *and* dry, which would be a ghost mixed with themself.
+        assert!(!direct_path_survives(false, true));
+        // Both, in parallel. The direct path is gone once, not twice, and both branches
+        // reach the mix -- reading this as a chain would put the reverb through the radio's
+        // high pass, and reading it as one-or-the-other would silence one of them.
+        assert!(direct_path_survives(true, true));
+    }
+
+    /// A sine at a frequency, one frame long, after the filter has settled.
+    fn tone(hertz: f32) -> Vec<f32> {
+        #[expect(clippy::cast_precision_loss, reason = "48 000 is exact in an f32")]
+        let rate = acl_audio::stream::WANTED_RATE as f32;
+        // Three frames, so the measurement below is taken after the filter's own transient
+        // rather than during it.
+        (0..FRAME_SAMPLES * 3)
+            .map(|at| {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a sample index inside three frames"
+                )]
+                let time = at as f32 / rate;
+                (std::f32::consts::TAU * hertz * time).sin()
+            })
+            .collect()
+    }
+
+    /// The loudest sample in the last third, which is after the transient.
+    fn peak(samples: &[f32]) -> f32 {
+        samples[samples.len() * 2 / 3..]
+            .iter()
+            .fold(0.0_f32, |so_far, s| so_far.max(s.abs()))
+    }
 
     /// The floor only counts as moved when it moves.
     ///
@@ -1189,6 +1505,8 @@ mod tests {
             },
             panner: acl_audio::panner::Panner::default(),
             spatial: true,
+            muffle: None,
+            reverb: false,
         };
         let panned = placement.panner.process_block(&mono, placement.source);
         let (mut left, mut right) = (0.0_f32, 0.0_f32);

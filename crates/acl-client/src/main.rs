@@ -15,6 +15,9 @@
 //! file under the player's profile that `logFile.ts` has always written -- same shape, same
 //! four-mebibyte cap, same single previous file, so a support conversation can read a 1.x
 //! and a 2.x log side by side.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+//! §4.8 item 1 continues below.
 //!
 //! §4.8 item 1: the shell, a custom title bar, and window state persistence. It is also the
 //! first thing in this port that assembles the rest — the single-instance lock, the paths,
@@ -33,6 +36,8 @@
 //! chain — and the dependency review that belongs to it; a shell that has to open a window
 //! does not need to start either. `experiments/gui-spike` measured this rung, so the
 //! performance number already on record is the one this runs on.
+
+use acl_ui::views::theme;
 
 mod audio;
 mod controls;
@@ -59,8 +64,62 @@ const MIN_WIDTH: i32 = 250;
 /// See [`MIN_WIDTH`].
 const MIN_HEIGHT: i32 = 350;
 
+/// The size a window opens at when nothing has been saved yet.
+///
+/// **Not the minimum**, which is what stood here and is what `src/main/index.ts` passes
+/// `windowStateKeeper` as its default. A floor is not a choice: 250 by 350 is the smallest
+/// this window is allowed to be, and opening a fresh installation there means every new
+/// player meets the product at its most cramped.
+///
+/// 400 by 520 is the size the design system draws the client at -- every mockup under
+/// `design/mockups/` sets it, and `reference.json` names 400 as the typical width against
+/// 250 as the minimum. Somebody who has sized the window keeps their size; this is only
+/// for the first run and for a `windows.json` that has gone missing.
+const DEFAULT_WIDTH: i32 = 400;
+/// See [`DEFAULT_WIDTH`].
+const DEFAULT_HEIGHT: i32 = 520;
+
+/// How long the geometry has to hold still before it is written down.
+///
+/// Long enough that a drag is one write rather than a hundred, short enough that letting
+/// go and pulling the plug keeps the size. The window repaints five times a second when
+/// nothing is happening, so this is noticed within a frame of expiring.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How often the overlay is recomposed, whatever the window is repainting at.
+///
+/// [`Client::compose_overlay`] opens with `find_process("Among Us.exe")`, and that is a
+/// `CreateToolhelp32Snapshot` over every process on the machine. Measured on 2026-08-28:
+/// **18.3ms**, against 0.9ms for the window lookup after it. Eighteen milliseconds is the
+/// whole budget of a 50Hz frame, spent before anything is drawn.
+///
+/// It ran once per repaint, under a comment saying it ran at the helper's five a second.
+/// Those are the same number only while nothing moves: egui repaints on every mouse event,
+/// so dragging the window put a hundred process-table snapshots a second in front of the
+/// paint, and the window juddered under the pointer that was moving it.
+const OVERLAY_TICK: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Something that happens at most this often, however often it is asked.
+///
+/// A timestamp rather than a counter of frames, because the thing it paces is a wall-clock
+/// cadence -- the game reports five times a second -- and the frames it is asked from are
+/// however many the mouse generates.
+#[derive(Default)]
+struct Cadence(Option<std::time::Instant>);
+
+impl Cadence {
+    /// Whether it is due, and marks it done when it is.
+    fn due(&mut self, now: std::time::Instant, period: std::time::Duration) -> bool {
+        if self.0.is_some_and(|last| now.duration_since(last) < period) {
+            return false;
+        }
+        self.0 = Some(now);
+        true
+    }
+}
+
 /// How tall the title bar is drawn.
-const TITLE_BAR: f32 = 32.0;
+const TITLE_BAR: f32 = acl_ui::views::theme::TITLEBAR_H;
 
 /// The smallest rectangle containing both.
 ///
@@ -333,19 +392,107 @@ struct Startable {
 struct Devices {
     held: Vec<acl_audio::device::Device>,
     refreshed: Option<std::time::Instant>,
+    /// A refresh that is running on a thread of its own. See [`Devices::current`].
+    asking: Option<std::sync::mpsc::Receiver<Vec<acl_audio::device::Device>>>,
+}
+
+/// Where the game's window is, without walking the process table to find out.
+///
+/// `find_process("Among Us.exe")` is a `CreateToolhelp32Snapshot` over every process on the
+/// machine, and it cost **18.3ms** measured on 2026-08-28. Held to five times a second it
+/// still took a whole overlay tick to **15 to 24ms**, five times a second, on the thread
+/// that draws -- which is a dropped frame every fifth of a second, and the last thing
+/// standing between a scroll and sixty frames.
+///
+/// A process id does not change while a process lives, so it is worth remembering. The
+/// liveness check is the window lookup that has to happen anyway: `content_bounds` walks
+/// the top-level windows, costs **0.9ms**, and a game that has gone has no window to find.
+/// Only when that fails is the table walked again, and that walk happens on a thread.
+///
+/// **Process ids are reused**, so in principle a recycled id belonging to something else
+/// with a window could be followed. In practice this is only reached while the reader is
+/// still reporting game state -- which means the game is still running -- and the id is
+/// looked up by name again the moment its window stops being found.
+#[derive(Default)]
+struct GameWindow {
+    /// The game's process, once something has found it.
+    known: Option<u32>,
+    /// A search running on a thread of its own.
+    looking: Option<std::sync::mpsc::Receiver<Option<u32>>>,
+    /// When the last search finished, so a machine with no game does not start one a frame.
+    searched: Option<std::time::Instant>,
+}
+
+impl GameWindow {
+    /// How long to wait before looking for the game again after not finding it.
+    const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Where the game is drawing, if it is.
+    #[cfg(windows)]
+    fn bounds(&mut self) -> Option<acl_core::game_window::Bounds> {
+        match self
+            .looking
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
+            Some(Ok(found)) => {
+                self.known = found;
+                self.looking = None;
+                self.searched = Some(std::time::Instant::now());
+            }
+            // The thread ended without sending, which cannot happen unless it panicked.
+            // Treated as "not found" so the back-off applies rather than a search a frame.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.looking = None;
+                self.searched = Some(std::time::Instant::now());
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
+        }
+
+        if let Some(process) = self.known {
+            if let Some(bounds) = acl_core::game_window::content_bounds(process) {
+                return Some(bounds);
+            }
+            // No window under that id any more, so as far as this is concerned the game has
+            // gone. Looking again is the next block.
+            self.known = None;
+        }
+
+        let due = self
+            .searched
+            .is_none_or(|last| last.elapsed() >= Self::LOOK_AGAIN);
+        if due && self.looking.is_none() {
+            let (send, receive) = std::sync::mpsc::channel();
+            // Detached: nothing waits for it, and the answer is picked up whenever it lands.
+            std::thread::spawn(move || {
+                let _ = send.send(acl_game::windows::find_process("Among Us.exe"));
+            });
+            self.looking = Some(receive);
+        }
+        None
+    }
 }
 
 impl Devices {
     /// How stale the list may be.
     const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
 
-    /// What the machine has, enumerating again if it has been a while.
+    /// What the machine has, asking again if it has been a while.
+    ///
+    /// **The asking happens on a thread.** Measured on 2026-08-28: enumerating the
+    /// machine's audio devices costs **11 to 14 milliseconds**, and it used to happen
+    /// inside the paint. Every two seconds one frame took fourteen times its budget, which
+    /// is a visible hitch in a list somebody is scrolling -- and the settings screen is the
+    /// only place this is called from, so the settings screen was the only place it showed.
+    ///
+    /// The first list is fetched here and now, because a picker that is empty for two
+    /// frames while a thread starts is worse than one frame that takes fourteen
+    /// milliseconds on the way in. Every refresh after that is asked for in the background
+    /// and collected whenever it arrives.
     fn current(&mut self) -> &[acl_audio::device::Device] {
-        let due = self
-            .refreshed
-            .is_none_or(|last| last.elapsed() >= Self::FRESH_FOR);
-        if due {
-            use acl_audio::device::Backend as _;
+        use acl_audio::device::Backend as _;
+
+        if self.refreshed.is_none() {
             // A failure leaves the last good list standing rather than emptying the picker:
             // a device that was there a moment ago is a better answer than none, and the
             // one that is stored is still what the client is using.
@@ -353,9 +500,59 @@ impl Devices {
                 self.held = found;
             }
             self.refreshed = Some(std::time::Instant::now());
+            return &self.held;
+        }
+
+        match self
+            .asking
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
+            Some(Ok(found)) => {
+                self.held = found;
+                self.asking = None;
+                self.refreshed = Some(std::time::Instant::now());
+            }
+            // The thread ended without sending, which is the enumeration having failed.
+            // The clock is restarted so this is tried again on the usual interval rather
+            // than every frame.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.asking = None;
+                self.refreshed = Some(std::time::Instant::now());
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
+        }
+
+        let due = self
+            .refreshed
+            .is_none_or(|last| last.elapsed() >= Self::FRESH_FOR);
+        if due && self.asking.is_none() {
+            let (send, receive) = std::sync::mpsc::channel();
+            // Detached: nothing waits for it, and dropping the sender is how a failure is
+            // reported. cpal initialises COM on whatever thread it is called from.
+            std::thread::spawn(move || {
+                if let Ok(found) = acl_audio::device::system::Cpal::new().devices() {
+                    let _ = send.send(found);
+                }
+            });
+            self.asking = Some(receive);
         }
         &self.held
     }
+}
+
+/// One icon in the window chrome.
+///
+/// Frameless and `#777`, which is what the design system means by an icon button: "Icons
+/// in chrome are `#777` and nothing else." The 2px white border the style gives every
+/// other button belongs to the outline buttons -- the launch control and reload -- and on
+/// a 24px strip it turns three icons into three boxes.
+fn chrome_icon(ui: &mut egui::Ui, glyph: &str, hint: &str) -> egui::Response {
+    let text = egui::RichText::new(glyph)
+        .font(acl_ui::views::theme::icon_font(18.0))
+        .color(acl_ui::views::theme::ICON_QUIET);
+    ui.add(egui::Button::new(text).frame(false))
+        .on_hover_text(hint)
 }
 
 /// Says what the window frame just did, when asked to.
@@ -517,7 +714,7 @@ fn main() -> eframe::Result<()> {
 
     let file = paths.window_state_file();
     let saved = read_state(&file);
-    let opening = restore(saved, &displays(), MIN_WIDTH, MIN_HEIGHT);
+    let opening = restore(saved, &displays(), DEFAULT_WIDTH, DEFAULT_HEIGHT);
 
     #[expect(
         clippy::cast_precision_loss,
@@ -569,7 +766,13 @@ fn main() -> eframe::Result<()> {
             wgpu_options: renderer_options(acl_ui::renderer::chain(accelerated)),
             ..Default::default()
         },
-        Box::new(move |_| Ok(Box::new(Client::new(file, &paths)))),
+        Box::new(move |creation| {
+            // Before the first frame. Fonts and the palette are the window's whole
+            // identity, and a frame drawn with egui's defaults would be a flash of a
+            // different product.
+            acl_ui::views::theme::apply(&creation.egui_ctx);
+            Ok(Box::new(Client::new(file, &paths)))
+        }),
     )
 }
 
@@ -831,8 +1034,16 @@ impl Roster for Seat<'_> {
 struct Client {
     state_file: PathBuf,
     reader: Option<reader::Reader>,
-    /// What the window was last seen at, for saving on the way out.
+    /// What the window was last seen at.
     last_seen: Option<WindowState>,
+    /// What is already in the file, so a settled window is not rewritten every frame.
+    written: Option<WindowState>,
+    /// When the geometry last changed. `None` once it has been written.
+    moved_at: Option<std::time::Instant>,
+    /// Holds the overlay to [`OVERLAY_TICK`]. See what it costs.
+    overlay_due: Cadence,
+    /// Where the game's window is. See [`GameWindow`] for what it saves.
+    game_window: GameWindow,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
@@ -972,6 +1183,10 @@ impl Client {
             // where somebody would find out about it, so it opens and says so.
             reader,
             last_seen: None,
+            written: None,
+            moved_at: None,
+            overlay_due: Cadence::default(),
+            game_window: GameWindow::default(),
             overlay_shown: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
@@ -991,7 +1206,10 @@ impl Client {
     /// the game, which is where `Overlay.tsx` puts it by default.
     #[cfg(windows)]
     fn compose_overlay(&mut self, state: &acl_game::AmongUsState) {
-        use acl_core::game_window;
+        // Asked for before the reader is borrowed, because it needs `self` mutably: it
+        // remembers the game's process id rather than looking it up again every time. See
+        // [`GameWindow`].
+        let found = self.game_window.bounds();
 
         let Some(reader) = self.reader.as_ref() else {
             return;
@@ -1008,9 +1226,7 @@ impl Client {
             acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
         let compact = settings.bool_at("compactOverlay") || position.forces_compact();
 
-        let game = acl_game::windows::find_process("Among Us.exe");
-        let bounds = game.and_then(game_window::content_bounds);
-        let bounds = bounds.filter(|bounds| bounds.is_drawable());
+        let bounds = found.filter(|bounds| bounds.is_drawable());
         let Some(bounds) = bounds.filter(|_| enabled) else {
             // No game, nothing to draw over, or the overlay is switched off. Hidden rather
             // than left showing the last frame over whatever the player switched to.
@@ -1114,17 +1330,26 @@ impl Client {
     ///
     /// Named for what it does rather than `App::save`, which eframe calls with its own
     /// storage and on its own schedule -- a different thing that happens to share a verb.
-    fn write_window_state(&self) {
+    fn write_window_state(&mut self) {
+        self.moved_at = None;
         let Some(state) = self.last_seen else {
             return;
         };
+        // Every other window's entry is read back and put again, so this writes one key
+        // rather than the file: the overlay keeps its own, and so does anything added
+        // later.
+        if self.written == Some(state) {
+            return;
+        }
         let mut stored = std::fs::read_to_string(&self.state_file)
             .ok()
             .and_then(|text| serde_json::from_str::<Stored>(&text).ok())
             .unwrap_or_default();
         stored.set(acl_ui::window_state::MAIN_WINDOW, state);
-        if let Ok(text) = serde_json::to_string(&stored) {
-            let _ = std::fs::write(&self.state_file, text);
+        if let Ok(text) = serde_json::to_string(&stored)
+            && std::fs::write(&self.state_file, text).is_ok()
+        {
+            self.written = Some(state);
         }
     }
 
@@ -1485,7 +1710,7 @@ impl Client {
             // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
             // the rule and the reason it is keyed on the name hash are in
             // `acl_ui::config::per_player_gain`, which is tested without a game.
-            let Some(gain) = acl_ui::config::after_the_rules(
+            let after_the_rules = acl_ui::config::after_the_rules(
                 self.settings.config(),
                 acl_ui::config::Listener {
                     speaker_name_hash: player.name_hash,
@@ -1493,7 +1718,8 @@ impl Client {
                     speaker_is_dead: player.is_dead,
                 },
                 params.gain,
-            ) else {
+            );
+            let Some(gain) = after_the_rules.or_else(|| params.reverb.then_some(0.0)) else {
                 // Muted, silenced by the master volume, or turned all the way down.
                 // Nothing is placed for them at all: the Electron original leaves the graph
                 // alone in that case, and a peer left out of the map is a peer the mixer
@@ -1502,6 +1728,12 @@ impl Client {
                 // `after_the_rules` returns `None` for every gain at or below zero, so
                 // there is no second check after this one. There was until 2026-08-27, and
                 // it could not fire.
+                //
+                // A haunting ghost is the exception, and is placed at zero rather than left
+                // out. In the Electron client the convolver stays connected while the gain
+                // goes to zero, so it keeps being fed and its three-second tail rings out;
+                // dropping the peer here would take the convolver with it and cut the tail
+                // the moment the ghost stepped out of range.
                 continue;
             };
 
@@ -1509,6 +1741,16 @@ impl Client {
                 socket.to_owned(),
                 audio::Placement {
                     gain,
+                    // The vent's low pass, the camera's, or the impostor radio's high
+                    // pass. Decided here and applied in the mixing thread, which is the
+                    // only place a filter's own state can live.
+                    muffle: params.muffle,
+                    // Whether an impostor is being haunted, which is the one rule that also
+                    // stops walls blocking a voice. Decided here and applied in the mixing
+                    // thread, beside the muffle and for the same reason: three seconds of
+                    // convolver is state, and state cannot live in a value the window
+                    // rebuilds every frame.
+                    reverb: params.reverb,
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
                         y: 0.0,
@@ -1995,65 +2237,97 @@ impl Client {
             chrome_log(|| "title bar: move started".to_owned());
         }
 
+        // `#1d1a23`, and the whole strip is the drag region.
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::ZERO, theme::BG_TITLEBAR);
+
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
-            ui.horizontal_centered(|ui| {
-                // Everything in one right-to-left row, controls added first so they take
-                // their space from the right and the *name* is what gives way. Laid out the
-                // other way round -- name first -- a 250-point window pushed the buttons off
-                // the end and clipped the title mid-word as well.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕").on_hover_text(say("buttons.close")).clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    if ui
-                        .button("—")
-                        .on_hover_text(say("client.buttons.minimise"))
-                        .clicked()
-                    {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                    }
+            // Settings and reload flush left, close flush right, the name centred between
+            // them. Three separate passes over the same strip rather than one flow,
+            // because a centred label cannot be centred by a layout that has already
+            // spent the row on buttons.
+            let mut page_now = *page;
+            let mut used_left = 0.0_f32;
+            let mut used_right = 0.0_f32;
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+                let group = ui.horizontal_centered(|ui| {
+                    ui.add_space(4.0);
                     // One button rather than two, and it says where it goes rather than
                     // where you are: a gear on the settings page reads as "settings are
-                    // here", which is where you already were.
-                    // Leaving the settings is what applies the three capture settings a
-                    // device can only be opened with, so the arrow says so -- which is what
-                    // `buttons.exit` is for on the shipped client.
-                    let (glyph, hint) = match page {
-                        Screen::Main => ("⚙", say("settings.title")),
-                        Screen::Settings | Screen::Lobbies => ("⏴", say("buttons.exit")),
+                    // here", which is where you already were. Leaving the settings is what
+                    // applies the three capture settings a device can only be opened with,
+                    // so the arrow carries `buttons.exit`.
+                    let (glyph, hint) = match page_now {
+                        Screen::Main => (theme::icon::SETTINGS, say("settings.title")),
+                        Screen::Settings | Screen::Lobbies => {
+                            (theme::icon::ARROW_BACK, say("buttons.exit"))
+                        }
                     };
-                    if ui.button(glyph).on_hover_text(hint).clicked() {
-                        *page = match page {
+                    if chrome_icon(ui, glyph, &hint).clicked() {
+                        page_now = match page_now {
                             Screen::Main => Screen::Settings,
                             Screen::Settings | Screen::Lobbies => Screen::Main,
                         };
                     }
-                    if *page == Screen::Main
-                        && ui
-                            .button("🌐")
-                            .on_hover_text(say("buttons.public_lobby"))
+                    reload = chrome_icon(ui, theme::icon::REFRESH, &say("client.buttons.reload"))
+                        .clicked();
+                    if page_now == Screen::Main
+                        && chrome_icon(ui, theme::icon::PUBLIC, &say("buttons.public_lobby"))
                             .clicked()
                     {
-                        *page = Screen::Lobbies;
+                        page_now = Screen::Lobbies;
                     }
-                    reload = ui
-                        .button("⟳")
-                        .on_hover_text(say("client.buttons.reload"))
-                        .clicked();
-                    // The version beside the name, as the shipped client shows it: it is
-                    // the first thing anybody is asked for when they report something.
-                    ui.label(
-                        egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
-                            .weak()
-                            .small(),
-                    );
-                    // Last, so it fills what is left and truncates there.
-                    ui.add(
-                        egui::Label::new(egui::RichText::new("AnotherCrewLink").strong())
-                            .truncate(),
-                    );
                 });
+                used_left = group.response.rect.width();
             });
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+                let group =
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        if chrome_icon(ui, theme::icon::CLOSE, &say("buttons.close")).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if chrome_icon(ui, theme::icon::MINIMIZE, &say("client.buttons.minimise"))
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                    });
+                used_right = group.response.rect.width();
+            });
+            *page = page_now;
+
+            // The name and version, centred *in what the icons left*, in the accent. The
+            // version is beside it because it is the first thing anybody is asked for when
+            // they report something.
+            //
+            // Centred on the bar rather than on the gap, it sits under the icons at 250
+            // points -- which is the width this window has to work at, not a corner case.
+            // So the two groups are measured and the name is painted between them, clipped
+            // rather than overlapping: a name that runs out of room gives way, and the
+            // controls do not.
+            let name = concat!("AnotherCrewLink v", env!("CARGO_PKG_VERSION"));
+            let gap = egui::Rect::from_min_max(
+                egui::pos2(bar.left() + used_left + 8.0, bar.top()),
+                egui::pos2(bar.right() - used_right - 8.0, bar.bottom()),
+            );
+            if gap.width() > 24.0 {
+                // No wrap. A 24-point strip has room for one line, and a name that wraps
+                // in it is a name drawn over the row below.
+                let galley = ui.painter().layout_no_wrap(
+                    name.to_owned(),
+                    egui::FontId::proportional(14.0),
+                    theme::PURPLE,
+                );
+                ui.painter().with_clip_rect(gap).galley(
+                    egui::pos2(
+                        gap.center().x - galley.size().x / 2.0,
+                        gap.center().y - galley.size().y / 2.0,
+                    ),
+                    galley,
+                    theme::PURPLE,
+                );
+            }
         });
         reload
     }
@@ -2368,13 +2642,13 @@ impl Client {
     /// LOBBY rather than blanking it, so somebody streaming shows that there *is* a lobby
     /// without showing which one. The menu keeps its own name — there is no code to give
     /// away, and a menu labelled LOBBY would be a lie rather than a redaction.
-    fn lobby_line(&self, state: &acl_game::AmongUsState) -> String {
+    fn lobby_code(&self, state: &acl_game::AmongUsState) -> String {
         let say = |key: &str| {
             self.catalogue
                 .as_ref()
                 .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
         };
-        let code = if state.lobby_code.trim() == "MENU" {
+        if state.lobby_code.trim() == "MENU" {
             // The reader reports the word MENU, and the catalogue has it: it is a word on
             // the screen like any other, and both locales translate it.
             say("game.menu")
@@ -2382,8 +2656,7 @@ impl Client {
             "LOBBY".to_owned()
         } else {
             state.lobby_code.clone()
-        };
-        format!("{code} — {:?}", state.game_state)
+        }
     }
 
     /// The one line an update gets, and the button that takes it.
@@ -2440,7 +2713,7 @@ impl Client {
     /// opened this window, and each is worth knowing about when it applies. A client with
     /// no microphone is a working client with half its voice, and it is the first thing
     /// somebody asks about when nobody can hear them.
-    fn status_strip(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
+    fn status_lines(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
         const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
 
         let say = |key: &str| {
@@ -2455,13 +2728,19 @@ impl Client {
             )
         };
 
+        // One line each, stacked, rather than the single row this was until 2026-08-28.
+        // Three phrases and a window that is 250px wide at its minimum: the row ran off the
+        // right edge and the peer count -- the one number here that answers "can anybody
+        // hear me" -- was the half that fell off it.
         ui.horizontal(|ui| {
             ui.label(say("client.status.game_reader"));
             ui.label(egui::RichText::new(format!("{:?}", reader.state())).strong());
-            // The server, beside the reader. Both are things that can be down, and only one
-            // of them used to be sayable here -- a connection that never happened showed as
-            // fifteen crewmates wearing a "no connection" badge and nothing that said why.
-            ui.label(format!("· {}", say("client.status.server")));
+        });
+        // The server, under the reader. Both are things that can be down, and only one of
+        // them used to be sayable here -- a connection that never happened showed as fifteen
+        // crewmates wearing a "no connection" badge and nothing that said why.
+        ui.horizontal(|ui| {
+            ui.label(say("client.status.server"));
             let (word, colour) = match self.link.state() {
                 net::State::Connected(_) => ("client.status.connected", ui.visuals().text_color()),
                 net::State::Connecting => {
@@ -2470,19 +2749,30 @@ impl Client {
                 net::State::Idle => ("client.status.not_connected", TROUBLE),
                 net::State::Failed(_) => ("client.status.failed", TROUBLE),
             };
-            let word = say(word);
-            ui.colored_label(colour, egui::RichText::new(word).strong());
-            // How many peers are actually reachable, which is a different question from how
-            // many players the game reports. A lobby of six with one connection is the shape
-            // of a problem, and it is invisible without a number.
-            ui.label(format!(
-                "· {}",
-                say_with(
-                    "client.status.peers",
-                    &[("count", &self.link.connected_peers().to_string())]
-                )
-            ));
+            ui.colored_label(colour, egui::RichText::new(say(word)).strong());
         });
+        // How many peers are actually reachable, which is a different question from how many
+        // players the game reports. A lobby of six with one connection is the shape of a
+        // problem, and it is invisible without a number.
+        ui.label(say_with(
+            "client.status.peers",
+            &[("count", &self.link.connected_peers().to_string())],
+        ));
+    }
+
+    /// Everything that is currently wrong, one line each.
+    ///
+    /// Separate from [`Self::status_lines`] because they go in different places: the three
+    /// status lines sit in the column beside your crewmate, and a fault is full width under
+    /// the divider, where a sentence has room to be read.
+    fn trouble_lines(&self, ui: &mut egui::Ui, reader: &reader::Reader) {
+        const TROUBLE: egui::Color32 = egui::Color32::from_rgb(230, 140, 90);
+
+        let say = |key: &str| {
+            self.catalogue
+                .as_ref()
+                .map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
+        };
         let retired;
         let link_trouble = match self.link.state() {
             net::State::Failed(why) => {
@@ -2570,7 +2860,6 @@ impl Client {
             },
             say,
         );
-        ui.separator();
     }
 
     /// Everything the frame needs settled before anything is painted.
@@ -2652,9 +2941,16 @@ impl eframe::App for Client {
         self.keep_listed();
         self.carry_audio();
 
-        // Remembered every frame and written once, on the way out. The shipped keeper
-        // debounces instead, because it is reacting to move and resize events; this is
-        // already awake, so there is nothing to debounce.
+        // Remembered every frame, and written down once it has stopped moving.
+        //
+        // **Not only on the way out**, which is what this did until 2026-08-28. A client
+        // that is killed, or that the driver takes down with it, closes without running
+        // the line that writes -- and the next start has nothing to restore, so it opens
+        // at `MIN_WIDTH` by `MIN_HEIGHT`. That is a floor, not a size anybody chose, and
+        // it is how a window somebody had sized to their screen came back at 250x350.
+        //
+        // The shipped keeper debounces for the same reason, off move and resize events.
+        // This is already awake every frame, so the debounce is a timestamp instead.
         let minimised = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
         let maximised = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
         let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
@@ -2665,23 +2961,33 @@ impl eframe::App for Client {
                 clippy::cast_possible_truncation,
                 reason = "screen coordinates, rounded to the pixel they are stored as"
             )]
-            {
-                self.last_seen = Some(WindowState {
-                    width: outer.width() as i32,
-                    height: outer.height() as i32,
-                    x: Some(outer.min.x as i32),
-                    y: Some(outer.min.y as i32),
-                });
+            let seen = WindowState {
+                width: outer.width() as i32,
+                height: outer.height() as i32,
+                x: Some(outer.min.x as i32),
+                y: Some(outer.min.y as i32),
+            };
+            if self.last_seen != Some(seen) {
+                self.last_seen = Some(seen);
+                self.moved_at = Some(std::time::Instant::now());
             }
         }
+        if self.moved_at.is_some_and(|since| since.elapsed() >= SETTLE) {
+            self.write_window_state();
+        }
 
-        // Composed on the same cadence the frames arrive at, which is the helper's five a
-        // second: there is nothing new to draw between them.
+        // Five times a second, and now actually five times a second: see [`OVERLAY_TICK`]
+        // for what one of these costs and what asking for it every repaint did. The tick is
+        // taken before the state, because cloning the state is itself work this does not
+        // need to do a hundred times a second either.
         #[cfg(windows)]
-        if let Some(state) = self
-            .reader
-            .as_ref()
-            .and_then(|reader| reader.latest().cloned())
+        if self
+            .overlay_due
+            .due(std::time::Instant::now(), OVERLAY_TICK)
+            && let Some(state) = self
+                .reader
+                .as_ref()
+                .and_then(|reader| reader.latest().cloned())
         {
             self.compose_overlay(&state);
         }
@@ -2705,9 +3011,26 @@ impl eframe::App for Client {
             self.write_window_state();
         }
 
-        // The game state arrives five times a second and nothing else moves, so there is no
-        // reason to redraw faster than that.
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        // The game state arrives five times a second and nothing else moves, so when nobody
+        // is looking at this window there is no reason to redraw faster than that.
+        //
+        // **While the pointer is over it there is.** egui scrolls smoothly by animating an
+        // offset over several frames, and it can only do that in the frames it is given.
+        // Measured on 2026-08-28 with the settings open and the wheel turning: 5 frames a
+        // second and gaps of 146 to 239 milliseconds between them -- which is this fallback
+        // firing, because between one wheel event and the next nothing asked for anything
+        // sooner. A fifth of a second of held-still list, then a jump, is exactly what
+        // "slow and juddery" describes.
+        //
+        // The cost is bounded by where the pointer is. This window's own work is 0.08ms a
+        // frame -- measured the same day -- so drawing continuously while somebody is
+        // actually pointing at it is cheap, and the moment they move away it goes back to
+        // five a second.
+        if ctx.input(|input| input.pointer.has_pointer()) {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
     }
 
     #[expect(
@@ -2789,17 +3112,16 @@ impl eframe::App for Client {
                 return;
             };
 
-            self.status_strip(ui, reader);
-
-            ui.separator();
             let Some(state) = reader.latest() else {
+                // No game yet, so no crewmate to put the status beside. It keeps its own
+                // block here, which is also where it is most worth reading: this is the
+                // screen somebody stares at when the server will not come up.
+                self.status_lines(ui, reader);
+                self.trouble_lines(ui, reader);
+                ui.separator();
                 self.waiting_for_the_game(ui);
                 return;
             };
-
-            ui.label(self.lobby_line(state));
-            self.say_what_the_lobby_allows(ui);
-            ui.add_space(4.0);
 
             // The roster decides who is shown; this only draws them. Nothing here knows
             // anything about audio yet, so the voice layer is answered with the truth as
@@ -2873,16 +3195,69 @@ impl eframe::App for Client {
             let say_here = move |key: &str| {
                 catalogue.map_or_else(|| key.to_owned(), |catalogue| catalogue.t(key).to_owned())
             };
-            Self::draw_you(
-                ui,
-                state,
-                controls,
-                connected_to_server,
-                local_talking,
-                &dressed,
-                &say_here,
-            );
+            // The spec's top row: your crewmate on the left, and stacked beside it your
+            // name, the lobby code, and where this client stands. §2, minus the mute and
+            // deafen buttons on the right, which are not built yet.
+            let me = state.players.iter().find(|player| player.is_local);
+            let switches = controls.state();
+            let mut pressed = None;
+            ui.horizontal(|ui| {
+                Self::draw_you(
+                    ui,
+                    state,
+                    controls,
+                    connected_to_server,
+                    local_talking,
+                    &dressed,
+                    &say_here,
+                );
+                // 30px of button and the spec's 5px of padding beside it, taken off the
+                // right before the column is given the rest. A `vertical` in a row takes
+                // the whole remainder, so built the other way round there is no width left
+                // for them to be in.
+                let column = (ui.available_width() - 35.0).max(0.0);
+                ui.allocate_ui(egui::vec2(column, ui.available_height()), |ui| {
+                    ui.vertical(|ui| {
+                        // **Your own name is not drawn**, which is a deviation from §2 --
+                        // "your name (20px, ellipsised) and the lobby code stacked centre"
+                        // -- decided by the maintainer on 2026-08-28. It is the one label
+                        // on this screen whose reader already knows what it says, and the
+                        // crewmate beside it is yours whether or not it is written out.
+                        acl_ui::views::main::lobby_code(
+                            ui,
+                            &self.lobby_code(state),
+                            me.map_or(-1, |me| i32::try_from(me.color_id).unwrap_or(-1)),
+                        );
+                        self.status_lines(ui, reader);
+                    });
+                });
+                // Against the right edge. `allocate_ui` gives back only what the column
+                // actually used, not what it was offered, so without this the pair sits
+                // against the longest line of text instead of against the window.
+                ui.add_space((ui.available_width() - 30.0).max(0.0));
+                pressed = acl_ui::views::main::draw_switches(
+                    ui,
+                    switches.muted,
+                    switches.deafened,
+                    &say_here,
+                );
+            });
+
+            ui.separator();
+            self.say_what_the_lobby_allows(ui);
+            self.trouble_lines(ui, reader);
+            ui.add_space(4.0);
             acl_ui::views::main::draw(ui, &portraits, &say_here);
+
+            // Applied here rather than where it was pressed, which is the rule the settings
+            // screen states and the same reason: the rules of these two are not the view's.
+            // Mute while deafened clears both, and a button that wrote its own boolean
+            // would be a second set of rules to keep in step with the keys.
+            match pressed {
+                Some(acl_ui::views::main::Switch::Mute) => self.controls.toggle_mute(),
+                Some(acl_ui::views::main::Switch::Deafen) => self.controls.toggle_deafen(),
+                None => {}
+            }
         });
     }
 }
@@ -2908,6 +3283,51 @@ fn tell_the_user(message: &str) {
             body.as_ptr(),
             title.as_ptr(),
             MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The line that keeps the console window shut is still in this file.
+    ///
+    /// Not a style check. `#![windows_subsystem = "windows"]` was added in 558db643, and
+    /// 65c72329 deleted it while rewriting the paragraph above it -- the prose that
+    /// explains the fix survived, the line that *is* the fix did not, and the console came
+    /// back in front of a proximity chat that had shipped without one.
+    ///
+    /// Read out of the source rather than asserted about the process, because a test
+    /// binary is a console application whatever this file says: the attribute applies to
+    /// the executable it is compiled into, and that is not this one. What can be checked
+    /// here is that nobody has removed the line again, which is how it was lost.
+    /// A cadence lets the first through and holds the rest until its period is up.
+    ///
+    /// Driven with made-up instants rather than by sleeping, so it says something about the
+    /// arithmetic rather than about how busy the machine was.
+    #[test]
+    fn a_cadence_holds_everything_between_its_ticks() {
+        use std::time::Duration;
+
+        let period = Duration::from_millis(200);
+        let start = std::time::Instant::now();
+        let mut cadence = super::Cadence::default();
+
+        assert!(cadence.due(start, period), "the first is always due");
+        assert!(!cadence.due(start + Duration::from_millis(1), period));
+        assert!(!cadence.due(start + Duration::from_millis(199), period));
+        assert!(cadence.due(start + period, period));
+        // The next window is measured from when it last fired, not from the first ask --
+        // otherwise a burst of repaints walks the deadline forward and it never fires.
+        assert!(!cadence.due(start + period + Duration::from_millis(1), period));
+        assert!(cadence.due(start + period + period, period));
+    }
+
+    #[test]
+    fn the_console_window_is_still_switched_off() {
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains(r#"#![cfg_attr(windows, windows_subsystem = "windows")]"#),
+            "the windows_subsystem attribute is gone: this build opens a console"
         );
     }
 }

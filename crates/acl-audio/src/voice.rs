@@ -167,18 +167,23 @@ pub enum FilterKind {
 /// The muffle filter's settings, when it should be in the path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Muffle {
-    /// The filter shape, or `None` to leave the node's shape alone.
+    /// The filter shape.
     ///
-    /// `None` is not "no filter", it is "whatever this node already is", and it is how the
-    /// original behaves rather than a simplification. `Voice.tsx` sets `muffle.type` only
-    /// in the impostor-radio branch; the vent and camera branch writes frequency and Q and
-    /// never touches the type. A node created as a low pass therefore stays one — unless
-    /// that peer was once on the impostor radio, after which it is a high pass for vents
-    /// and cameras too, for as long as the peer exists.
+    /// Always set, and that is the correction of 2026-08-28. It was `Option`, and `None`
+    /// meant "whatever this node already is" — which was an accurate reading of
+    /// `Voice.tsx` when this was written at 17:23 on 2026-08-24, and stopped being one at
+    /// 22:20 the same day, when `651d7ae9` gave the vent and camera branch an explicit
+    /// `muffle.type = 'lowpass'`.
     ///
-    /// Reproduced rather than fixed, because G2 compares against recorded sessions. It is
-    /// worth fixing afterwards; the fix belongs in the same change as its own test.
-    pub kind: Option<FilterKind>,
+    /// The bug it fixed there is the reason it matters here: the impostor radio borrows
+    /// the same node and leaves it a high pass, and nothing put it back. One use of the
+    /// radio turned every later vent and camera into a high pass at the *low* pass corner
+    /// frequency — stripping out everything below 2 kHz, which is where speech lives — for
+    /// as long as that peer existed.
+    ///
+    /// The recorded corpus could not catch this: all 1,035 of its tuples have no muffle at
+    /// all, because nobody in that session was in a vent, on a camera or on the radio.
+    pub kind: FilterKind,
     /// The corner frequency, in hertz.
     pub frequency: f32,
     /// The filter's Q.
@@ -372,7 +377,7 @@ pub fn voice_params(
     // the filter type.
     let muffle = if radio_muffle {
         Some(Muffle {
-            kind: Some(FilterKind::HighPass),
+            kind: FilterKind::HighPass,
             frequency: RADIO_MUFFLE.0,
             q: RADIO_MUFFLE.1,
         })
@@ -394,7 +399,9 @@ pub fn voice_params(
             gain = if on_camera { CAMERA_GAIN } else { VENT_GAIN };
         }
         Some(Muffle {
-            kind: None,
+            // Explicit, every time. See `Muffle::kind`: the radio leaves this node a high
+            // pass, and only writing it back makes the next vent a low pass again.
+            kind: FilterKind::LowPass,
             frequency,
             q,
         })
@@ -921,7 +928,12 @@ mod tests {
         let muffle = params.muffle.unwrap();
         assert_eq!(muffle.frequency, VENT_MUFFLE.0);
         assert_eq!(muffle.q, VENT_MUFFLE.1);
-        assert_eq!(muffle.kind, None, "the vent branch never sets the type");
+        assert_eq!(
+            muffle.kind,
+            FilterKind::LowPass,
+            "a vent is a low pass, and saying so is what stops the radio's high pass \
+             surviving into it"
+        );
     }
 
     #[test]
@@ -1224,7 +1236,7 @@ mod tests {
         )
         .muffle
         .unwrap();
-        assert_eq!(muffle.kind, Some(FilterKind::HighPass));
+        assert_eq!(muffle.kind, FilterKind::HighPass);
         assert_eq!(muffle.frequency, RADIO_MUFFLE.0);
         assert_eq!(muffle.q, RADIO_MUFFLE.1);
     }
@@ -1591,7 +1603,7 @@ mod tests {
         )
         .muffle
         .unwrap();
-        assert_eq!(muffle.kind, Some(FilterKind::HighPass));
+        assert_eq!(muffle.kind, FilterKind::HighPass);
         assert_eq!(muffle.frequency, RADIO_MUFFLE.0);
     }
 

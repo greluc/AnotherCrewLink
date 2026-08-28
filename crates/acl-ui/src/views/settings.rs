@@ -12,12 +12,13 @@
 //! somebody else is host they are read from what the host sent and are not writable at
 //! all, which is a decision about who is in the game rather than about drawing.
 
-use egui::{ComboBox, Slider, Ui};
+use egui::{ComboBox, Ui};
 use serde_json::{Value, json};
 
 use crate::settings_screen::{
     Control, Kind, SECTIONS, Scope, availability, gate_is_its_own_control, shown, stored,
 };
+use crate::views::theme;
 
 /// What the player did.
 #[derive(Clone, Debug, PartialEq)]
@@ -211,7 +212,7 @@ fn gate_checkbox(
     changes: &mut Vec<Change>,
 ) {
     let mut on = is_on;
-    if ui.checkbox(&mut on, label).changed() {
+    if theme::checkbox(ui, &mut on, label).changed() {
         changes.push(Change::Set {
             key: gate,
             scope,
@@ -276,14 +277,24 @@ fn choice(
 fn meter(ui: &mut Ui, level: Option<f32>) {
     // Green when it is live and grey when nothing has reported: an empty grey bar reads as
     // "not listening", and an empty green one as "listening, and hearing silence".
+    //
+    // **A deviation from the design system, decided by the maintainer on 2026-08-28.**
+    // `reference.json` gives the microphone bar `--acl-red-500`, one colour whatever the
+    // state. That loses the distinction above, which is the answer to "is the microphone
+    // even open" -- the first thing anybody checks when nobody can hear them. Put to the
+    // maintainer with the trade-off stated and kept as it is.
     let fill = if level.is_some() {
-        egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
+        theme::TALKING
     } else {
         ui.visuals().weak_text_color()
     };
+    // `--mic-bar-w` by `--mic-bar-h`. The height was never set, so egui took the row --
+    // 24px -- and `--radius-lg` turned a 200x24 bar into a capsule with a dot in it.
     ui.add(
         egui::ProgressBar::new(level.unwrap_or(0.0).clamp(0.0, 1.0))
-            .desired_width(200.0)
+            .desired_width(theme::METER_W)
+            .desired_height(theme::METER_H)
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_SM))
             .fill(fill),
     );
 }
@@ -324,17 +335,26 @@ fn one(
             // What the box shows, which is not always what is stored. See `Kind::Toggle`.
             let stored = values.bool_at(scope, control.key);
             let mut shown = stored != inverted;
-            if ui.checkbox(&mut shown, label).changed() {
+            if theme::checkbox(ui, &mut shown, label).changed() {
                 changes.push(set(json!(shown != inverted)));
             }
         }
         Kind::Slider { min, max, step, .. } => {
             let mut value = shown(control.kind, values.number_at(scope, control.key));
-            ui.label(label);
-            if ui
-                .add(Slider::new(&mut value, min..=max).step_by(step))
-                .changed()
-            {
+            // The number belongs in the label -- "Voice Distance: 5.3" -- which is where
+            // `forms/Slider.jsx` puts it, and it is one decimal when a step can land
+            // between whole numbers and none when it cannot. A volume that steps by two
+            // has no business reading 100.00.
+            //
+            // Empty when the gating checkbox above already carries the words, so the row
+            // is the number alone rather than a colon with nothing in front of it.
+            let decimals = usize::from(step.fract() != 0.0);
+            ui.label(if label.is_empty() {
+                format!("{value:.decimals$}")
+            } else {
+                format!("{label}: {value:.decimals$}")
+            });
+            if theme::slider(ui, &mut value, min..=max, step).changed() {
                 changes.push(set(json!(stored(control.kind, value))));
             }
         }
