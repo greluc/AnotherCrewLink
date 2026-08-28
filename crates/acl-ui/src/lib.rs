@@ -15,6 +15,7 @@ pub mod config;
 pub mod cosmetics;
 pub mod edges;
 pub mod hats;
+pub mod icon;
 pub mod lobby_list;
 pub mod overlay_layout;
 pub mod platforms;

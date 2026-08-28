@@ -740,6 +740,13 @@ fn main() -> eframe::Result<()> {
         .with_maximize_button(false)
         .with_inner_size([opening.width as f32, opening.height as f32])
         .with_min_inner_size([MIN_WIDTH as f32, MIN_HEIGHT as f32]);
+    // The taskbar button had nothing to draw. Windows looks for a window's own icon first
+    // and falls back to the executable's, and this client had set neither -- so what people
+    // saw beside a 1.x client with a proper icon was a blank sheet. Left unset if it will
+    // not decode: a client that starts without its icon is still a client.
+    if let Some(icon) = acl_ui::icon::window() {
+        viewport = viewport.with_icon(icon);
+    }
     if let Some(rect) = opening.rect() {
         #[expect(
             clippy::cast_precision_loss,
