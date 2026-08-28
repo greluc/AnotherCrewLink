@@ -361,16 +361,24 @@ try {
     gh release upload --repo $slug --clobber $Tag $manifest $signature
     if ($LASTEXITCODE -ne 0) { Fail 'The upload failed. The release is still a draft, so run this again.' }
 
+    # Semver already says which releases are pre-releases: the ones with something after the
+    # hyphen. Nothing acted on it -- the workflow never passes the flag, so alpha.1 and
+    # alpha.2 were marked by hand afterwards and alpha.3 was not, which put a 2.0.0 alpha on
+    # the releases page as "Latest" for every 1.x visitor. A step somebody has to remember
+    # after the irreversible one is a step that gets forgotten, and this one was.
+    $prerelease = if ($version -match '-') { 'true' } else { 'false' }
+
     Step 'Publishing'
-    gh release edit --repo $slug $Tag --draft=false
+    gh release edit --repo $slug $Tag --draft=false --prerelease=$prerelease
     if ($LASTEXITCODE -ne 0) { Fail 'The release did not publish. Both files are uploaded; run this again.' }
 
     Write-Host "`n== $Tag is published." -ForegroundColor Green
-    # `releases/latest` is GitHub's newest release that is neither a draft nor a pre-release.
-    # Every 2.0.0 alpha is a pre-release, so the feed the client polls does not resolve to
-    # this one -- see the "Known gap" section of docs/release-ceremony.md.
-    if ($version -match '-') {
-        Write-Host "   Note: $version is a pre-release, so the client's update feed will not find it." -ForegroundColor Yellow
+    # `releases/latest` is GitHub's newest release that is neither a draft nor a pre-release,
+    # so marking it above is also what keeps the client's update feed off it. See the "Known
+    # gap" section of docs/release-ceremony.md for why that is still the chosen trade.
+    if ($prerelease -eq 'true') {
+        Write-Host "   Marked as a pre-release, so 1.x visitors still see 1.0.6 as Latest." -ForegroundColor DarkGray
+        Write-Host "   Which also means the client's update feed will not find $version." -ForegroundColor Yellow
         Write-Host '   docs/release-ceremony.md, "Known gap", has the three ways out.' -ForegroundColor DarkGray
     }
 }

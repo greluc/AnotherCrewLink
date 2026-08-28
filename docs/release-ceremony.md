@@ -91,6 +91,13 @@ appending `.minisig` rather than accepting it separately, so a manifest publishe
 its signature is one no client can accept — and one that cannot be told to look somewhere
 else, which is the point of deriving it.
 
+`--prerelease` follows the version: anything with something after the hyphen is one. The
+workflow does not set that flag and never has, so alpha.1 and alpha.2 were marked by hand
+after the fact and **alpha.3 was not** — which put a 2.0.0 alpha on the releases page as
+"Latest" for every 1.x visitor until it was noticed and flipped. `scripts/release.ps1` now
+passes it from the version, because a step somebody has to remember *after* the irreversible
+one is a step that gets forgotten.
+
 Releases are immutable from 2026-08-24, so this cannot be corrected afterwards. A mistake
 here is a new version, not an edit.
 
@@ -122,7 +129,10 @@ releases/latest/download/manifest.json  →  302  →  .../download/v1.0.6/manif
 ```
 
 Every 2.0.0 alpha is marked as a pre-release, so the URL resolves to the 1.0.6 release,
-which has no manifest. The client reads that as "up to date" and offers nothing. Nothing is
+which has no manifest. Measured again on 2026-08-28 with alpha.3 published and marked:
+`releases/latest` is 1.0.6 and the manifest is a 404. Briefly, before it was marked, the
+same URL served alpha.3's manifest and the whole update path worked end to end — which is
+what option 1 below buys and what it costs. The client reads that as "up to date" and offers nothing. Nothing is
 broken and nothing is unsafe — the signature is the whole security boundary, and this is
 only about which document is found — but the update path does not fire for a pre-release,
 which is the phase it would be most useful in.
