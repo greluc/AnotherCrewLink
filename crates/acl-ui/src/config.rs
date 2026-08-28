@@ -143,6 +143,26 @@ impl Config {
         )
     }
 
+    /// A list of strings, or an empty one.
+    ///
+    /// No default: the schema holds scalars, and the one list that reaches this is a custom
+    /// platform's `execute` -- a program and its arguments, which nobody but the player who
+    /// added that platform can have a value for. Anything in the array that is not a string
+    /// is dropped rather than stringified, because `execute[0]` becomes a path and a number
+    /// turned into one is a path that does not exist.
+    #[must_use]
+    pub fn strings_at(&self, key: &str) -> Vec<String> {
+        self.get(key)
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Sets a value at a dotted path, creating the objects on the way.
     ///
     /// A step that exists and is not an object is replaced. `electron-store` does the same,
@@ -263,7 +283,27 @@ pub fn per_player_gain(config: &Config, name_hash: i32, gain: f32) -> Option<f32
 
 #[cfg(test)]
 mod tests {
+
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// A custom platform's `execute` comes back as it is, and nothing else does.
+    ///
+    /// `execute[0]` becomes a path. A number turned into a string is a path that does not
+    /// exist, and a launch button that fails on one is worse than one that has no program
+    /// to run.
+    #[test]
+    fn a_list_of_strings_drops_what_is_not_one() {
+        let config = Config::read(
+            r#"{"customPlatforms":{"Mine":{"execute":["Among Us.exe","--windowed",7,null]}}}"#,
+        );
+        assert_eq!(
+            config.strings_at("customPlatforms.Mine.execute"),
+            vec!["Among Us.exe".to_owned(), "--windowed".to_owned()]
+        );
+        // Absent, and not an array, are both empty rather than an invented default.
+        assert!(config.strings_at("customPlatforms.None.execute").is_empty());
+        assert!(config.strings_at("customPlatforms").is_empty());
+    }
 
     /// The master volume reaches the gain at all, which it did not until 2026-08-27.
     ///

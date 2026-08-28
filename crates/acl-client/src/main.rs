@@ -313,6 +313,16 @@ fn named(
     pairs
 }
 
+/// A platform's fields, owned.
+///
+/// `start_game::Described` borrows, and these are borrowed from `self` -- which the button
+/// press then needs mutably. Owning them for one frame is what lets those two not overlap.
+struct Startable {
+    run_path: String,
+    is_uri: bool,
+    execute: Vec<String>,
+}
+
 /// The machine's microphones and speakers, as the settings screen needs them.
 ///
 /// Cached, because enumerating is a trip through WASAPI and the screen repaints five times
@@ -2063,13 +2073,20 @@ impl Client {
         ui.label(waiting);
 
         let stored = self.settings.config().text_at("launchPlatform");
-        let Some(platform) = acl_types::platform::Platform::from_key(&stored) else {
-            // No platform, or one this build does not know. `Menu.tsx` says exactly this
-            // rather than offering a button that cannot work.
+        let Some((label, startable)) = self.how_to_start(&stored) else {
+            // No platform, one this build does not know, and nothing in `customPlatforms`
+            // describing it either. `Menu.tsx` says exactly this rather than offering a
+            // button that cannot work.
             ui.label(no_platform);
             return;
         };
-        let name = say(platform.translate_key());
+        // A built-in platform hands back a translation key; a custom one hands back the
+        // title its owner typed, which is already the words to show.
+        let name = if label.starts_with("platform.") {
+            say(&label)
+        } else {
+            label
+        };
 
         let mut pressed = false;
         ui.horizontal(|ui| {
@@ -2079,7 +2096,7 @@ impl Client {
         // Outside the closure, which borrows `self` for the translator above.
         if pressed {
             self.launch_trouble = None;
-            self.start_the_game(platform);
+            self.start_the_game(&stored, &startable);
         }
         if let Some(why) = self.launch_trouble.clone() {
             ui.colored_label(egui::Color32::from_rgb(230, 140, 90), why);
@@ -2093,25 +2110,66 @@ impl Client {
     /// until somebody sets one, so this can refuse — and refusing has to be visible.
     /// `Menu.tsx` shows `game.open_error`, which tells the player to start it themselves,
     /// and that is better than a button that appears to do nothing.
-    fn start_the_game(&mut self, platform: acl_types::platform::Platform) {
-        let execute: Vec<String> = platform
-            .executable()
-            .map(|name| vec![name.to_owned()])
-            .unwrap_or_default();
-        let described = acl_core::start_game::Described {
-            run_path: platform.run_path(),
-            is_uri: matches!(platform.run_type(), acl_types::platform::RunType::Uri),
-            execute: &execute,
-        };
-        let outcome = acl_core::start_game::plan(described)
-            .and_then(|what| acl_core::start_game::start(&what));
+    fn start_the_game(&mut self, key: &str, startable: &Startable) {
+        let outcome = acl_core::start_game::plan(acl_core::start_game::Described {
+            run_path: &startable.run_path,
+            is_uri: startable.is_uri,
+            execute: &startable.execute,
+        })
+        .and_then(|what| acl_core::start_game::start(&what));
         match outcome {
-            Ok(()) => acl_core::log_info!("game", "asked {platform:?} to start Among Us"),
+            Ok(()) => acl_core::log_info!("game", "asked {key} to start Among Us"),
             Err(why) => {
-                acl_core::log_warn!("game", "could not start Among Us on {platform:?}: {why}");
+                acl_core::log_warn!("game", "could not start Among Us on {key}: {why}");
                 self.launch_trouble = Some(why.to_string());
             }
         }
+    }
+
+    /// What `launchPlatform` names, as a label and the fields that start it.
+    ///
+    /// One of the three the client knows, or an entry in `customPlatforms` under that same
+    /// key. The second is not an extra: a player who set one up in 1.x has it in the file
+    /// this client reads, and refusing to start it would make this client worse than the
+    /// one they had. Adding a new one is not offered here yet -- only using one.
+    ///
+    /// The label is a translation key for a built-in and the player's own title for a
+    /// custom entry, and the caller tells them apart by the prefix.
+    fn how_to_start(&self, key: &str) -> Option<(String, Startable)> {
+        if let Some(platform) = acl_types::platform::Platform::from_key(key) {
+            return Some((
+                platform.translate_key().to_owned(),
+                Startable {
+                    run_path: platform.run_path().to_owned(),
+                    is_uri: matches!(platform.run_type(), acl_types::platform::RunType::Uri),
+                    execute: platform
+                        .executable()
+                        .map(|name| vec![name.to_owned()])
+                        .unwrap_or_default(),
+                },
+            ));
+        }
+
+        let stored = self.settings.config();
+        let run_path = stored.text_at(&format!("customPlatforms.{key}.runPath"));
+        if run_path.is_empty() {
+            return None;
+        }
+        // `PlatformRunType` is a string enum -- `'URI'` and `'EXE'` -- rather than the
+        // numbers it looks like it should be. Anything else is treated as a program, which
+        // is the branch that can fail visibly; guessing URI would hand an unknown string to
+        // the shell.
+        let is_uri = stored
+            .text_at(&format!("customPlatforms.{key}.launchType"))
+            .eq_ignore_ascii_case("URI");
+        Some((
+            key.to_owned(),
+            Startable {
+                run_path,
+                is_uri,
+                execute: stored.strings_at(&format!("customPlatforms.{key}.execute")),
+            },
+        ))
     }
 
     /// The lobby's code and what the game is doing, as one line.
