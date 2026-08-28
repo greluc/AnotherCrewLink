@@ -25,14 +25,17 @@
     in it matches `Cargo.toml`, because the release workflow refuses the same thing three
     minutes later and finding out here costs nothing.
 .PARAMETER Key
-    The private minisign key. Prompted for if absent.
+    The private minisign key. Defaults to `sign-cert\release.key`, which is where the
+    ceremony of 2026-08-27 put it and which `.gitignore` keeps out of the history. Prompted
+    for only if that is not there.
 .PARAMETER Public
-    The public half. Defaults to `<Key>.pub`.
+    The public half. Defaults to the `.pub` beside the key -- `release.pub` next to
+    `release.key`, which is how minisign names a pair.
 
-    Given rather than derived from the private key on purpose. Deriving it would check the
-    signature against the key that made it, which cannot fail and therefore checks nothing;
-    given, it checks against the key the fleet actually uses, which is the question whose
-    wrong answer bricks an update for everybody.
+    A *file*, given rather than derived from the private key's contents, on purpose.
+    Deriving it would check the signature against the key that made it, which cannot fail
+    and therefore checks nothing; read off disk, it checks against the key the fleet
+    actually uses, which is the question whose wrong answer bricks an update for everybody.
 .PARAMETER Yes
     Skip the confirmation before publishing. See above.
 .PARAMETER WorkDir
@@ -41,9 +44,12 @@
     tree is one `git add -A` away from being committed.
 .EXAMPLE
     .\scripts\release.ps1
-    Asks for the tag, the key and the passphrase, then does the rest.
+    Asks for the tag and the passphrase, finds the key itself, then does the rest.
+.EXAMPLE
+    .\scripts\release.ps1 -Tag v2.0.0-alpha.3
 .EXAMPLE
     .\scripts\release.ps1 -Tag v2.0.0-alpha.3 -Key E:\acl\operational.key
+    For a key kept off this machine's repository, which is the better place for it.
 #>
 [CmdletBinding()]
 param(
@@ -97,11 +103,40 @@ $onRemote = git branch -r --contains $head 2>$null
 if (-not $onRemote) { Fail 'HEAD is not on any remote branch. Push it first.' }
 
 # --- the key ----------------------------------------------------------------------------
-if (-not $Key) { $Key = Read-Host 'Path to the private signing key' }
+# Where the ceremony put it. Defaulted rather than asked for, because a path typed at a
+# prompt is a path that can be typed wrong, and the way it goes wrong is by handing over the
+# public half -- which used to fail with a message about a missing file rather than about
+# the mistake that was made.
+$here = Join-Path $repo 'sign-cert' | Join-Path -ChildPath 'release.key'
+if (-not $Key) {
+    $Key = if (Test-Path -LiteralPath $here) { $here } else { Read-Host 'Path to the private signing key' }
+}
 $Key = $Key.Trim('"').Trim()
+if ($Key.EndsWith('.pub', [StringComparison]::OrdinalIgnoreCase)) {
+    Fail "$Key is the public half. -Key wants the private one: the .key file beside it."
+}
 if (-not (Test-Path -LiteralPath $Key)) { Fail "No key at $Key." }
-if (-not $Public) { $Public = "$Key.pub" }
-if (-not (Test-Path -LiteralPath $Public)) { Fail "No public key at $Public. Pass -Public if it is elsewhere." }
+
+# minisign names a pair `<name>.key` and `<name>.pub`, siblings rather than one suffixed
+# onto the other. `<key>.pub` is tried as well, because that is the only thing this script
+# looked for until 2026-08-28 and somebody may have named a file to suit it.
+if (-not $Public) {
+    $beside = [System.IO.Path]::ChangeExtension($Key, '.pub')
+    $Public = if (Test-Path -LiteralPath $beside) { $beside } else { "$Key.pub" }
+}
+if (-not (Test-Path -LiteralPath $Public)) {
+    Fail "No public key at $Public. Pass -Public if it is elsewhere."
+}
+
+# A private key inside the working tree is one `git add -f` away from being in a public
+# history. Living there is allowed -- it is where the ceremony put it -- but only for as
+# long as git is ignoring it, and that is worth confirming before rather than after.
+if ($Key.StartsWith($repo, [StringComparison]::OrdinalIgnoreCase)) {
+    git check-ignore --quiet -- $Key
+    if ($LASTEXITCODE -ne 0) {
+        Fail "$Key is inside the repository and git is not ignoring it. Put it back in .gitignore before signing anything."
+    }
+}
 
 $secure = Read-Host 'Key passphrase' -AsSecureString
 if ($secure.Length -eq 0) { Fail 'No passphrase given.' }

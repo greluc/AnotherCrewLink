@@ -67,8 +67,12 @@ bytes that exist rather than bytes somebody typed.
 ACL_RELEASE_KEY_PASSWORD='…' acl-release sign \
   --manifest manifest.json \
   --key /path/to/release.key \
-  --public /path/to/release.key.pub
+  --public /path/to/release.pub
 ```
+
+`release.pub`, not `release.key.pub`: minisign names a pair as two siblings sharing a stem.
+`scripts/release.ps1` looked for the second of those until 2026-08-28 and refused to start
+because of it.
 
 This writes `manifest.json.minisig` beside it and then **verifies its own work** against the
 public key you gave it. Give the public half explicitly: derived from the private one, the
