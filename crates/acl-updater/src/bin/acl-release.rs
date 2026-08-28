@@ -386,34 +386,45 @@ fn secret_key(path: &Path) -> Result<minisign::SecretKey, String> {
 /// So this signs a throwaway document and verifies it with the client's own verifier against
 /// the compiled-in list. It answers "would the fleet accept this key", which is the question,
 /// and it is worth asking again before any release rather than only once.
+/// The throwaway document [`check`] signs.
+///
+/// A manifest rather than arbitrary bytes, because the verifier parses before it trusts and
+/// a document it rejects for its *shape* would look exactly like a key it rejects. Which is
+/// what this did until 2026-08-28: it carried `"size":0`, the reader refuses a size of zero,
+/// and so `check` reported every key -- including the one the fleet trusts -- as untrusted.
+///
+/// So it describes something real: a one-byte artefact, its true SHA-512, and a size of one.
+/// `the_canned_document_is_a_manifest_the_client_accepts` holds it to that, digest included,
+/// by verifying it the way `check` does and then asking the manifest to recognise the very
+/// byte it claims to describe.
+const CANNED: &str = concat!(
+    r#"{"version":"0.0.0","url":"https://example.invalid/none","sha512":""#,
+    "b8244d028981d693af7b456af8efa4cad63d282e19ff14942c246e50d9351d22",
+    "704a802a71c3580b6370de4ceb293c324a8423342557d4e5c38438f0e36910ee",
+    r#"","size":1}"#
+);
+
+/// The one byte [`CANNED`] describes.
+#[cfg(test)]
+const CANNED_ARTEFACT: &[u8] = &[0];
+
 fn check(arguments: &[String]) -> Result<String, String> {
     let key = PathBuf::from(option(arguments, "--key").ok_or_else(usage)?);
     let secret = secret_key(&key)?;
 
-    // A manifest rather than arbitrary bytes, because the verifier parses before it trusts
-    // and a document it rejects for its shape would look like a key it rejects.
-    let document = concat!(
-        r#"{"version":"0.0.0","url":"https://example.invalid/none","sha512":""#,
-        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
-        "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
-        r#"","size":0}"#
-    );
-    let signature = minisign::sign(None, &secret, std::io::Cursor::new(document), None, None)
+    let signature = minisign::sign(None, &secret, std::io::Cursor::new(CANNED), None, None)
         .map_err(|error| format!("no signature: {error}"))?
         .to_string();
 
-    acl_updater::manifest::Manifest::verified(document.as_bytes(), &signature).map_err(
-        |error| {
-            format!(
-                "{}\n\n\
+    acl_updater::manifest::Manifest::verified(CANNED.as_bytes(), &signature).map_err(|error| {
+        format!(
+            "{error}\n\n\
                  This key is NOT one the shipped client trusts. Either it is not in \
                  `manifest::PUBLIC_KEYS`, or what is in there is not this key. On the day \
                  that matters there is no way to correct it, because correcting it means \
-                 shipping an update.",
-                error
-            )
-        },
-    )?;
+                 shipping an update."
+        )
+    })?;
 
     Ok(format!(
         "{} is trusted by this build.\n\n\
@@ -422,4 +433,45 @@ fn check(arguments: &[String]) -> Result<String, String> {
         key.display(),
         acl_updater::manifest::PUBLIC_KEYS.len(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{CANNED, CANNED_ARTEFACT};
+
+    /// `check` can say yes.
+    ///
+    /// It could not, for as long as it existed. The document it signs was not one the
+    /// reader accepts, so the verification failed for the document's sake and the failure
+    /// was reported as "this key is NOT one the shipped client trusts" -- about a key that
+    /// was fine. A check that cannot pass is worse than no check: it fails on the morning
+    /// of a release, about the one thing there is no way to correct afterwards.
+    ///
+    /// A generated key rather than the real one, because the real one is not in this
+    /// repository and must never be. What this holds is the half `check` gets wrong on its
+    /// own -- the document -- and it holds it through the same call.
+    #[test]
+    fn the_canned_document_is_a_manifest_the_client_accepts() {
+        let pair = minisign::KeyPair::generate_unencrypted_keypair().expect("a keypair");
+        let signature = minisign::sign(None, &pair.sk, std::io::Cursor::new(CANNED), None, None)
+            .expect("a signature")
+            .to_string();
+
+        let manifest = acl_updater::manifest::Manifest::verified_with(
+            CANNED.as_bytes(),
+            &signature,
+            &[&pair.pk.to_base64()],
+        )
+        .expect("the document check signs must be one the reader accepts");
+
+        // And it describes something real rather than something shaped like it. A digest
+        // typed by hand is a digest that can be mistyped, and the only way to find out is
+        // to hash the thing it claims to be about.
+        assert!(
+            manifest.matches(CANNED_ARTEFACT),
+            "the canned manifest does not describe the byte it says it does"
+        );
+    }
 }

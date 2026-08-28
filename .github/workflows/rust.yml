@@ -95,8 +95,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      # `--workspace` and the ceremony feature, both added on 2026-08-28 and both because
+      # `acl-release` was outside every check this repository runs. It is behind an optional
+      # feature, so nothing here compiled it -- and what shipped was a `check` subcommand
+      # that could not pass: it signed a canned manifest carrying `"size":0`, which the
+      # reader refuses, and reported the resulting failure as an untrusted signing key.
+      # A tool nobody builds is a tool nobody finds out about until the morning of a release.
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features acl-updater/ceremony -- -D warnings
 
       # The collider tables are generated. If regenerating them changes the committed
       # file, the two have drifted and the walls in the Rust client are not the walls in
@@ -138,7 +144,7 @@ jobs:
       - name: Test
         env:
           ACL_SERVER_BIN: server/target/debug/acl-server.exe
-        run: cargo test --locked --workspace --target x86_64-pc-windows-msvc
+        run: cargo test --locked --workspace --features acl-updater/ceremony --target x86_64-pc-windows-msvc
 
   installer:
     # The installer script, compiled and then *run*.
