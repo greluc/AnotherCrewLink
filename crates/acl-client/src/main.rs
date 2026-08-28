@@ -15,6 +15,9 @@
 //! file under the player's profile that `logFile.ts` has always written -- same shape, same
 //! four-mebibyte cap, same single previous file, so a support conversation can read a 1.x
 //! and a 2.x log side by side.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+//! §4.8 item 1 continues below.
 //!
 //! §4.8 item 1: the shell, a custom title bar, and window state persistence. It is also the
 //! first thing in this port that assembles the rest — the single-instance lock, the paths,
@@ -2962,6 +2965,29 @@ fn tell_the_user(message: &str) {
             body.as_ptr(),
             title.as_ptr(),
             MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The line that keeps the console window shut is still in this file.
+    ///
+    /// Not a style check. `#![windows_subsystem = "windows"]` was added in 558db643, and
+    /// 65c72329 deleted it while rewriting the paragraph above it -- the prose that
+    /// explains the fix survived, the line that *is* the fix did not, and the console came
+    /// back in front of a proximity chat that had shipped without one.
+    ///
+    /// Read out of the source rather than asserted about the process, because a test
+    /// binary is a console application whatever this file says: the attribute applies to
+    /// the executable it is compiled into, and that is not this one. What can be checked
+    /// here is that nobody has removed the line again, which is how it was lost.
+    #[test]
+    fn the_console_window_is_still_switched_off() {
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains(r#"#![cfg_attr(windows, windows_subsystem = "windows")]"#),
+            "the windows_subsystem attribute is gone: this build opens a console"
         );
     }
 }
