@@ -1,5 +1,42 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.4
+
+One thing you can see, a day after alpha.3. Everything alpha.3's notes say about what is
+proven and what is not still applies — most of all that nobody has yet used this client to
+talk to anybody.
+
+### Fixed
+
+- **The client had no icon.** Not on the taskbar, not in Explorer, not on a shortcut, not
+  in Add/Remove Programs, and not on the prompt Windows shows when the client asks for the
+  permission it needs to read the game. A blank sheet in every one of them, next to a 1.x
+  client with a proper icon.
+
+  The artwork has been in the project since 1.0 and the rewrite never picked it up.
+  Windows looks for an icon in three places and this client had filled none of them; all
+  three are filled now, with all six sizes, so it is drawn at whatever size is asked for
+  rather than scaled down from one.
+
+  The permission prompt is worth its own line. An unrecognisable program asking for
+  administrator rights is exactly what people are taught to refuse, and until now this
+  client asked that way.
+
+  Its properties say what it is now, too — name, version, licence — where before the
+  Details tab was empty.
+
+### Everything else in this release is the part that publishes it
+
+None of it changes the client, and it is mentioned only because it is the reason alpha.4
+exists a day after alpha.3 rather than in a fortnight.
+
+alpha.3 took five attempts to go out, because the release ceremony had been written and
+never run. The check that asks "would the shipped clients trust this signing key" could
+not pass for any key. The tag could not be created. And every stumble ended with the same
+advice — cut a new version — when the right answer was to run it again from where it
+stopped. It can be run again now, and the parts of it nothing was building are built and
+tested like everything else.
+
 ## v2.0.0-alpha.3
 
 The long one. alpha.1 was the rewrite and alpha.2 fixed what running it turned up; this is

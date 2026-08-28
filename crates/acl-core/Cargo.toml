@@ -16,10 +16,10 @@ publish = false
 # this process cannot get -- and the tidier answer, moving the state type into
 # `acl-types` where both halves could reach it, is a wide refactor across a green G1
 # gate. Worth doing if the reader ever becomes unwanted here; not worth doing for tidiness.
-acl-game = { path = "../acl-game", version = "2.0.0-alpha.3", default-features = false }
+acl-game = { path = "../acl-game", version = "2.0.0-alpha.4", default-features = false }
 acl-ipc.workspace = true
 # The signalling half. `session` is the driver §4.6 item 3 leaves to this crate.
-acl-net = { path = "../acl-net", version = "2.0.0-alpha.3" }
+acl-net = { path = "../acl-net", version = "2.0.0-alpha.4" }
 # The peer connections `peers` owns. Same pin as `acl-net`, which is where the reason is.
 # The `webrtc` event handler trait is declared with `#[async_trait]`, so implementing one
 # needs the same macro. Version matched to `acl-net`, which implements the same trait.

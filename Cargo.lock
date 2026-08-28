@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "acl-audio"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-types",
  "cpal",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "acl-client"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-audio",
  "acl-core",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "acl-core"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-audio",
  "acl-game",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "acl-game"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-types",
  "flate2",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "acl-helper"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-core",
  "acl-game",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "acl-i18n"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "serde_json",
  "thiserror 2.0.20",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "acl-ipc"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "postcard",
  "serde",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "acl-net"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "acl-types"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "kurbo",
  "serde",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "acl-ui"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-i18n",
  "acl-types",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "acl-updater"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "base64 0.22.1",
  "minisign",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "apm-probe"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "sonora",
 ]
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "gpu-probe"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-ui",
  "pollster",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "gui-spike"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "acl-ui",
  "eframe",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "overlay-probe"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "eframe",
  "egui",
@@ -5358,7 +5358,7 @@ dependencies = [
 
 [[package]]
 name = "webrtc-probe"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 dependencies = [
  "async-trait",
  "tokio",
