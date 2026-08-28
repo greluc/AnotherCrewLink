@@ -396,6 +396,25 @@ rather than in an assumption. The impulse response itself never changes, so
 framework in the shipped runtime, byte-identical across platforms, and a
 convolver testable with no I/O.
 
+> **Built on 2026-08-28, and two of the choices above went the other way.**
+> `acl_audio::reverb` is the real-time convolver, and it is not `fft-convolver`:
+> `acl_audio::fft` was already in the tree for the offline `Convolver`, and
+> uniformly partitioned overlap-save on top of it is a hundred lines against a
+> crate whose real-time-safety claim this section already says would have to be
+> checked anyway. It is measured, not asserted — `tests/allocations.rs` counts
+> its allocations at zero, and it agrees with the offline convolver sample for
+> sample, which is the same thing gate G2 measures against Chromium. One
+> haunting ghost costs 0.85 ms of a 20 ms frame.
+>
+> There is no `xtask` either, and the impulse response embedded is not a decode
+> of `reverb.ogx` done here. `scripts/golden-vectors` already ran `reverb.ogx`
+> through Chromium's own `decodeAudioData` to make the corpus, resampled to
+> 48 kHz, and that file — `crates/acl-audio/assets/reverb-48k.wav` — *is* the
+> shipped asset. So the client convolves with the bytes the Electron client
+> convolves with rather than with a second decoder's opinion of them, and the
+> file the golden vectors are measured against cannot drift from the one players
+> hear, because there is only one of it.
+
 `calculateVoiceAudio()` ports to a pure function:
 
 ```rust

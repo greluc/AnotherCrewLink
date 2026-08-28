@@ -430,7 +430,11 @@ impl GameWindow {
     /// Where the game is drawing, if it is.
     #[cfg(windows)]
     fn bounds(&mut self) -> Option<acl_core::game_window::Bounds> {
-        match self.looking.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
+        match self
+            .looking
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
             Some(Ok(found)) => {
                 self.known = found;
                 self.looking = None;
@@ -1706,7 +1710,7 @@ impl Client {
             // them, because `Voice.tsx` applies them outside `calculateVoiceAudio` too --
             // the rule and the reason it is keyed on the name hash are in
             // `acl_ui::config::per_player_gain`, which is tested without a game.
-            let Some(gain) = acl_ui::config::after_the_rules(
+            let after_the_rules = acl_ui::config::after_the_rules(
                 self.settings.config(),
                 acl_ui::config::Listener {
                     speaker_name_hash: player.name_hash,
@@ -1714,7 +1718,8 @@ impl Client {
                     speaker_is_dead: player.is_dead,
                 },
                 params.gain,
-            ) else {
+            );
+            let Some(gain) = after_the_rules.or_else(|| params.reverb.then_some(0.0)) else {
                 // Muted, silenced by the master volume, or turned all the way down.
                 // Nothing is placed for them at all: the Electron original leaves the graph
                 // alone in that case, and a peer left out of the map is a peer the mixer
@@ -1723,6 +1728,12 @@ impl Client {
                 // `after_the_rules` returns `None` for every gain at or below zero, so
                 // there is no second check after this one. There was until 2026-08-27, and
                 // it could not fire.
+                //
+                // A haunting ghost is the exception, and is placed at zero rather than left
+                // out. In the Electron client the convolver stays connected while the gain
+                // goes to zero, so it keeps being fed and its three-second tail rings out;
+                // dropping the peer here would take the convolver with it and cut the tail
+                // the moment the ghost stepped out of range.
                 continue;
             };
 
@@ -1734,6 +1745,12 @@ impl Client {
                     // pass. Decided here and applied in the mixing thread, which is the
                     // only place a filter's own state can live.
                     muffle: params.muffle,
+                    // Whether an impostor is being haunted, which is the one rule that also
+                    // stops walls blocking a voice. Decided here and applied in the mixing
+                    // thread, beside the muffle and for the same reason: three seconds of
+                    // convolver is state, and state cannot live in a value the window
+                    // rebuilds every frame.
+                    reverb: params.reverb,
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
                         y: 0.0,

@@ -147,24 +147,36 @@ impl Panner {
         (angle.cos(), angle.sin())
     }
 
-    /// Pans one mono sample to stereo.
+    /// What a mono source at `source` is multiplied by, per channel.
+    ///
+    /// Both gains in one number each: distance decides how loud and panning decides where,
+    /// and for a mono source the two collapse into a scalar per side. Exposed because a
+    /// caller that has already turned mono into stereo -- the reverb does, and its two sides
+    /// are not the same signal -- cannot go back through [`Self::process`] and still needs
+    /// the same two numbers. Recomputing them at the call site is how they drift.
     #[must_use]
-    pub fn process(self, input: f32, source: Position) -> Stereo {
+    pub fn gains(self, source: Position) -> (f64, f64) {
         let distance = source
             .z
             .mul_add(source.z, source.x.mul_add(source.x, source.y * source.y))
             .sqrt();
         let gain = self.distance_gain(distance);
         let (left, right) = Self::equal_power(Self::azimuth(source));
+        (gain * left, gain * right)
+    }
 
-        let scaled = f64::from(input) * gain;
+    /// Pans one mono sample to stereo.
+    #[must_use]
+    pub fn process(self, input: f32, source: Position) -> Stereo {
+        let (left, right) = self.gains(source);
+        let input = f64::from(input);
         #[allow(
             clippy::cast_possible_truncation,
             reason = "narrowing back to the sample format"
         )]
         Stereo {
-            left: (scaled * left) as f32,
-            right: (scaled * right) as f32,
+            left: (input * left) as f32,
+            right: (input * right) as f32,
         }
     }
 

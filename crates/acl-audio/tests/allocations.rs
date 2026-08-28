@@ -147,6 +147,33 @@ fn the_dsp_graph_allocates_nothing_per_frame() {
 }
 
 #[test]
+fn the_reverb_allocates_nothing_per_frame() {
+    // The haunting reverb is a hundred and fifty-one transforms' worth of state per peer,
+    // and the temptation in every line of it was to return a `Vec`. `Convolver`, the
+    // offline one this is measured against, does exactly that -- which is why it is not the
+    // one on the audio path.
+    assert!(
+        acl_audio::reverb::warm(),
+        "the impulse response did not load"
+    );
+    let response = acl_audio::reverb::ready().expect("warm said it loaded");
+    let mut reverb = acl_audio::reverb::Reverb::new(response);
+    let input = frame(0);
+    let mut wet = vec![0.0f32; FRAME_SAMPLES * 2];
+
+    // Warm it. Nothing here grows a buffer, but the first pass through anything is allowed
+    // to, and a measurement that says so is worth more than one that assumes it.
+    reverb.process(&input, &mut wet);
+
+    let allocations = count(|| {
+        for _ in 0..20 {
+            reverb.process(&input, &mut wet);
+        }
+    });
+    assert_eq!(allocations, 0, "the reverb allocated {allocations} times");
+}
+
+#[test]
 fn resampling_allocates_nothing_once_it_is_warm() {
     // The property `process_into_buffer` was chosen for. `rubato`'s `process` returns a
     // fresh Vec per call, which in a capture callback is an allocation every ten

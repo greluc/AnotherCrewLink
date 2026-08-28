@@ -65,7 +65,16 @@ fn golden_directory() -> PathBuf {
 }
 
 fn read(name: &str) -> wav::Wav {
-    let path = golden_directory().join(format!("{name}.wav"));
+    let path = if name == "impulse-response" {
+        // Not in the corpus directory, because it is not only a vector: this is the
+        // response `acl_audio::reverb` embeds and convolves with. Measuring the convolver
+        // against a *copy* of what the client ships would leave the two free to drift, and
+        // a reverb that is right in the test and wrong in the client is the kind of
+        // difference nobody reports because nobody can describe it.
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/reverb-48k.wav")
+    } else {
+        golden_directory().join(format!("{name}.wav"))
+    };
     let bytes = std::fs::read(&path).unwrap_or_else(|error| {
         panic!(
             "{}: {error}. Regenerate the vectors with `npm run golden`.",
