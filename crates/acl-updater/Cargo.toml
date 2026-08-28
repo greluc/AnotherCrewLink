@@ -77,3 +77,6 @@ serde_yaml = "0.9"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+winresource.workspace = true

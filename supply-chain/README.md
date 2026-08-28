@@ -12,7 +12,7 @@ imported:
 | --- | --- |
 | Crates in the tree | 587 |
 | Covered by a shared audit | 66, and 8 partially |
-| Exemptions — this workspace asserting it has not looked | 497 |
+| Exemptions — this workspace asserting it has not looked | 497, and 503 as of 2026-08-28 |
 
 `docs/rust-port/08-dependency-review.md` predicted that ratio and asked that it be said
 plainly rather than left for a supply-chain table to imply coverage that does not exist.
@@ -25,6 +25,28 @@ the WebSocket transport landed, 346 when the overlay probe named eframe's `x11` 
 `wayland` features, 556 when the P4 spike added `webrtc` `=0.20.3`, and 578 when §4.8 item
 6 moved the renderer from `glow` to `wgpu`. Each time the gate failed until the new crates
 were written down, which is the whole mechanism working.
+
+**2026-08-28, +4 for an icon, and 503 exemptions.** `winresource` puts
+`resources/icon.ico` and a version block into the three executables; it brings `toml`,
+`toml_writer` and `serde_spanned`. Only the first three are exemptions — `serde_spanned`
+turned out to be covered by an imported audit, which is the first time refreshing the
+imports has moved this number down.
+
+Four crates is more than an icon is obviously worth, and the alternative was real: the
+`.res` container is a documented format, the `.ico` is already well formed, and writing the
+writer is about a hundred lines. `fft.rs` took exactly that trade and this did not, for a
+reason worth writing down rather than deciding again later. The transform in `fft.rs` had to
+be *measured* against Chromium whether it came from a crate or not, so a crate would have
+saved the writing and none of the work. Here the checking is cheap and external: Windows
+draws the icon, and `crates/acl-client/tests/icon_resource.rs` reads the resource directory
+back out of the linked executable and counts what is in it. A dependency whose output is
+verified by something other than reading it is a different bargain from one whose output is
+not.
+
+All three run at build time only. None is in the shipped binary — which is *not* why they
+are `safe-to-deploy` rather than `safe-to-run`: a build script runs with whatever the
+person building has, and writes into the artefact everybody else installs. `cargo vet` asks
+for the stronger criterion there and it is right to.
 
 **2026-08-26, +9 for the updater.** `minisign-verify` is the whole reason it is a
 small number: it has *zero* dependencies, which is most of why it was chosen over

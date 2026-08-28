@@ -84,3 +84,6 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [lints]
 workspace = true
+
+[build-dependencies]
+winresource.workspace = true

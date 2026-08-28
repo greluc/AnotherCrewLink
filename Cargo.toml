@@ -112,6 +112,18 @@ webrtc = "=0.20.3"
 # The WHATWG URL algorithm, for the one setting that decides where every signal goes.
 # Already in the tree beneath `webrtc`, so this is a direct edge rather than a crate.
 url = "2.5"
+# Puts `resources/icon.ico` and a version block into each of the three executables. A
+# build-time dependency only -- it produces a `.res` and hands it to the linker, and no part
+# of it is in the shipped binary.
+#
+# Four crates for an icon (it, and `toml` with two of its own) is more than this project
+# usually pays, and the alternative was writing the `.res` container by hand: the format is
+# documented and the icon is already a well-formed `.ico`. That trade went the other way
+# here, unlike `fft.rs`. The transform in `fft.rs` had to be *measured* against Chromium
+# whether it came from a crate or not, so the crate would have saved the writing and none of
+# the work; a resource compiler's output is checked by Windows drawing the icon, and by the
+# test that reads the resource directory back out of the linked executable.
+winresource = "0.1.31"
 
 [profile.release]
 # A panic in the elevated helper must not unwind through the FFI boundary into the game's
