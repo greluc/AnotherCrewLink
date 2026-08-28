@@ -396,6 +396,79 @@ struct Devices {
     asking: Option<std::sync::mpsc::Receiver<Vec<acl_audio::device::Device>>>,
 }
 
+/// Where the game's window is, without walking the process table to find out.
+///
+/// `find_process("Among Us.exe")` is a `CreateToolhelp32Snapshot` over every process on the
+/// machine, and it cost **18.3ms** measured on 2026-08-28. Held to five times a second it
+/// still took a whole overlay tick to **15 to 24ms**, five times a second, on the thread
+/// that draws -- which is a dropped frame every fifth of a second, and the last thing
+/// standing between a scroll and sixty frames.
+///
+/// A process id does not change while a process lives, so it is worth remembering. The
+/// liveness check is the window lookup that has to happen anyway: `content_bounds` walks
+/// the top-level windows, costs **0.9ms**, and a game that has gone has no window to find.
+/// Only when that fails is the table walked again, and that walk happens on a thread.
+///
+/// **Process ids are reused**, so in principle a recycled id belonging to something else
+/// with a window could be followed. In practice this is only reached while the reader is
+/// still reporting game state -- which means the game is still running -- and the id is
+/// looked up by name again the moment its window stops being found.
+#[derive(Default)]
+struct GameWindow {
+    /// The game's process, once something has found it.
+    known: Option<u32>,
+    /// A search running on a thread of its own.
+    looking: Option<std::sync::mpsc::Receiver<Option<u32>>>,
+    /// When the last search finished, so a machine with no game does not start one a frame.
+    searched: Option<std::time::Instant>,
+}
+
+impl GameWindow {
+    /// How long to wait before looking for the game again after not finding it.
+    const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Where the game is drawing, if it is.
+    #[cfg(windows)]
+    fn bounds(&mut self) -> Option<acl_core::game_window::Bounds> {
+        match self.looking.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
+            Some(Ok(found)) => {
+                self.known = found;
+                self.looking = None;
+                self.searched = Some(std::time::Instant::now());
+            }
+            // The thread ended without sending, which cannot happen unless it panicked.
+            // Treated as "not found" so the back-off applies rather than a search a frame.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.looking = None;
+                self.searched = Some(std::time::Instant::now());
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
+        }
+
+        if let Some(process) = self.known {
+            if let Some(bounds) = acl_core::game_window::content_bounds(process) {
+                return Some(bounds);
+            }
+            // No window under that id any more, so as far as this is concerned the game has
+            // gone. Looking again is the next block.
+            self.known = None;
+        }
+
+        let due = self
+            .searched
+            .is_none_or(|last| last.elapsed() >= Self::LOOK_AGAIN);
+        if due && self.looking.is_none() {
+            let (send, receive) = std::sync::mpsc::channel();
+            // Detached: nothing waits for it, and the answer is picked up whenever it lands.
+            std::thread::spawn(move || {
+                let _ = send.send(acl_game::windows::find_process("Among Us.exe"));
+            });
+            self.looking = Some(receive);
+        }
+        None
+    }
+}
+
 impl Devices {
     /// How stale the list may be.
     const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
@@ -965,11 +1038,8 @@ struct Client {
     moved_at: Option<std::time::Instant>,
     /// Holds the overlay to [`OVERLAY_TICK`]. See what it costs.
     overlay_due: Cadence,
-    probe_frames: u32,
-    probe_busy: std::time::Duration,
-    probe_since: Option<std::time::Instant>,
-    probe_last: Option<std::time::Instant>,
-    probe_worst: std::time::Duration,
+    /// Where the game's window is. See [`GameWindow`] for what it saves.
+    game_window: GameWindow,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
@@ -1112,11 +1182,7 @@ impl Client {
             written: None,
             moved_at: None,
             overlay_due: Cadence::default(),
-            probe_frames: 0,
-            probe_busy: std::time::Duration::ZERO,
-            probe_since: None,
-            probe_last: None,
-            probe_worst: std::time::Duration::ZERO,
+            game_window: GameWindow::default(),
             overlay_shown: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
@@ -1136,7 +1202,10 @@ impl Client {
     /// the game, which is where `Overlay.tsx` puts it by default.
     #[cfg(windows)]
     fn compose_overlay(&mut self, state: &acl_game::AmongUsState) {
-        use acl_core::game_window;
+        // Asked for before the reader is borrowed, because it needs `self` mutably: it
+        // remembers the game's process id rather than looking it up again every time. See
+        // [`GameWindow`].
+        let found = self.game_window.bounds();
 
         let Some(reader) = self.reader.as_ref() else {
             return;
@@ -1153,9 +1222,7 @@ impl Client {
             acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
         let compact = settings.bool_at("compactOverlay") || position.forces_compact();
 
-        let game = acl_game::windows::find_process("Among Us.exe");
-        let bounds = game.and_then(game_window::content_bounds);
-        let bounds = bounds.filter(|bounds| bounds.is_drawable());
+        let bounds = found.filter(|bounds| bounds.is_drawable());
         let Some(bounds) = bounds.filter(|_| enabled) else {
             // No game, nothing to draw over, or the overlay is switched off. Hidden rather
             // than left showing the last frame over whatever the player switched to.
@@ -2905,9 +2972,7 @@ impl eframe::App for Client {
                 .as_ref()
                 .and_then(|reader| reader.latest().cloned())
         {
-            let probe_overlay = std::time::Instant::now();
             self.compose_overlay(&state);
-            acl_core::log_info!("probe", "overlay tick {:?}", probe_overlay.elapsed());
         }
 
         // Every frame while a capture is running, because it reads the key state rather
@@ -2974,7 +3039,6 @@ impl eframe::App for Client {
                 )
             });
         }
-        let probe_frame = std::time::Instant::now();
         let dressed = self.before_painting(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             let mut page = self.page;
@@ -3178,21 +3242,6 @@ impl eframe::App for Client {
                 None => {}
             }
         });
-        self.probe_frames += 1;
-        self.probe_busy += probe_frame.elapsed();
-        if let Some(last) = self.probe_last {
-            self.probe_worst = self.probe_worst.max(last.elapsed());
-        }
-        self.probe_last = Some(std::time::Instant::now());
-        let since = self.probe_since.get_or_insert_with(std::time::Instant::now);
-        if since.elapsed() >= std::time::Duration::from_secs(1) {
-            acl_core::log_info!("probe", "{} frames, busy {:?}, worst gap {:?}",
-                self.probe_frames, self.probe_busy, self.probe_worst);
-            self.probe_frames = 0;
-            self.probe_busy = std::time::Duration::ZERO;
-            self.probe_worst = std::time::Duration::ZERO;
-            self.probe_since = Some(std::time::Instant::now());
-        }
     }
 }
 
