@@ -557,22 +557,33 @@ fn run(
     let mut deferred: Vec<Command> = Vec::new();
     loop {
         // Without a session there is nothing to await, so the command channel is blocked
-        // on. With one, the two are raced -- see the module documentation for why the
-        // session may not be left unattended.
-        let command = if session.is_some() {
-            match orders.try_recv() {
-                Ok(command) => Some(command),
-                Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => return,
-            }
-        } else {
-            match orders.recv() {
-                Ok(command) => Some(command),
-                Err(_) => return,
-            }
+        // on. With one, everything waiting is taken before the session is attended to.
+        //
+        // **Everything, and that is the fix of 2026-08-28.** It used to take exactly one
+        // command per round and then wait up to fifty milliseconds on the session below. On
+        // a quiet socket that wait always runs to its end, so the loop drained about twenty
+        // commands a second -- and the microphone puts fifty a second in, because `FRAME_MS`
+        // is twenty and every encoded frame travels down this same channel as
+        // `Command::SendAudio`.
+        //
+        // Fifty in against twenty out is a queue that grows by thirty a second for as long
+        // as anybody is connected, and both halves of what two testers reported come out of
+        // that arithmetic. Speech left at 0.4x real time, so the far end heard it slowed
+        // down. And a command queued *T* seconds after connecting came out about 1.5*T*
+        // seconds later: twenty seconds spent on the connect screen made a thirty-second
+        // join, which is what they measured.
+        //
+        // The module documentation above says these are `select!`ed against `next`. That is
+        // the better shape and it is still not what this does -- a `select!` would drop a
+        // half-polled `Session::next` when a command won the race, and whether that loses a
+        // frame is a question to answer before relying on it, not during a live test.
+        // Draining costs nothing and removes the growth; the wait below now bounds only how
+        // long a command may sit, never how many get through.
+        let Some(waiting) = take_waiting(orders, session.is_some()) else {
+            return;
         };
 
-        if let Some(command) = command {
+        for command in waiting {
             match command {
                 // These two are about the connection itself, so they are never deferred:
                 // one replaces it and the other ends it.
@@ -655,6 +666,34 @@ fn run(
                 runtime.block_on(drain(&mut mesh, current, answers));
             }
         }
+    }
+}
+
+/// Everything the window has asked for since the last round.
+///
+/// `None` means the window has dropped its end, which is the worker's cue to stop.
+///
+/// With no session there is nothing else to do, so this blocks for the first command. With
+/// one, it takes **everything waiting** and returns -- which is the whole of the fix
+/// described in the loop above, and the reason it is a function of its own is that
+/// `it_takes_every_command_that_is_waiting` can then say so in a test rather than in a
+/// comment.
+fn take_waiting(orders: &Receiver<Command>, connected: bool) -> Option<Vec<Command>> {
+    let mut waiting = Vec::new();
+    if connected {
+        loop {
+            match orders.try_recv() {
+                Ok(command) => waiting.push(command),
+                Err(TryRecvError::Empty) => return Some(waiting),
+                Err(TryRecvError::Disconnected) => return None,
+            }
+        }
+    } else {
+        match orders.recv() {
+            Ok(command) => waiting.push(command),
+            Err(_) => return None,
+        }
+        Some(waiting)
     }
 }
 
@@ -899,6 +938,7 @@ mod tests {
     /// The list arrives once and the differences after it, so the map has to accumulate.
     /// Anything that rebuilt it from the last message would show an empty browser until
     /// every lobby happened to change.
+
     #[test]
     fn the_list_accumulates_rather_than_being_rebuilt() {
         let mut link = Link::start();
@@ -1539,5 +1579,49 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         false
+    }
+    /// A round takes everything, not one thing.
+    ///
+    /// This is arithmetic, and it was wrong. The worker took a single command per round and
+    /// then waited up to fifty milliseconds on the session, which on a quiet socket runs to
+    /// its end every time: about twenty commands a second out. The microphone puts fifty a
+    /// second in -- `FRAME_MS` is twenty, and every encoded frame is a `Command::SendAudio`
+    /// on this channel. A queue that gains thirty entries a second sends speech at 0.4x real
+    /// time and delays a join by half again as long as the client has been connected, which
+    /// is what two testers measured as "slowed down" and "thirty seconds".
+    ///
+    /// One second of speech is the unit, because that is the rate that has to be survivable.
+    #[test]
+    fn it_takes_every_command_that_is_waiting() {
+        let (commands, orders) = std::sync::mpsc::channel::<super::Command>();
+        let a_second_of_speech = 1000 / acl_audio::codec::FRAME_MS;
+        for frame in 0..a_second_of_speech {
+            #[expect(clippy::cast_possible_truncation, reason = "a frame counter under 100")]
+            commands
+                .send(super::Command::SendAudio(vec![frame as u8]))
+                .expect("the worker's end is open");
+        }
+
+        let taken = super::take_waiting(&orders, true).expect("the channel is open");
+        assert_eq!(
+            taken.len(),
+            a_second_of_speech as usize,
+            "a round left {} of {a_second_of_speech} frames in the queue, and a queue that \
+             keeps some of every second is one that never empties",
+            a_second_of_speech as usize - taken.len()
+        );
+        assert!(
+            super::take_waiting(&orders, true).is_some_and(|left| left.is_empty()),
+            "the next round should find nothing waiting"
+        );
+    }
+
+    /// The window dropping its end stops the worker rather than spinning it.
+    #[test]
+    fn a_closed_channel_is_the_end_of_the_worker() {
+        let (commands, orders) = std::sync::mpsc::channel::<super::Command>();
+        drop(commands);
+        assert!(super::take_waiting(&orders, true).is_none());
+        assert!(super::take_waiting(&orders, false).is_none());
     }
 }
