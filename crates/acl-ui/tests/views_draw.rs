@@ -192,6 +192,34 @@ fn the_slider_rail_is_painted_in_something() {
     }
 }
 
+/// The two switches are drawn on one vertical axis.
+///
+/// `mic` is 17px of ink and `volume_up` is 23px. Sized to their content the two buttons had
+/// their centres five pixels apart, which is visible when they are the only two things in
+/// that column -- and the hover wash, taken from a button frame rather than from the same
+/// rect as the glyph, sat five pixels off the icon again. Both now come from one allocated
+/// square, and this reads the glyph positions back out of the frame to say so.
+#[test]
+fn the_two_switches_share_one_axis() {
+    let say = |key: &str| key.to_owned();
+    let output = run(|ui| {
+        acl_ui::views::main::draw_switches(ui, false, false, &say);
+    });
+    let glyphs: Vec<f32> = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.pos.x + text.galley.size().x / 2.0),
+            _ => None,
+        })
+        .collect();
+    let [mic, ear] = glyphs[..] else {
+        panic!("two switches, two glyphs: {glyphs:?}");
+    };
+    let apart = (mic - ear).abs();
+    assert!(apart < 0.5, "the two icons are {apart}px apart across");
+}
+
 /// A settings source that answers everything with its default.
 struct Defaults(acl_ui::config::Config);
 

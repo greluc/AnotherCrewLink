@@ -246,35 +246,41 @@ pub fn icon_button(ui: &mut egui::Ui, glyph: &str, active: bool, hint: &str) -> 
     /// The glyph inside it.
     const GLYPH: f32 = 20.0;
 
-    let response = ui
-        .scope(|ui| {
-            let widgets = &mut ui.style_mut().visuals.widgets;
-            for widget in [
-                &mut widgets.inactive,
-                &mut widgets.hovered,
-                &mut widgets.active,
-            ] {
-                // `--radius-round` on a 30px box.
-                widget.corner_radius = CornerRadius::same(15);
-                widget.bg_stroke = Stroke::NONE;
-                widget.weak_bg_fill = Color32::TRANSPARENT;
-            }
-            // `rgba(255,255,255,0.08)`.
-            widgets.hovered.weak_bg_fill = Color32::from_rgba_premultiplied(20, 20, 20, 20);
-            widgets.active.weak_bg_fill = Color32::from_rgba_premultiplied(31, 31, 31, 31);
-            // A fixed box, not one that fits the glyph. `mic` is 17px wide and `volume_up`
-            // is 23px: sized to their content the two buttons are different widths, and in
-            // a left-aligned column that puts their centres 5px apart -- which is visible,
-            // because they are the only two things in that column.
-            ui.spacing_mut().button_padding = egui::Vec2::ZERO;
-            let colour = if active { MUTED } else { Color32::WHITE };
-            ui.add(
-                egui::Button::new(egui::RichText::new(glyph).font(icon_font(GLYPH)).color(colour))
-                    .min_size(egui::Vec2::splat(BOX)),
-            )
-        })
-        .inner;
-    response.on_hover_text(hint)
+    // Allocated and painted here rather than handed to `egui::Button`, and that is the
+    // second time this has been rewritten. A button's frame is its content plus
+    // `button_padding`, minus its stroke width, offset by its expansion -- four numbers
+    // that come from the shared style, and any of them being non-zero moves the frame
+    // relative to the glyph inside it. The hover wash sat five pixels right of the icon it
+    // was supposed to be behind. Here the wash and the glyph are both centred on one rect,
+    // so they cannot drift apart.
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(BOX), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        // `rgba(255,255,255,0.08)`, and a little more while it is held.
+        let wash = if response.is_pointer_button_down_on() {
+            31
+        } else if response.hovered() {
+            20
+        } else {
+            0
+        };
+        if wash > 0 {
+            ui.painter().circle_filled(
+                rect.center(),
+                BOX / 2.0,
+                Color32::from_rgba_premultiplied(wash, wash, wash, wash),
+            );
+        }
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            icon_font(GLYPH),
+            if active { MUTED } else { Color32::WHITE },
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(hint)
 }
 
 /// A settings toggle, as `forms/Checkbox.jsx` draws it.
