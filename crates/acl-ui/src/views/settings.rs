@@ -277,14 +277,24 @@ fn choice(
 fn meter(ui: &mut Ui, level: Option<f32>) {
     // Green when it is live and grey when nothing has reported: an empty grey bar reads as
     // "not listening", and an empty green one as "listening, and hearing silence".
+    //
+    // **A deviation from the design system, decided by the maintainer on 2026-08-28.**
+    // `reference.json` gives the microphone bar `--acl-red-500`, one colour whatever the
+    // state. That loses the distinction above, which is the answer to "is the microphone
+    // even open" -- the first thing anybody checks when nobody can hear them. Put to the
+    // maintainer with the trade-off stated and kept as it is.
     let fill = if level.is_some() {
-        egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
+        theme::TALKING
     } else {
         ui.visuals().weak_text_color()
     };
+    // `--mic-bar-w` by `--mic-bar-h`. The height was never set, so egui took the row --
+    // 24px -- and `--radius-lg` turned a 200x24 bar into a capsule with a dot in it.
     ui.add(
         egui::ProgressBar::new(level.unwrap_or(0.0).clamp(0.0, 1.0))
-            .desired_width(200.0)
+            .desired_width(theme::METER_W)
+            .desired_height(theme::METER_H)
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_SM))
             .fill(fill),
     );
 }
