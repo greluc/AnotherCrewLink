@@ -6,7 +6,11 @@
 //! window would have become one window that appears a moment later.
 //!
 //! The two diagnostics below are for somebody who ran this by hand, and they still reach a
-//! shell that redirected them -- which is how `it_refuses_to_start_without_being_told_who_
+//! shell that redirected them. They are *not* written to the client's log file, and that is
+//! deliberate twice over: reaching `acl_core::logging` would pull the whole unelevated
+//! client stack -- webrtc included -- into an administrator process, which is what §4.7
+//! keeps out of here; and anything this half has to say to the client it says over the
+//! pipe, where the client logs it. See `Stopping` -- which is how `it_refuses_to_start_without_being_told_who_
 //! started_it` reads them.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -83,7 +87,43 @@ enum Fatal {
     Frame(#[from] acl_ipc::FrameError),
 }
 
+/// Measures the screen the same way the process that sends us coordinates does.
+///
+/// **Before any window exists**, which is why it is the first thing `main` does: the
+/// awareness of a process is fixed once it has one.
+///
+/// The client is per-monitor aware -- winit sets that on the way up -- so the game window
+/// bounds it measures and hands over are real screen pixels. This process had no manifest
+/// and no call, which on Windows means *unaware*: every coordinate it passes to
+/// `SetWindowPos` is multiplied by the primary display's scale factor on the way in, and
+/// everything it reads back is divided on the way out. Measured on 2026-08-27 with
+/// `GetProcessDpiAwareness`: the client `PerMonitorAware`, the game `PerMonitorAware`, this
+/// `Unaware`. The overlay was not merely offset from the game -- on a second display with a
+/// different scale factor the multiplied coordinate lands outside that display altogether,
+/// which is an overlay on the wrong monitor.
+///
+/// V2 rather than V1 so that the two processes agree exactly, and because V1 leaves
+/// non-client areas scaled by the system factor. A refusal is not fatal: an older Windows
+/// than this one supports falls back to V1, and failing both leaves the process where it
+/// already was rather than stopping a client from having any overlay at all.
+#[cfg(windows)]
+fn measure_the_screen_like_the_client_does() {
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        SetProcessDpiAwarenessContext,
+    };
+    // SAFETY: both arguments are documented constants, and this runs before any window is
+    // created, which is the call's only ordering requirement.
+    unsafe {
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    measure_the_screen_like_the_client_does();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

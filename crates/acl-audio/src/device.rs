@@ -52,6 +52,11 @@ pub struct Device {
 
 /// Something that happened to the device list.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// **Nothing produces these.** They are the criteria in this module's header rather than a
+/// feature: the header says to move off `cpal` if a device that disappears produces no
+/// [`DeviceEvent::Lost`], and the type is what that sentence refers to. Hot-plug is not
+/// handled — a headset unplugged mid-game leaves the stream silent until the client is
+/// restarted — and this is where the handling would arrive.
 pub enum DeviceEvent {
     /// A device appeared.
     Added(Device),

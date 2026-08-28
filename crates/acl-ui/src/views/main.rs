@@ -121,7 +121,7 @@ fn describe(portrait: &Portrait<'_>) -> String {
 /// The crewmate itself: the artwork if there is any, the shape if there is not.
 fn crewmate(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
     if let Some(art) = portrait.art {
-        dressed(ui, centre, portrait, art);
+        dressed(ui, centre, art);
     } else {
         shapes(ui, centre, portrait);
     }
@@ -133,33 +133,113 @@ fn crewmate(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
 /// Square, because the sprites are: `sprite::crewmate` draws into a square bitmap and the
 /// cosmetics are placed as fractions of its width. Fitting it to a non-square box would move
 /// every hat.
-fn dressed(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>, art: egui::TextureId) {
+fn dressed(ui: &Ui, centre: Pos2, art: egui::TextureId) {
     let rect = Rect::from_center_size(centre, Vec2::splat(AVATAR));
-    // The same fade the drawn form uses for a dead player, applied to the whole sprite
-    // rather than to two colours. `WHITE` is "unchanged" for a tinted image.
-    let tint = if portrait.state.alive {
-        Color32::WHITE
-    } else {
-        Color32::from_white_alpha(90)
-    };
+    // Untinted, even for a dead player.
+    //
+    // This used to fade the sprite to `from_white_alpha(90)`, which was right while the
+    // body was two circles. It is not right now: a dead player's body is the *ghost*
+    // drawing, and that drawing is already almost entirely semi-transparent — 5,663 of its
+    // 5,692 drawn pixels. Fading it again leaves nothing to see. `shapes` still fades,
+    // because it draws a living crewmate whichever the player is.
     ui.painter().image(
         art,
         rect,
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        tint,
+        Color32::WHITE,
     );
 }
 
-/// The outline colour for a connection state, or `None` when there is nothing to say.
+/// What speaking looks like.
 ///
-/// Nothing is drawn for a good connection: an indicator that is always on is one nobody
-/// reads.
-fn outline_for(link: Link) -> Option<Color32> {
-    match link {
-        Link::Disconnected => Some(Color32::from_rgb(210, 90, 90)),
-        Link::Silent => Some(Color32::from_rgb(220, 180, 80)),
+/// `#2ecc71`, which is the colour `Voice.tsx` passes as `borderColor` — the shipped client
+/// draws a ring for exactly one thing, and this is it.
+const SPEAKING: Color32 = Color32::from_rgb(0x2e, 0xcc, 0x71);
+
+/// The ring round a crewmate, or `None` when there is nothing to say.
+///
+/// Speaking, and nothing else. That is `Avatar.tsx`'s own rule —
+/// `borderColor={talking ? borderColor : 'transparent'}` — and it is what makes the ring
+/// readable: it means one thing, it changes several times a second, and it is the thing
+/// somebody is watching for. The connection is a [`Badge`], which is where the shipped
+/// client puts it too.
+const fn ring_for(state: Shown) -> Option<Color32> {
+    if state.talking { Some(SPEAKING) } else { None }
+}
+
+/// The red disc the shipped client puts a status icon on, and the darker ring round it.
+const ALARM: (Color32, Color32) = (
+    Color32::from_rgb(0xea, 0x3c, 0x2a),
+    Color32::from_rgb(0x69, 0x0a, 0x00),
+);
+
+/// The orange one, which it uses for exactly one state.
+const WARNING: (Color32, Color32) = (
+    Color32::from_rgb(0xe6, 0x7e, 0x22),
+    Color32::from_rgb(0x69, 0x49, 0x00),
+);
+
+/// One status icon on a crewmate.
+pub struct Badge {
+    /// What is drawn on it.
+    glyph: &'static str,
+    /// The disc.
+    fill: Color32,
+    /// Its rim.
+    border: Color32,
+}
+
+/// The one status icon a crewmate gets, if any.
+///
+/// Transliterated from `Avatar.tsx`'s switch, including that it is *one* icon rather than a
+/// row of them and including the order: being unreachable is said instead of being muted,
+/// not as well as, because a player you cannot reach is not muted — you simply cannot hear
+/// them either way, and two badges would make you look for two problems.
+///
+/// The glyphs are not the shipped client's. It draws Material icons; this has the fonts egui
+/// ships, so each is the nearest thing on the same red disc — which is what carries the
+/// meaning in both. The words are still in the hover text.
+#[must_use]
+pub fn badge_for(state: Shown, muted: bool, deafened: bool) -> Option<Badge> {
+    match state.link {
+        Link::Disconnected => Some(Badge {
+            // `WifiOff`: nothing is getting through.
+            glyph: "📶",
+            fill: ALARM.0,
+            border: ALARM.1,
+        }),
+        Link::Silent => Some(Badge {
+            // `LinkOff`: connected, and carrying no voice.
+            glyph: "🔗",
+            fill: WARNING.0,
+            border: WARNING.1,
+        }),
+        Link::Connected if deafened => Some(Badge {
+            glyph: "🔇",
+            fill: ALARM.0,
+            border: ALARM.1,
+        }),
+        Link::Connected if muted => Some(Badge {
+            glyph: "🎤",
+            fill: ALARM.0,
+            border: ALARM.1,
+        }),
         Link::Connected => None,
     }
+}
+
+/// Draws one, centred on the crewmate the way the shipped client centres it.
+fn draw_badge(ui: &Ui, centre: Pos2, badge: &Badge, radius: f32) {
+    let painter = ui.painter();
+    painter.circle_filled(centre, radius, badge.fill);
+    painter.circle_stroke(centre, radius, Stroke::new(2.0, badge.border));
+    painter.text(
+        centre,
+        Align2::CENTER_CENTER,
+        badge.glyph,
+        FontId::proportional(radius * 1.2),
+        Color32::WHITE,
+    );
 }
 
 /// The crewmate as shapes, for when there is no artwork.
@@ -181,17 +261,6 @@ fn shapes_at(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>, half: f32) {
     if !portrait.state.alive {
         body = body.gamma_multiply(0.35);
         shadow = shadow.gamma_multiply(0.35);
-    }
-
-    // The talking ring, first so everything else is over it. It grows outward rather than
-    // recolouring the body, which would fight with the crew colour it has to stay legible
-    // against.
-    if portrait.state.talking {
-        painter.circle_stroke(
-            centre,
-            half,
-            Stroke::new(3.0 * half / (AVATAR / 2.0), Color32::from_rgb(80, 220, 120)),
-        );
     }
 
     // Everything below is in proportion to the half-width rather than to `AVATAR`, so
@@ -222,16 +291,15 @@ fn indicators(ui: &Ui, centre: Pos2, portrait: &Portrait<'_>) {
     let painter = ui.painter();
     let radius = AVATAR / 2.0;
 
-    // The connection, as an outline, because it is a property of the whole player rather
-    // than of any part of them. Nothing is drawn when the connection is good: an indicator
-    // that is always on is one nobody reads.
-    let outline = match portrait.state.link {
-        Link::Disconnected => Some(Color32::from_rgb(210, 90, 90)),
-        Link::Silent => Some(Color32::from_rgb(220, 180, 80)),
-        Link::Connected => None,
-    };
-    if let Some(colour) = outline {
+    if let Some(colour) = ring_for(portrait.state) {
         painter.circle_stroke(centre, AVATAR / 2.0 - 1.0, Stroke::new(2.0, colour));
+    }
+
+    // Muted and deafened are false here: those are things only you are, and everybody in
+    // this list is somebody else. What a peer can be is unreachable or voiceless, which is
+    // what `link` carries.
+    if let Some(badge) = badge_for(portrait.state, false, false) {
+        draw_badge(ui, centre, &badge, AVATAR * 0.22);
     }
 
     if portrait.state.using_radio {
@@ -310,51 +378,43 @@ pub fn draw_own(ui: &mut Ui, own: &Own<'_>) {
 
     if let Some(art) = own.portrait.art {
         let square = Rect::from_center_size(centre, Vec2::splat(OWN_AVATAR));
-        let tint = if own.portrait.state.alive {
-            Color32::WHITE
-        } else {
-            Color32::from_white_alpha(90)
-        };
+        // Untinted, for the reason `dressed` gives: a dead player's body is the ghost
+        // drawing, which is already almost entirely semi-transparent.
         ui.painter().image(
             art,
             square,
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            tint,
+            Color32::WHITE,
         );
     } else {
         shapes_at(ui, centre, &own.portrait, OWN_AVATAR / 2.0);
     }
 
-    // The same outline the others get, and it means the same thing: whether there is a
-    // connection. For you that is the connection to the server rather than to a peer, which
-    // is `Voice.tsx`'s own `connected ? 'connected' : 'disconnected'`.
-    if let Some(colour) = outline_for(own.portrait.state.link) {
+    // The same ring the others get, and it means the same things: speaking first, then
+    // whether there is a connection. For you that is the connection to the server rather
+    // than to a peer, which is `Voice.tsx`'s own `connected ? 'connected' : 'disconnected'`.
+    if let Some(colour) = ring_for(own.portrait.state) {
         ui.painter()
             .circle_stroke(centre, OWN_AVATAR / 2.0 - 1.0, Stroke::new(2.5, colour));
     }
 
-    // Muted and deafened, as two badges rather than one: they are different states and
-    // deafened is the one people reach for by accident.
-    let mut badges: Vec<(&str, Color32)> = Vec::new();
-    if own.deafened {
-        badges.push(("deafened", Color32::from_rgb(210, 90, 90)));
-    } else if own.muted {
-        badges.push(("muted", Color32::from_rgb(220, 180, 80)));
+    // The same icon everybody else gets, with the two states only you can be in. It
+    // replaces the words "muted" and "deafened" under the avatar: they said the same thing
+    // in a place nobody was looking, and the shipped client puts them here.
+    if let Some(badge) = badge_for(own.portrait.state, own.muted, own.deafened) {
+        draw_badge(ui, centre, &badge, OWN_AVATAR * 0.22);
     }
-    if own.portrait.state.talking {
-        badges.push(("speaking", Color32::from_rgb(80, 220, 120)));
-    }
-    let mut y = rect.max.y - 10.0;
-    for (word, colour) in badges.iter().rev() {
-        ui.painter().text(
-            Pos2::new(rect.center().x, y),
-            Align2::CENTER_CENTER,
-            *word,
-            FontId::proportional(10.0),
-            *colour,
-        );
-        y -= 11.0;
-    }
+
+    // Your name, where the words "muted" and "deafened" used to be stacked. The slot
+    // already reserves the room and everybody else's row has one, so leaving yours blank
+    // made the list look like it started with an unlabelled crewmate.
+    ui.painter().text(
+        Pos2::new(rect.center().x, rect.max.y - 10.0),
+        Align2::CENTER_CENTER,
+        own.portrait.name,
+        FontId::proportional(12.0),
+        ui.visuals().text_color(),
+    );
 
     response.on_hover_text(describe_own(own));
 }
@@ -385,7 +445,10 @@ fn describe_own(own: &Own<'_>) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Portrait, SLOT, describe, height_for, slot_rect};
+    use super::{
+        ALARM, Portrait, SLOT, SPEAKING, WARNING, badge_for, describe, height_for, ring_for,
+        slot_rect,
+    };
     use crate::roster::{Link, Shown};
     use egui::Pos2;
 
@@ -393,6 +456,80 @@ mod tests {
     /// about `f32` rather than about layout.
     fn close(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.1
+    }
+
+    /// Speaking is green, and it beats every connection state.
+    ///
+    /// The precedence is the point. A player talking on a shaky link showed the shaky link,
+    /// which is the less interesting of the two things and the one that does not change
+    /// while you watch it.
+    #[test]
+    fn speaking_wins_the_ring() {
+        for link in [Link::Connected, Link::Silent, Link::Disconnected] {
+            assert_eq!(
+                ring_for(shown(link, true, true)),
+                Some(SPEAKING),
+                "talking over {link:?}"
+            );
+        }
+    }
+
+    /// A quiet player gets no ring at all now.
+    ///
+    /// The connection moved to a badge, which is where `Avatar.tsx` has always had it. A
+    /// ring that meant two things meant neither reliably.
+    #[test]
+    fn a_quiet_player_has_no_ring() {
+        for link in [Link::Connected, Link::Silent, Link::Disconnected] {
+            assert_eq!(
+                ring_for(shown(link, false, true)),
+                None,
+                "quiet on {link:?}"
+            );
+        }
+    }
+
+    /// One badge, and being unreachable is said instead of being muted rather than as well.
+    ///
+    /// The order is `Avatar.tsx`'s switch. Two badges would have somebody looking for two
+    /// problems where there is one: a peer you cannot reach is not also muted, you simply
+    /// cannot hear them either way.
+    #[test]
+    fn the_connection_is_said_before_the_microphone() {
+        let disconnected = badge_for(shown(Link::Disconnected, false, true), true, true)
+            .expect("a disconnected peer has something to say");
+        assert_eq!(disconnected.fill, ALARM.0);
+        let silent = badge_for(shown(Link::Silent, false, true), true, true)
+            .expect("a voiceless peer has something to say");
+        assert_eq!(silent.fill, WARNING.0, "no voice is the orange one");
+        assert_ne!(
+            disconnected.glyph, silent.glyph,
+            "unreachable and voiceless are different states"
+        );
+    }
+
+    /// Deafened outranks muted, and a working quiet connection says nothing at all.
+    #[test]
+    fn your_own_states_are_ordered_and_optional() {
+        let state = shown(Link::Connected, false, true);
+        assert!(badge_for(state, false, false).is_none(), "nothing is wrong");
+        let muted = badge_for(state, true, false).expect("muted shows");
+        let deafened = badge_for(state, true, true).expect("deafened shows");
+        assert_ne!(
+            muted.glyph, deafened.glyph,
+            "deafened is not drawn as muted, and it wins when both are set"
+        );
+    }
+
+    /// A quiet player says what their connection is, and a good one says nothing.
+    #[test]
+    fn a_quiet_player_shows_the_connection() {
+        // As a badge, not as a ring: the ring is the speaking colour or nothing.
+        for link in [Link::Silent, Link::Disconnected] {
+            assert!(badge_for(shown(link, false, true), false, false).is_some());
+            assert_ne!(ring_for(shown(link, false, true)), Some(SPEAKING));
+        }
+        assert!(badge_for(shown(Link::Connected, false, true), false, false).is_none());
     }
 
     fn shown(link: Link, talking: bool, alive: bool) -> Shown {

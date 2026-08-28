@@ -83,13 +83,25 @@ impl Reader {
         loop {
             match self.reports.try_recv() {
                 Ok(Report::State(state)) => {
+                    // On the transition, not per report: the thread says the same thing
+                    // repeatedly while nothing changes, and a log that repeats itself is
+                    // one nobody reads to the end of.
+                    if self.state != state {
+                        acl_core::log_info!("reader", "helper is now {state:?}");
+                    }
                     self.state = state;
                     if state == HelperState::Running {
                         self.trouble = None;
                     }
                 }
                 Ok(Report::Frame(state)) => self.latest = Some(state),
-                Ok(Report::Trouble(what)) => self.trouble = Some(what),
+                Ok(Report::Trouble(what)) => {
+                    // Everything the elevated half has to say arrives here. It cannot write
+                    // to this file itself -- see the note at the top of `acl-helper` -- so
+                    // this is where what it said is kept.
+                    acl_core::log_warn!("reader", "{what}");
+                    self.trouble = Some(what);
+                }
                 // Nothing waiting, or the thread has gone. The second is not recoverable
                 // here and the state it last reported stands rather than being rewritten
                 // into something cheerier, so both stop the same way.

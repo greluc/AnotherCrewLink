@@ -23,3 +23,4 @@ pub mod session;
 pub mod shortcuts;
 pub mod signalling;
 pub mod single_instance;
+pub mod start_game;

@@ -43,6 +43,16 @@ pub(crate) enum Command {
     WatchLobbies(bool),
     /// Ask for one lobby's code.
     JoinLobby(u64),
+    /// List this lobby in the public browser, or take it out of it.
+    ///
+    /// One command for both, because the server's handler is one: a payload whose
+    /// `isPublic` is false removes the listing rather than updating it.
+    Advertise {
+        /// The lobby's code.
+        code: String,
+        /// The listing, in the shape `PublicLobbyInput` deserialises.
+        lobby: serde_json::Value,
+    },
     /// Send one Opus packet to everybody in the lobby.
     ///
     /// To everybody, because who can hear it is the *receiver's* decision: gain and
@@ -116,6 +126,12 @@ pub(crate) enum State {
 /// The session, as the window holds it.
 pub(crate) struct Link {
     commands: Sender<Command>,
+    /// Whether the player asked for every connection to go through a relay.
+    ///
+    /// `natFix` on the settings page. Shared rather than sent as a command because the
+    /// worker reads it when the server's peer configuration arrives, which can be at any
+    /// moment and is not a moment this side knows about.
+    force_relay: std::sync::Arc<std::sync::atomic::AtomicBool>,
     reports: Receiver<Report>,
     state: State,
     /// The public lobbies, by the server's id for them.
@@ -170,15 +186,18 @@ impl Link {
     pub(crate) fn start() -> Self {
         let (commands, orders) = std::sync::mpsc::channel::<Command>();
         let (answers, reports) = std::sync::mpsc::channel::<Report>();
+        let force_relay = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let relay_for_worker = std::sync::Arc::clone(&force_relay);
         std::thread::Builder::new()
             .name("signalling".to_owned())
-            .spawn(move || run(&orders, &answers))
+            .spawn(move || run(&orders, &answers, &relay_for_worker))
             // A client that cannot start a thread has bigger problems than the lobby
             // browser, and there is nowhere to report them from here: the link simply
             // stays idle.
             .ok();
         Self {
             commands,
+            force_relay,
             reports,
             state: State::Idle,
             lobbies: std::collections::BTreeMap::new(),
@@ -192,11 +211,27 @@ impl Link {
         }
     }
 
+    /// Whether to force every connection through a relay.
+    ///
+    /// `natFix`, which reached nothing until 2026-08-27: the only thing that could force a
+    /// relay was the server's own `forceRelayOnly`, so a player behind a NAT that needs one
+    /// could tick the box and watch it do nothing.
+    pub(crate) fn set_force_relay(&self, forced: bool) {
+        self.force_relay
+            .store(forced, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Takes whatever the session has said. Cheap, and called once a frame.
     pub(crate) fn pump(&mut self) {
         while let Ok(report) = self.reports.try_recv() {
             match report {
                 Report::State(state) => {
+                    // On the transition. The state is reported when it changes, but a
+                    // reconnect can report the same failure twice and a log that repeats
+                    // itself is one nobody reads to the end of.
+                    if self.state != state {
+                        acl_core::log_info!("net", "{state:?}");
+                    }
                     if !matches!(state, State::Connected(_)) {
                         // Every peer went with the socket they were signalled over.
                         self.connected.clear();
@@ -449,6 +484,18 @@ impl Link {
         self.send(Command::WatchLobbies(open));
     }
 
+    /// Lists this lobby publicly, or takes it out of the list.
+    ///
+    /// There was no way to do this at all until 2026-08-27: the client could browse public
+    /// lobbies and join one, and never announce its own. `publicLobby_on`, `_title` and
+    /// `_language` were three settings with a page of their own and nowhere to go.
+    pub(crate) fn advertise(&mut self, code: &str, lobby: serde_json::Value) {
+        self.send(Command::Advertise {
+            code: code.to_owned(),
+            lobby,
+        });
+    }
+
     /// Asks for one lobby's code.
     pub(crate) fn join_lobby(&mut self, id: u64) {
         self.answer = None;
@@ -462,7 +509,11 @@ impl Link {
 }
 
 /// The thread: a runtime, and a session that outlives individual connections.
-fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
+fn run(
+    orders: &Receiver<Command>,
+    answers: &Sender<Report>,
+    force_relay: &std::sync::atomic::AtomicBool,
+) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -549,7 +600,7 @@ fn run(orders: &Receiver<Command>, answers: &Sender<Report>) {
                 Ok(Some(events)) => {
                     for event in events {
                         if let Some(live) = session.as_mut() {
-                            runtime.block_on(follow(&event, &mut mesh, live, answers));
+                            runtime.block_on(follow(&event, &mut mesh, live, answers, force_relay));
                         }
                         if let Event::Connected(id) = &event {
                             live = true;
@@ -617,6 +668,7 @@ async fn follow(
     mesh: &mut Option<acl_core::peers::PeerSet>,
     session: &mut Session,
     answers: &Sender<Report>,
+    force_relay: &std::sync::atomic::AtomicBool,
 ) {
     use acl_core::session::Arrival;
 
@@ -630,7 +682,16 @@ async fn follow(
             // forces relay mode with no relay in it has already been refused by
             // `peer_config`, because gathering nothing fails harder than the direct attempt
             // it replaced.
-            let rtc = acl_net::ice::RtcConfig::new(&config.ice_servers, config.force_relay_only);
+            //
+            // The player's own `natFix` is an *or*, the way `Voice.tsx` writes it:
+            // `settingsRef.current.natFix || relayedPeers.current[peer]`. Only when there
+            // is a relay to use, though -- forcing relay-only with none advertised gathers
+            // no candidates at all, which is the rule two lines above and the reason
+            // `apply_client_peer_config` refuses the same combination from the server.
+            let asked = force_relay.load(std::sync::atomic::Ordering::Relaxed)
+                && acl_net::ice::has_relay(&config.ice_servers);
+            let rtc =
+                acl_net::ice::RtcConfig::new(&config.ice_servers, config.force_relay_only || asked);
             match mesh.as_mut() {
                 Some(mesh) => mesh.reconfigure(rtc),
                 None => *mesh = Some(acl_core::peers::PeerSet::new(rtc)),
@@ -748,6 +809,11 @@ fn obey(
         Command::WatchLobbies(open) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.watch_lobbies(open));
+            }
+        }
+        Command::Advertise { code, lobby } => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.advertise(&code, lobby));
             }
         }
         Command::JoinLobby(id) => {

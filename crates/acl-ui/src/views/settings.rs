@@ -15,7 +15,9 @@
 use egui::{ComboBox, Slider, Ui};
 use serde_json::{Value, json};
 
-use crate::settings_screen::{Control, Kind, SECTIONS, Scope, availability, shown, stored};
+use crate::settings_screen::{
+    Control, Kind, SECTIONS, Scope, availability, gate_is_its_own_control, shown, stored,
+};
 
 /// What the player did.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +108,12 @@ pub struct Context<'a> {
     pub speakers: &'a [Entry<'a>],
     /// The locales under `static/locales`, with their names.
     pub locales: &'a [Entry<'a>],
+    /// What the microphone is hearing, from nought to one, for [`Kind::Meter`].
+    ///
+    /// `None` when there is no microphone open, which draws an empty bar rather than a
+    /// full one: a meter that reads maximum when nothing is listening is worse than one
+    /// that reads nothing.
+    pub input_level: Option<f32>,
     /// Whether this player may change the lobby rules: host, and in a lobby.
     pub host_may_change: bool,
     /// Whether the player is somewhere a lobby exists, which picks which of the two
@@ -134,21 +142,45 @@ pub fn draw(ui: &mut Ui, values: &dyn Values, context: &Context<'_>) -> Vec<Chan
                 context.host_may_change,
                 context.in_menu_or_lobby,
             );
+            // The gating checkbox, *before* the control and carrying its label -- so it
+            // reads "[x] Microphone volume" over the slider it enables.
+            //
+            // Two things about where it is drawn. It is outside the `add_enabled_ui` below,
+            // because a gate inside the thing it gates is one you can switch off and never
+            // switch back on. And it is skipped when the gate is a control in its own
+            // right: `enableOverlay` has its own labelled row, and drawing it again for
+            // each of the three controls it gates is what put three unlabelled checkboxes
+            // in the overlay section.
+            let own_gate = control
+                .gate
+                .filter(|gate| !gate_is_its_own_control(gate))
+                .map(|gate| {
+                    gate_checkbox(
+                        ui,
+                        gate,
+                        section.scope,
+                        gate_is_on,
+                        &control.label.map(context.t).unwrap_or_default(),
+                        &mut changes,
+                    );
+                });
             let response = ui
                 .scope(|ui| {
                     ui.add_enabled_ui(state.enabled, |ui| {
-                        one(ui, control, section.scope, values, context, &mut changes);
+                        one(
+                            ui,
+                            control,
+                            section.scope,
+                            values,
+                            context,
+                            &mut changes,
+                            own_gate.is_some(),
+                        );
                     });
                 })
                 .response;
             if let Some(reason) = state.reason {
                 response.on_hover_text((context.t)(reason));
-            }
-            // The gating checkbox, after the control it enables rather than before it: it
-            // is a property of that control, and reading "microphone volume [ ]" is what
-            // says so.
-            if let Some(gate) = control.gate {
-                gate_checkbox(ui, gate, section.scope, gate_is_on, &mut changes);
             }
         }
         ui.separator();
@@ -156,16 +188,17 @@ pub fn draw(ui: &mut Ui, values: &dyn Values, context: &Context<'_>) -> Vec<Chan
     changes
 }
 
-/// The checkbox that enables a gated control.
+/// The checkbox that enables a gated control, labelled with what it enables.
 fn gate_checkbox(
     ui: &mut Ui,
     gate: &'static str,
     scope: Scope,
     is_on: bool,
+    label: &str,
     changes: &mut Vec<Change>,
 ) {
     let mut on = is_on;
-    if ui.checkbox(&mut on, "").changed() {
+    if ui.checkbox(&mut on, label).changed() {
         changes.push(Change::Set {
             key: gate,
             scope,
@@ -173,6 +206,26 @@ fn gate_checkbox(
             warning: None,
         });
     }
+}
+
+/// What the microphone is hearing, as a bar.
+///
+/// A bar rather than a number. The question it answers is "is it hearing me", and the
+/// answer is whether the thing moves when somebody speaks — a figure would have to be read
+/// and compared against another figure to say the same thing.
+fn meter(ui: &mut Ui, level: Option<f32>) {
+    // Green when it is live and grey when nothing has reported: an empty grey bar reads as
+    // "not listening", and an empty green one as "listening, and hearing silence".
+    let fill = if level.is_some() {
+        egui::Color32::from_rgb(0x2e, 0xcc, 0x71)
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    ui.add(
+        egui::ProgressBar::new(level.unwrap_or(0.0).clamp(0.0, 1.0))
+            .desired_width(200.0)
+            .fill(fill),
+    );
 }
 
 /// One control.
@@ -183,8 +236,15 @@ fn one(
     values: &dyn Values,
     context: &Context<'_>,
     changes: &mut Vec<Change>,
+    labelled_by_its_gate: bool,
 ) {
-    let label = control.label.map(context.t).unwrap_or_default();
+    // Empty when the gating checkbox above already carries it, which is the whole reason
+    // that checkbox is worth drawing: the label says what the switch is for.
+    let label = if labelled_by_its_gate {
+        String::new()
+    } else {
+        control.label.map(context.t).unwrap_or_default()
+    };
     let set = |value: Value| Change::Set {
         key: control.key,
         scope,
@@ -248,6 +308,7 @@ fn one(
                 changes.push(Change::Capture(control.key));
             }
         }
+        Kind::Meter => meter(ui, context.input_level),
         Kind::Text => {
             let mut text = values.text_at(scope, control.key);
             ui.label(label);
@@ -263,6 +324,21 @@ fn one(
                 changes.push(Change::Run {
                     key: control.key,
                     warning: control.warning,
+                });
+            }
+        }
+        Kind::Note => {
+            // Weak and wrapped: it is a rule to be read once, not a label competing with
+            // the fields above it.
+            ui.label(egui::RichText::new(label).weak().small());
+        }
+        Kind::Probe => {
+            // The same `Run`, and never a warning: a `Probe` has none by construction, and
+            // `nothing_that_writes_nothing_shadows_a_setting` is what keeps it that way.
+            if ui.button(label).clicked() {
+                changes.push(Change::Run {
+                    key: control.key,
+                    warning: None,
                 });
             }
         }

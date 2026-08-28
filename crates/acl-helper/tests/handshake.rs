@@ -307,6 +307,33 @@ fn the_core_can_place_and_show_the_helper_overlay() {
     link.stop();
 }
 
+/// Measures the screen the way the helper and the client both do.
+///
+/// Without this the test process is DPI-unaware, and `GetWindowRect` hands it coordinates
+/// divided by the primary display's scale factor — so on a scaled display it reads back
+/// numbers the helper never used and the assertion below is about the harness rather than
+/// about the placement.
+///
+/// This test caught the fix that made it necessary: the helper was unaware too, so both
+/// sides were scaled the same way and agreed while the *client*, which is per-monitor
+/// aware, was measuring the game window in a third set of coordinates. That is what put the
+/// overlay on the wrong monitor.
+fn measure_like_the_helper() {
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        SetProcessDpiAwarenessContext,
+    };
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: documented constants, and no window has been created in this process.
+        unsafe {
+            if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+                SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+            }
+        }
+    });
+}
+
 /// Polls the helper's overlay window until its rectangle matches.
 ///
 /// Found by title across the process boundary, which is the only handle this side has:
@@ -314,6 +341,8 @@ fn the_core_can_place_and_show_the_helper_overlay() {
 fn wait_for_overlay(mut matches: impl FnMut(windows_sys::Win32::Foundation::RECT) -> bool) -> bool {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
+
+    measure_like_the_helper();
 
     let mut title: Vec<u16> = acl_helper::overlay::WINDOW_TITLE.encode_utf16().collect();
     title.push(0);

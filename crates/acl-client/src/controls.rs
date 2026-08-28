@@ -50,18 +50,62 @@ pub(crate) struct State {
     pub(crate) on_radio: bool,
 }
 
+/// What the talk key does, which is a setting rather than a state.
+///
+/// `pushToTalkOptions` in `SettingsStore.tsx`, and the numbering is theirs: it is stored in
+/// the same file under the same key, so a player who chose push-to-talk in 1.x keeps it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// The microphone is open; the detector decides what is sent.
+    #[default]
+    VoiceActivity,
+    /// The microphone is closed until the key is held.
+    PushToTalk,
+    /// The microphone is open until the key is held.
+    PushToMute,
+}
+
+impl Mode {
+    /// From the stored number.
+    ///
+    /// Anything else is voice activity, which is the shipped default and the mode that
+    /// cannot leave somebody unable to talk: a stored value nobody recognises should not
+    /// close the microphone until they find the key it now wants.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the stored value is one of three small integers; anything a truncation                   could produce falls into the same catch-all as anything else unrecognised"
+    )]
+    pub(crate) fn from_setting(stored: f64) -> Self {
+        match stored as i64 {
+            1 => Self::PushToTalk,
+            2 => Self::PushToMute,
+            _ => Self::VoiceActivity,
+        }
+    }
+}
+
 impl State {
     /// Whether this client should be sending audio.
     ///
-    /// `push_to_talk` is the *mode*, from the settings: with it off the microphone is open
-    /// unless something closed it, and with it on the microphone is closed unless the key
-    /// is held. Those are different sentences and the difference is the whole feature.
+    /// Mute and deafen come first and are absolute; the mode decides the rest.
+    ///
+    /// **`Voice.tsx` also applies push-to-mute in voice-activity mode.** Its key handler is
+    /// registered unconditionally and reads `mode === PUSH_TO_TALK ? pressing : !pressing`,
+    /// so holding the talk key while in voice activity mutes you there. That is not copied:
+    /// it is the behaviour of a listener that was not meant to be listening, there is a
+    /// mode for wanting it, and the steady state two lines above it disagrees --
+    /// `enabled = mode !== PUSH_TO_TALK` leaves the track open in voice activity.
     #[must_use]
-    pub(crate) const fn transmitting(self, push_to_talk: bool) -> bool {
+    pub(crate) const fn transmitting(self, mode: Mode) -> bool {
         if self.muted || self.deafened {
             return false;
         }
-        !push_to_talk || self.holding
+        match mode {
+            Mode::VoiceActivity => true,
+            Mode::PushToTalk => self.holding,
+            Mode::PushToMute => !self.holding,
+        }
     }
 }
 
@@ -155,7 +199,7 @@ impl Controls {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use super::{Controls, State};
+    use super::{Controls, Mode, State};
 
     /// A keyboard with whatever keys the test wants held.
     struct Held(Vec<u16>);
@@ -182,7 +226,7 @@ mod tests {
         let mut controls = controls();
         let state = controls.poll(&Held(vec![]));
         assert_eq!(state, State::default());
-        assert!(state.transmitting(false));
+        assert!(state.transmitting(Mode::VoiceActivity));
     }
 
     /// Mute is a toggle, and it takes a release before it toggles again.
@@ -207,7 +251,7 @@ mod tests {
         let state = controls.poll(&Held(vec![F2]));
         assert!(state.deafened);
         assert!(state.muted);
-        assert!(!state.transmitting(false));
+        assert!(!state.transmitting(Mode::VoiceActivity));
     }
 
     /// Mute while deafened is the way back, and clears both.
@@ -229,12 +273,49 @@ mod tests {
     fn push_to_talk_inverts_the_default() {
         let mut controls = controls();
         let idle = controls.poll(&Held(vec![]));
-        assert!(idle.transmitting(false), "not in push-to-talk mode");
-        assert!(!idle.transmitting(true), "push-to-talk should be closed");
+        assert!(
+            idle.transmitting(Mode::VoiceActivity),
+            "not in push-to-talk mode"
+        );
+        assert!(
+            !idle.transmitting(Mode::PushToTalk),
+            "push-to-talk should be closed"
+        );
 
         let holding = controls.poll(&Held(vec![F3]));
         assert!(holding.holding);
-        assert!(holding.transmitting(true));
+        assert!(holding.transmitting(Mode::PushToTalk));
+    }
+
+    /// Push-to-mute is the other way round, and it was missing entirely.
+    ///
+    /// The mode was a `bool`, so the settings screen's three choices were two — and the one
+    /// key it read, `pushToTalk`, is written by nothing in the project. Every client was in
+    /// voice activity whatever the screen said.
+    #[test]
+    fn push_to_mute_closes_while_it_is_held() {
+        let idle = State::default();
+        let holding = State {
+            holding: true,
+            ..State::default()
+        };
+        assert!(idle.transmitting(Mode::PushToMute), "open until held");
+        assert!(!holding.transmitting(Mode::PushToMute), "closed while held");
+        // And the key does nothing at all in voice activity. See `transmitting`.
+        assert!(holding.transmitting(Mode::VoiceActivity));
+    }
+
+    /// The stored numbers are `pushToTalkOptions`, and an unknown one is the safe mode.
+    #[test]
+    fn the_stored_mode_is_the_shipped_numbering() {
+        assert_eq!(Mode::from_setting(0.0), Mode::VoiceActivity);
+        assert_eq!(Mode::from_setting(1.0), Mode::PushToTalk);
+        assert_eq!(Mode::from_setting(2.0), Mode::PushToMute);
+        assert_eq!(
+            Mode::from_setting(7.0),
+            Mode::VoiceActivity,
+            "an unknown mode must not be one that closes the microphone"
+        );
     }
 
     /// And muting beats holding the key.
@@ -244,8 +325,11 @@ mod tests {
         controls.poll(&Held(vec![F1]));
         let state = controls.poll(&Held(vec![F1, F3]));
         assert!(state.muted);
-        assert!(!state.transmitting(true), "muted and still transmitting");
-        assert!(!state.transmitting(false));
+        assert!(
+            !state.transmitting(Mode::PushToTalk),
+            "muted and still transmitting"
+        );
+        assert!(!state.transmitting(Mode::VoiceActivity));
     }
 
     /// The radio is a level, like push-to-talk and unlike the toggles.
@@ -276,7 +360,7 @@ mod tests {
         assert!(state.muted);
         assert!(state.on_radio);
         assert!(
-            !state.transmitting(false),
+            !state.transmitting(Mode::VoiceActivity),
             "muted, so nothing goes out over the radio either"
         );
     }

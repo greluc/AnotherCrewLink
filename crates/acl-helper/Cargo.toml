@@ -36,6 +36,9 @@ windows-sys = { version = "0.61", features = [
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 	"Win32_System_LibraryLoader",
+	# The overlay is placed in the coordinates the client measured, and the client is
+	# per-monitor aware. A process that is not gets every one of them rewritten.
+	"Win32_UI_HiDpi",
 	"Win32_UI_WindowsAndMessaging",
 	"Win32_System_Threading",
 ] }
@@ -43,8 +46,11 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 # `tests/overlay_window.rs` asks the operating system what the window's styles and
 # rectangle actually are, rather than trusting that it was asked for the right ones.
+# `Win32_UI_HiDpi` so a test can measure in the same coordinates the helper places in --
+# without it a test process is DPI-unaware and reads back scaled numbers.
 windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
+	"Win32_UI_HiDpi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
 # For `launch::arguments`, so the test builds the command line the same way the core does

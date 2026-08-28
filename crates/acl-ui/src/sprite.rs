@@ -297,12 +297,66 @@ pub fn decode_png(bytes: &[u8]) -> Option<Bitmap> {
     Some(bitmap)
 }
 
+/// Clips a bitmap to the circle inscribed in it.
+///
+/// `Avatar.tsx` puts the crewmate in a `border-radius: 50%` box with `overflow: hidden`, so
+/// the parts of the body that reach past the circle are not drawn. Without this the sprite
+/// is a square one, and the ring the view draws around it no longer follows its edge.
+///
+/// Antialiased over the last pixel of the radius, because a hard cut on a 52-point avatar
+/// is a visible staircase. Premultiplied throughout: scaling all four channels by the same
+/// coverage is what keeps it so.
+pub fn clip_to_circle(bitmap: &mut Bitmap) {
+    let (width, height) = (bitmap.width, bitmap.height);
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "sprite dimensions in pixels, far below f32's exact integer range"
+    )]
+    let (centre_x, centre_y) = ((width as f32 - 1.0) / 2.0, (height as f32 - 1.0) / 2.0);
+    let radius = centre_x.min(centre_y);
+
+    for y in 0..height {
+        for x in 0..width {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "pixel coordinates, far below f32's exact integer range"
+            )]
+            let distance = ((x as f32 - centre_x).powi(2) + (y as f32 - centre_y).powi(2)).sqrt();
+            // One pixel of feather at the rim: fully in at `radius - 1`, fully out at
+            // `radius`.
+            let coverage = (radius - distance).clamp(0.0, 1.0);
+            if coverage >= 1.0 {
+                continue;
+            }
+            let Ok(index) = usize::try_from((y * width + x) * 4) else {
+                continue;
+            };
+            let Some(slot) = bitmap.pixels.get_mut(index..index + 4) else {
+                continue;
+            };
+            for channel in slot {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a byte scaled by a value in 0..=1 is a byte"
+                )]
+                {
+                    *channel = (f32::from(*channel) * coverage).round() as u8;
+                }
+            }
+        }
+    }
+}
+
 /// One channel, scaled by its own alpha.
 ///
 /// Rounded rather than truncated. Truncating biases every channel down by up to one level,
 /// which over five composited layers is a visible darkening — and it can push a channel
 /// below its alpha's rounding, which is the one thing premultiplied colour must never do.
-fn premultiply(channel: u8, alpha: u8) -> u8 {
+pub(crate) fn premultiply(channel: u8, alpha: u8) -> u8 {
     let scaled = u32::from(channel) * u32::from(alpha) + 127;
     // The exact rounding of `x * a / 255`, without the division twice.
     u8::try_from((scaled + scaled / 255) / 256).unwrap_or(alpha)
@@ -411,7 +465,10 @@ pub fn to_image(bitmap: &Bitmap) -> egui::ColorImage {
     ];
     let mut pixels = Vec::with_capacity(size[0].saturating_mul(size[1]));
     let (whole, _) = bitmap.pixels.as_chunks::<4>();
-    for [red, green, blue, alpha] in whole {
+    // Blue first. A `Bitmap` is in the order `UpdateLayeredWindow` wants and egui's
+    // `Color32` is in the order everything else does, so the two ends are swapped and this
+    // is where they meet.
+    for [blue, green, red, alpha] in whole {
         pixels.push(egui::Color32::from_rgba_premultiplied(
             *red, *green, *blue, *alpha,
         ));
@@ -434,25 +491,103 @@ pub fn to_image(bitmap: &Bitmap) -> egui::ColorImage {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Bitmap, Crewmate, crewmate, decode_png};
+    use super::{Bitmap, Crewmate, clip_to_circle, crewmate, decode_png};
 
-    /// The pixels arrive unchanged, and premultiplied stays premultiplied.
+    /// A red pixel is red on the other side.
     ///
-    /// Both sides of this use premultiplied alpha, so the copy is the whole of it. A
-    /// conversion here would be a bug that shows as a halo round every hat.
+    /// Alpha is left alone — both sides are premultiplied, so a conversion there would show
+    /// as a halo round every hat — but the *order* is not the same on both sides, and this
+    /// is the only place the two meet.
+    ///
+    /// **This test used to assert the bug.** It wrote `[10, 20, 30, 40]` and expected
+    /// `from_rgba_premultiplied(10, 20, 30, 40)`, which is only true if a `Bitmap`'s first
+    /// byte is red — and it is blue, as `blend` and `decode_png` both plainly show. Named
+    /// after the property it was checking, "the same pixels", it read as obviously correct.
+    /// Live, on 2026-08-27: a red crewmate drawn blue, a blue one drawn orange, and a yellow
+    /// hard hat drawn cyan. So the values here are chosen to make a swap fail — three
+    /// different channels, none of them a grey.
     #[test]
-    fn an_image_carries_the_same_pixels() {
+    fn an_image_keeps_its_colours() {
         let mut bitmap = super::Bitmap::blank(2, 1);
-        bitmap.pixels[0..4].copy_from_slice(&[10, 20, 30, 40]);
+        // Blue, green, red, alpha: an opaque red with a little green in it.
+        bitmap.pixels[0..4].copy_from_slice(&[10, 90, 200, 255]);
         bitmap.pixels[4..8].copy_from_slice(&[0, 0, 0, 0]);
 
         let image = super::to_image(&bitmap);
         assert_eq!(image.size, [2, 1]);
         assert_eq!(
             image.pixels[0],
-            egui::Color32::from_rgba_premultiplied(10, 20, 30, 40)
+            egui::Color32::from_rgba_premultiplied(200, 90, 10, 255),
+            "red and blue are the two that get swapped"
         );
         assert_eq!(image.pixels[1], egui::Color32::TRANSPARENT);
+    }
+
+    /// End to end: the palette's red comes out of the texture path red.
+    ///
+    /// The unit above tests four bytes. This one runs the real thing — decode the vendored
+    /// master, recolour it, hand it to egui — because that is the path every crewmate in the
+    /// window takes and it is the one that was wrong.
+    #[test]
+    fn a_red_crewmate_reaches_the_texture_red() {
+        // Colour zero, `#C51111` and its shadow. Red enough that a swap is unmistakable.
+        let body = crate::body::recoloured(true, (0xc5, 0x11, 0x11), (0x7a, 0x08, 0x38))
+            .expect("the vendored artwork decodes");
+        let image = super::to_image(&body);
+        // The middle of the chest, which is body colour rather than shadow or visor.
+        let pixel = image.pixels[50 * 100 + 50];
+        assert!(
+            pixel.r() > pixel.b() * 2,
+            "red {} should dominate blue {}",
+            pixel.r(),
+            pixel.b()
+        );
+    }
+
+    /// The corners go, the middle stays.
+    ///
+    /// Premultiplied, so a cleared pixel is four zeroes rather than a black one with zero
+    /// alpha — a black corner with the alpha alone cleared would still darken whatever it
+    /// was composited onto.
+    #[test]
+    fn clipping_leaves_a_circle() {
+        let mut bitmap = Bitmap::blank(32, 32);
+        for pixel in bitmap.pixels.as_chunks_mut::<4>().0 {
+            pixel.copy_from_slice(&[255, 255, 255, 255]);
+        }
+        clip_to_circle(&mut bitmap);
+
+        assert_eq!(bitmap.at(16, 16), Some([255, 255, 255, 255]), "the middle");
+        for corner in [(0, 0), (31, 0), (0, 31), (31, 31)] {
+            assert_eq!(
+                bitmap.at(corner.0, corner.1),
+                Some([0, 0, 0, 0]),
+                "corner {corner:?}"
+            );
+        }
+        // The top middle is inside the circle and survives, though it is within the pixel
+        // of feather at the rim, so it is not quite full.
+        let [_, _, _, alpha] = bitmap.at(16, 1).expect("in range");
+        assert!(alpha > 200, "the top middle came out at alpha {alpha}");
+        // And the rim really is feathered rather than cut: somewhere on it a pixel is
+        // partly covered. A hard edge on a 52-point avatar is a visible staircase.
+        assert!(
+            bitmap
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| (1..255).contains(&pixel[3])),
+            "no partly covered pixel: the edge is hard"
+        );
+    }
+
+    /// A bitmap with no pixels is not a panic and not a divide by zero.
+    #[test]
+    fn clipping_nothing_is_nothing() {
+        let mut bitmap = Bitmap::blank(0, 0);
+        clip_to_circle(&mut bitmap);
+        assert!(bitmap.pixels.is_empty());
     }
 
     /// A bitmap that disagrees with itself is short, not fatal.

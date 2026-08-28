@@ -15,6 +15,7 @@ pub mod mesh;
 pub mod peer;
 pub mod peer_config;
 pub mod reconnect;
+pub mod retirement;
 pub mod rtc;
 pub mod signal_route;
 pub mod socketio;

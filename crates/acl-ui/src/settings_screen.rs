@@ -50,6 +50,32 @@ pub enum Kind {
     },
     /// Free text.
     Text,
+    /// A sentence, drawn where it stands.
+    ///
+    /// Not a setting and not interactive: some fields need a line beside them that is a
+    /// rule rather than a hint, and a tooltip is not where a rule belongs — nobody hovers a
+    /// field before typing in it.
+    Note,
+    /// A button that tries something and changes nothing.
+    ///
+    /// Deliberately **not** [`Kind::Action`]. An action here means one that alters the
+    /// configuration irreversibly, which is why `an_action_is_not_a_setting` requires every
+    /// one of them to carry a warning — restoring defaults rewrites every preference, and
+    /// resetting the offsets throws away what the reader is using. Playing a sound through
+    /// the chosen speaker does neither, and putting it under the same kind would have meant
+    /// either a confirmation dialog before a chime or weakening the rule that keeps the
+    /// other two behind one.
+    Probe,
+    /// What the microphone is hearing right now, drawn rather than edited.
+    ///
+    /// Not a setting: nothing is stored under its key and nothing can be. It is here
+    /// because it belongs beside the two settings that decide what the detector does with
+    /// that level — `micSensitivity` is a threshold, and a threshold without a reading of
+    /// what it is being compared against is a number somebody guesses at.
+    ///
+    /// `VadFrame::level` has carried it since P3+, documented as "for a meter", and nothing
+    /// read it.
+    Meter,
     /// A locale, chosen from the tree under `static/locales`.
     ///
     /// Not a [`Kind::Choice`] because the options are not fixed: they are whatever
@@ -66,6 +92,22 @@ pub struct Choice {
     pub value: Default_,
     /// The i18n key of its label.
     pub label: &'static str,
+}
+
+impl Kind {
+    /// Whether this control stands for a value in `config.json`.
+    ///
+    /// Four kinds do not. `Action` runs something, `Probe` tries something, `Note` says
+    /// something and `Meter` reads something; each needs a key, because the screen builds a
+    /// widget id from it, and none of them is a setting.
+    ///
+    /// Said here rather than in each rule that needs it. Three tests were listing the kinds
+    /// to skip, and a fourth kind added later would have been forgotten by all three at
+    /// once — the way `Note` was, until `the_two_scopes_hold_the_two_lists` caught it.
+    #[must_use]
+    pub const fn is_a_setting(self) -> bool {
+        !matches!(self, Self::Action | Self::Probe | Self::Note | Self::Meter)
+    }
 }
 
 /// One control on the screen.
@@ -243,6 +285,15 @@ const PUBLIC_LOBBY: &[Control] = &[
         Kind::Language,
     )
     .gated_by("publicLobby_on"),
+    // Under the two fields it is about, because it is about what somebody types into them.
+    // `PublicLobbySettings.tsx` shows it in the same place and for the same reason: a title
+    // is the one thing here that every other player reads.
+    Control::of(
+        "publicLobbyBanWarning",
+        Some("settings.lobbysettings.public_lobby.ban_warning"),
+        Kind::Note,
+    )
+    .gated_by("publicLobby_on"),
 ];
 
 /// Devices, modes and volumes.
@@ -257,6 +308,15 @@ const AUDIO: &[Control] = &[
         Some("settings.audio.speaker"),
         Kind::Device { capture: false },
     ),
+    // Between the speaker and the mode, because it is about the speaker: it plays a sound
+    // through the one that is selected, which is the only way to find out that the
+    // selection is wrong.
+    Control::of(
+        "testSpeaker",
+        Some("settings.audio.test_speaker_start"),
+        Kind::Probe,
+    ),
+    Control::of("microphoneLevel", None, Kind::Meter),
     Control::of(
         "pushToTalkMode",
         None,
@@ -393,6 +453,33 @@ const OVERLAY: &[Control] = &[
     .gated_by("enableOverlay"),
 ];
 
+/// Where the game is started from.
+///
+/// The three the client knows how to start. A custom entry is chosen by its own title and
+/// cannot be listed here, because the list is a compile-time constant and those are not —
+/// see `waiting_for_the_game`, which starts one that is already stored.
+const LAUNCH: &[Control] = &[Control::of(
+    "launchPlatform",
+    Some("game.open"),
+    Kind::Choice(&[
+        // The stored values are the shipped client's, upper case and not tidied: they are
+        // `Platform::key`, which has a test comparing it against `GamePlatform.ts`. Writing
+        // them in lower case would move an existing setting to a platform nobody chose.
+        Choice {
+            value: Default_::Text("STEAM"),
+            label: "platform.steam",
+        },
+        Choice {
+            value: Default_::Text("EPIC"),
+            label: "platform.epicgames",
+        },
+        Choice {
+            value: Default_::Text("MICROSOFT"),
+            label: "platform.microsoft",
+        },
+    ]),
+)];
+
 /// The network, and the server.
 const ADVANCED: &[Control] = &[
     Control::toggle("natFix", "settings.advanced.nat_fix")
@@ -480,6 +567,13 @@ pub const SECTIONS: &[Section] = &[
         title: Some("settings.overlay.title"),
         scope: Scope::Client,
         controls: OVERLAY,
+    },
+    Section {
+        // `game.open` is "Open via", which is the phrase the launch button uses. The
+        // section borrows it rather than inventing a heading no translator has.
+        title: Some("game.open"),
+        scope: Scope::Client,
+        controls: LAUNCH,
     },
     Section {
         title: Some("settings.advanced.title"),
@@ -580,6 +674,20 @@ pub fn controls() -> impl Iterator<Item = &'static Control> {
     SECTIONS.iter().flat_map(|section| section.controls.iter())
 }
 
+/// Whether a gate is itself one of the screen's controls.
+///
+/// Two of the four are: `enableOverlay` and `publicLobby_on` each have a row of their own,
+/// with a label a translator wrote. Drawing a gating checkbox for them as well put the same
+/// switch on the screen a second, third and fourth time with nothing beside it — which is
+/// what an unlabelled checkbox under "Compact overlay" was.
+///
+/// The other two, `microphoneGainEnabled` and `micSensitivityEnabled`, exist only to enable
+/// their slider. Those are drawn, and they take the slider's own label.
+#[must_use]
+pub fn gate_is_its_own_control(gate: &str) -> bool {
+    controls().any(|control| control.key == gate)
+}
+
 /// What a slider shows for a stored value.
 ///
 /// The identity for every slider but one. See [`Kind::Slider`]'s `inverted`.
@@ -620,7 +728,10 @@ mod tests {
     // happen, which is noise around the thing being checked.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Choice, Kind, NOT_SHOWN, SECTIONS, Scope, availability, controls, shown, stored};
+    use super::{
+        Choice, Kind, NOT_SHOWN, SECTIONS, Scope, availability, controls, gate_is_its_own_control,
+        shown, stored,
+    };
     use crate::settings::{Default_, defaults, lobby_defaults};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
@@ -628,6 +739,69 @@ mod tests {
     /// Every setting, from both lists, with the type its default has.
     fn schema() -> BTreeMap<&'static str, Default_> {
         defaults().into_iter().chain(lobby_defaults()).collect()
+    }
+
+    /// A gate with a row of its own is not drawn a second time.
+    ///
+    /// Two of the four are: `enableOverlay` and `publicLobby_on`. Drawing a gating checkbox
+    /// for them as well put the same switch on the screen four times over, three of those
+    /// with no label beside it.
+    #[test]
+    fn a_gate_that_is_a_control_is_recognised_as_one() {
+        assert!(gate_is_its_own_control("enableOverlay"));
+        assert!(gate_is_its_own_control("publicLobby_on"));
+        assert!(!gate_is_its_own_control("microphoneGainEnabled"));
+        assert!(!gate_is_its_own_control("micSensitivityEnabled"));
+        assert!(!gate_is_its_own_control("no_such_setting"));
+    }
+
+    /// Every gate that *is* drawn has a label to take.
+    ///
+    /// It takes the label of the control it gates, so a gate on a control that has none
+    /// would be an unlabelled checkbox again — the exact thing this is here to prevent, and
+    /// invisible until somebody opens the screen and looks.
+    #[test]
+    fn every_drawn_gate_has_a_label_to_borrow() {
+        for control in controls() {
+            let Some(gate) = control.gate else {
+                continue;
+            };
+            if gate_is_its_own_control(gate) {
+                continue;
+            }
+            assert!(
+                control.label.is_some(),
+                "{} gates {} and has no label for it",
+                gate,
+                control.key
+            );
+        }
+    }
+
+    /// A control that writes nothing must not share a key with a setting.
+    ///
+    /// The same collision `an_action_is_not_a_setting` guards, for the three kinds that
+    /// were added beside it: any code that treated controls uniformly would write `testSpeaker`
+    /// into `config.json` as though somebody had chosen it.
+    #[test]
+    fn nothing_that_writes_nothing_shadows_a_setting() {
+        let schema = schema();
+        for control in controls() {
+            if control.kind.is_a_setting() || control.kind == Kind::Action {
+                continue;
+            }
+            assert!(
+                !schema.contains_key(control.key),
+                "{} is both a {:?} and a setting",
+                control.key,
+                control.kind
+            );
+            assert!(
+                control.warning.is_none(),
+                "{} changes nothing, so there is nothing to confirm",
+                control.key
+            );
+        }
     }
 
     /// Every key this screen can write: a control's own key, and any gate it names.
@@ -670,11 +844,15 @@ mod tests {
 
     /// And the other direction: a control pointing at a key the schema does not have
     /// writes a setting nothing reads.
+    ///
+    /// Three kinds write nothing and so have nothing to point at. `Action` runs something,
+    /// `Probe` tries something, and `Meter` only reads — each has a key because the screen
+    /// needs one to build a widget id from, and none of them is a setting.
     #[test]
     fn every_control_points_at_a_real_setting() {
         let schema = schema();
         for control in controls() {
-            if control.kind == Kind::Action {
+            if !control.kind.is_a_setting() {
                 continue;
             }
             assert!(
@@ -876,7 +1054,7 @@ mod tests {
         let lobby: BTreeSet<&str> = lobby_defaults().into_iter().map(|(key, _)| key).collect();
         for section in SECTIONS {
             for control in section.controls {
-                if control.kind == Kind::Action {
+                if !control.kind.is_a_setting() {
                     continue;
                 }
                 assert_eq!(
