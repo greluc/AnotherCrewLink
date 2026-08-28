@@ -151,17 +151,26 @@ if (-not $onRemote) { Fail 'HEAD is not on any remote branch. Push it first.' }
 # a repository -- because the tag is the *cheap* half. What is expensive is the build it
 # started, which is still running, and the release it drafted, which is still there. So the
 # run picks up from whatever is already done: it re-uses the build, and it skips the upload
-# of anything already uploaded. What it will not do is move a tag, because a tag that has
-# been built from is a tag somebody may have installed.
+# of anything already uploaded. What it will not do is *move* a tag -- not by refusing to
+# run, but by never passing `git tag -f`. A tag that has been built from is a tag somebody
+# may already have installed, and the guarantee that it does not move is worth more as a
+# thing the script cannot do than as a check it performs.
+#
+# So HEAD moving on is a remark, not an error. It is the normal case for a resume: the fault
+# that stopped the first run gets fixed, and the fix is a commit. The release is what was
+# tagged, and the tag is where it stays.
 $tagged = $false
 git rev-parse --verify --quiet "refs/tags/$Tag" > $null
 if ($LASTEXITCODE -eq 0) {
-    $points = (git rev-list -n 1 $Tag).Trim()
-    if ($points -ne $head) {
-        Fail "The tag $Tag is on $($points.Substring(0, 12)) and HEAD is $($head.Substring(0, 12)). Releases are immutable; cut a new version rather than moving a tag."
-    }
     $tagged = $true
-    Note "$Tag already exists here, on this commit. Carrying on from there."
+    $points = (git rev-list -n 1 $Tag).Trim()
+    if ($points -eq $head) {
+        Note "$Tag already exists here, on this commit. Carrying on from there."
+    }
+    else {
+        Note "$Tag is on $($points.Substring(0, 12)) and HEAD has since moved to $($head.Substring(0, 12))."
+        Note 'The release is what was tagged, not what is checked out. Nothing committed since is in it.'
+    }
 }
 
 # --- the key ----------------------------------------------------------------------------
