@@ -190,13 +190,23 @@ pub(crate) struct Link {
     connected: std::collections::BTreeSet<String>,
 }
 
-/// How long after a packet somebody still counts as speaking.
+/// How long after a packet somebody still counts as having been heard.
 ///
-/// Two hundred milliseconds: long enough that the twenty between one packet and the next
-/// never shows as a gap, short enough that a ring goes out promptly when somebody stops.
-/// It is deliberately not the repaint interval -- tying the two together is what made the
-/// ring flicker when the window started drawing quickly.
-const RECENTLY: std::time::Duration = std::time::Duration::from_millis(200);
+/// **Half a second, and the margin is the whole point.** This has to outlast the gap between
+/// one *delivery* and the next, which is not the twenty milliseconds between packets: audio
+/// still reaches the window through the repaint loop, so it arrives in bursts about two
+/// hundred milliseconds apart. A window of two hundred was set here earlier today and was
+/// exactly as wide as the gap it had to bridge -- no margin at all, so a burst arriving ten
+/// milliseconds late dropped the peer out of the set and their ring went amber for a frame
+/// while they were being heard perfectly well.
+///
+/// Five hundred survives two missed deliveries and still clears within half a second of
+/// somebody genuinely going. It is deliberately a duration and not the repaint interval:
+/// tying the two together is the mistake this whole evening has been made of. When the audio
+/// path stops travelling through the repaint loop, the gap this bridges shrinks to twenty
+/// milliseconds and this number can come down with it -- but not before, and not by
+/// accident.
+const RECENTLY: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl Link {
     /// Starts the thread. Nothing is connected until [`Link::connect`] is called.

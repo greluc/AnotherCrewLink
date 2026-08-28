@@ -938,6 +938,15 @@ fn mix(
         std::collections::BTreeMap::new();
     let mut wet = vec![0.0_f32; FRAME_SAMPLES * 2];
     let mut said_it_was_not_loaded = false;
+    // Where the delay is, once a second.
+    //
+    // Two testers measured this client two to three seconds behind TeamSpeak running beside
+    // it. Every buffer in this path can be named and its size argued from the code, and that
+    // arithmetic comes to about seven hundred milliseconds -- so something holds the rest,
+    // and an evening of reasoning has not found it. These numbers say which queue it is, for
+    // the cost of one line a second.
+    let mut reported = std::time::Instant::now();
+    let mut frames_made = 0_u32;
 
     loop {
         if !take_packets(packets, &mut listeners) {
@@ -1061,6 +1070,9 @@ fn mix(
                     anything = true;
                 }
             }
+            if anything {
+                frames_made += 1;
+            }
             if !anything {
                 // Nobody had a frame to give, so there is nothing to catch up on and another
                 // round would only ask the same question again.
@@ -1077,7 +1089,50 @@ fn mix(
                 }
             }
         }
+
+        if reported.elapsed() >= std::time::Duration::from_secs(1) {
+            reported = std::time::Instant::now();
+            report_depth(&listeners, ready, frames_made);
+            frames_made = 0;
+        }
     }
+}
+
+/// Says how far behind the pipeline is, once a second.
+///
+/// Two testers measured this client two to three seconds behind `TeamSpeak`, running
+/// beside it as a reference.
+/// Every buffer in the path can be named and its size argued from the code, and that
+/// arithmetic comes to about seven hundred milliseconds -- so something holds the rest, and
+/// an evening of reasoning has not found it.
+///
+/// `held` is the one queue in the path with no capacity limit: the jitter buffers' map keeps
+/// whatever arrives, and `depth` decides only when playback starts. `queued` is what is
+/// waiting for the speaker. `made` should be fifty a second -- fewer is a mixer falling
+/// behind, more is one catching up -- and between the three of them the next two-machine
+/// test settles in one run what deduction could not.
+#[cfg(feature = "audio")]
+fn report_depth(
+    listeners: &std::collections::BTreeMap<String, Listener>,
+    ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+    made: u32,
+) {
+    let held: usize = listeners.values().map(Listener::waiting).sum();
+    // Interleaved stereo, so half the samples are one ear's worth of time.
+    let queued = ready.lock().map_or(0, |queue| queue.len() / 2);
+    // Only while there is something to say. A quiet client would otherwise write a line a
+    // second for as long as it runs, and a log nobody can page through is a log nobody reads.
+    if held == 0 && made == 0 {
+        return;
+    }
+    let frame_ms = acl_audio::codec::FRAME_MS as usize;
+    let rate = (acl_audio::codec::SAMPLE_RATE as usize).max(1);
+    acl_core::log_info!(
+        "audio",
+        "behind by {} ms in the jitter buffers ({held} packets) and {} ms at the speaker ({queued} samples); {made} frames made",
+        held * frame_ms,
+        queued * 1000 / rate
+    );
 }
 
 /// This peer's filter, built if they had none and rebuilt if the shape changed.
@@ -1219,6 +1274,18 @@ fn take_packets(
 /// say what they are for, and so the depth is decided once.
 pub(crate) struct Listener {
     buffer: JitterBuffer,
+}
+
+impl Listener {
+    /// How many packets are waiting to be played.
+    ///
+    /// The jitter buffer's map has no capacity limit -- `depth` decides when playback starts,
+    /// not how much is retained -- so this is the one queue in the path that can grow with
+    /// nothing stopping it. Reported once a second by the mixing loop, because a delay
+    /// somebody can hear ought to be a delay somebody can read.
+    pub(crate) fn waiting(&self) -> usize {
+        self.buffer.held()
+    }
 }
 
 impl Listener {
