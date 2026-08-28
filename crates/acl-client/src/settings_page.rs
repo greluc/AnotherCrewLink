@@ -161,6 +161,26 @@ impl Page {
         }
     }
 
+    /// Writes one value straight through, for a screen the control model has no shape for.
+    ///
+    /// The custom-platform editor is that screen: its list is as long as somebody has made
+    /// it, and `settings_screen::SECTIONS` is a compile-time constant. Everything a
+    /// `Control` writes still goes through `apply`, which is where warnings and effects are
+    /// -- this is the door beside it, not a way around it.
+    pub(crate) fn put(&mut self, key: &str, value: serde_json::Value) {
+        self.config.set(key, value);
+        self.save();
+    }
+
+    /// Takes one value out entirely, for the same screen.
+    ///
+    /// Removing rather than emptying: a custom platform with every field blank is still an
+    /// entry, and it would keep appearing in a list somebody deleted it from.
+    pub(crate) fn forget(&mut self, key: &str) {
+        self.config.remove(key);
+        self.save();
+    }
+
     /// What an action button means to the caller.
     fn run(key: &str, effects: &mut Vec<Effect>) {
         match key {

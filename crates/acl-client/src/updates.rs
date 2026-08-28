@@ -102,6 +102,18 @@ fn check(running: &semver::Version, answers: &Sender<Offer>) {
     let feed = acl_updater::fetch::Feed { manifest: FEED };
     let manifest = match acl_updater::fetch::manifest(feed, &network) {
         Ok(manifest) => manifest,
+        // A manifest that is not there is not a fault. `releases/latest/download/<name>`
+        // answers 404 until a release carries that asset, which is the ordinary state
+        // before the first signed one -- and reporting it would put an error in front of
+        // every player for something they cannot act on and nobody is doing wrong.
+        //
+        // Anything else is said. An updater that never offers anything is
+        // indistinguishable from one with nothing to offer, and the difference is whether
+        // somebody is stuck on an old version without knowing it.
+        Err(acl_updater::fetch::FetchError::Unreachable(why)) if why.contains("404") => {
+            let _ = answers.send(Offer::UpToDate);
+            return;
+        }
         Err(why) => {
             let _ = answers.send(Offer::Trouble(why.to_string()));
             return;

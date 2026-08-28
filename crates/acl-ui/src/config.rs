@@ -163,6 +163,28 @@ impl Config {
             .unwrap_or_default()
     }
 
+    /// Removes whatever is at a dotted path.
+    ///
+    /// A path whose parents do not all exist is nothing to remove and not an error: the
+    /// caller is deleting something, and something already absent is the state they asked
+    /// for.
+    pub fn remove(&mut self, key: &str) {
+        let mut steps: Vec<&str> = key.split('.').collect();
+        let Some(last) = steps.pop() else {
+            return;
+        };
+        let mut current = &mut self.document;
+        for step in steps {
+            let Some(object) = current.get_mut(step).and_then(Value::as_object_mut) else {
+                // A parent that is missing, or is not an object. Either way there is
+                // nothing under it to take.
+                return;
+            };
+            current = object;
+        }
+        current.remove(last);
+    }
+
     /// Sets a value at a dotted path, creating the objects on the way.
     ///
     /// A step that exists and is not an object is replaced. `electron-store` does the same,
@@ -285,6 +307,31 @@ pub fn per_player_gain(config: &Config, name_hash: i32, gain: f32) -> Option<f32
 mod tests {
 
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    /// Removing takes the leaf and leaves everything around it.
+    #[test]
+    fn removing_a_nested_key_leaves_its_neighbours() {
+        let mut config = Config::read(
+            r#"{"customPlatforms":{"Mine":{"runPath":"one"},"Other":{"runPath":"two"}},"serverURL":"x"}"#,
+        );
+        config.remove("customPlatforms.Mine");
+        assert!(config.get("customPlatforms.Mine").is_none());
+        assert_eq!(config.text_at("customPlatforms.Other.runPath"), "two");
+        assert_eq!(config.text_at("serverURL"), "x");
+    }
+
+    /// Removing something that is not there is what the caller asked for.
+    ///
+    /// A delete button that failed because the thing was already gone would be a button
+    /// that reports the state it was pressed to reach.
+    #[test]
+    fn removing_nothing_is_not_a_failure() {
+        let mut config = Config::read(r#"{"a":{"b":1}}"#);
+        config.remove("a.b.c.d");
+        config.remove("nothing");
+        config.remove("a.missing");
+        assert!((config.number_at("a.b") - 1.0).abs() < f64::EPSILON);
+    }
 
     /// A custom platform's `execute` comes back as it is, and nothing else does.
     ///

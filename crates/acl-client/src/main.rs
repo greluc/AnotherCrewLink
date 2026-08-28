@@ -899,6 +899,11 @@ struct Client {
     /// messages for the one that matters. `None` until the first frame, which is what makes
     /// the setting take effect on the way up as well as when it is changed.
     on_top: Option<bool>,
+    /// The name being typed into the custom-platform editor's add box.
+    ///
+    /// Held here rather than in the view, because the view is redrawn from scratch every
+    /// frame and a half-typed name would not survive one.
+    adding_platform: String,
     /// Whether there is a newer version, once the check has said.
     updates: updates::Updates,
     /// Why the game would not start, if somebody pressed the button and it did not.
@@ -968,6 +973,7 @@ impl Client {
             reader,
             last_seen: None,
             overlay_shown: false,
+            adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
             launch_trouble: None,
             listed: None,
@@ -1898,9 +1904,29 @@ impl Client {
             in_menu_or_lobby: false,
             capturing: self.settings.capturing(),
         };
-        let effects = egui::ScrollArea::vertical()
-            .show(ui, |ui| self.settings.show(ui, &context))
+        let entries = self.custom_platforms();
+        let chosen = self.settings.config().text_at("launchPlatform");
+        let mut adding = std::mem::take(&mut self.adding_platform);
+        let (effects, edits) = egui::ScrollArea::vertical()
+            .show(ui, |ui| {
+                let effects = self.settings.show(ui, &context);
+                ui.separator();
+                let edits = acl_ui::views::platforms::draw(
+                    ui,
+                    &entries,
+                    &mut acl_ui::views::platforms::Context {
+                        t: &translate,
+                        chosen: &chosen,
+                        adding: &mut adding,
+                    },
+                );
+                (effects, edits)
+            })
             .inner;
+        self.adding_platform = adding;
+        for edit in edits {
+            self.apply_platform_edit(&edit);
+        }
 
         for effect in effects {
             match effect {
@@ -2170,6 +2196,91 @@ impl Client {
                 execute: stored.strings_at(&format!("customPlatforms.{key}.execute")),
             },
         ))
+    }
+
+    /// The custom platforms the settings hold, in the shape the editor shows them.
+    fn custom_platforms(&self) -> Vec<acl_ui::platforms::Entry> {
+        let stored = self.settings.config();
+        let Some(serde_json::Value::Object(map)) = stored.get("customPlatforms") else {
+            return Vec::new();
+        };
+        // Sorted, because a JSON object has no order a person can rely on and a list that
+        // rearranges itself between frames is one nobody can click in.
+        let mut names: Vec<&String> = map.keys().collect();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| {
+                let is_uri = stored
+                    .text_at(&format!("customPlatforms.{name}.launchType"))
+                    .eq_ignore_ascii_case("URI");
+                acl_ui::platforms::to_entry(
+                    name,
+                    is_uri,
+                    &acl_ui::platforms::Stored {
+                        run_path: stored.text_at(&format!("customPlatforms.{name}.runPath")),
+                        execute: stored.strings_at(&format!("customPlatforms.{name}.execute")),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Writes one edit through to the settings file.
+    ///
+    /// Every field of an entry is written together, because they are one thing: a
+    /// `launchType` that changed without its `runPath` describes a URI platform holding a
+    /// directory, which starts nothing and reads as a broken entry rather than a half-saved
+    /// one.
+    fn apply_platform_edit(&mut self, edit: &acl_ui::views::platforms::Edit) {
+        use acl_ui::views::platforms::Edit;
+        match edit {
+            Edit::Add(name) => {
+                acl_core::log_info!("platform", "adding {name}");
+                self.write_platform(&acl_ui::platforms::Entry {
+                    name: name.clone(),
+                    ..acl_ui::platforms::Entry::default()
+                });
+            }
+            Edit::Update(entry) => self.write_platform(entry),
+            Edit::Remove(name) => {
+                acl_core::log_info!("platform", "removing {name}");
+                self.settings.forget(&format!("customPlatforms.{name}"));
+                // A platform that is gone cannot stay selected, or the launch button would
+                // name something the file no longer describes.
+                if self.settings.config().text_at("launchPlatform") == *name {
+                    self.settings
+                        .put("launchPlatform", serde_json::json!("STEAM"));
+                }
+            }
+            Edit::Use(name) => {
+                acl_core::log_info!("platform", "launching through {name} from now on");
+                self.settings.put("launchPlatform", serde_json::json!(name));
+            }
+        }
+    }
+
+    /// Stores one entry under its own name.
+    fn write_platform(&mut self, entry: &acl_ui::platforms::Entry) {
+        let stored = acl_ui::platforms::to_stored(entry);
+        let name = &entry.name;
+        // `key` and `translateKey` are both the title, which is what
+        // `CustomPlatformSettings.tsx` writes -- a 1.x client reads them and would show a
+        // nameless entry without them.
+        for (field, value) in [
+            ("key", serde_json::json!(name)),
+            ("translateKey", serde_json::json!(name)),
+            ("default", serde_json::json!(false)),
+            (
+                "launchType",
+                serde_json::json!(if entry.is_uri { "URI" } else { "EXE" }),
+            ),
+            ("runPath", serde_json::json!(stored.run_path)),
+            ("execute", serde_json::json!(stored.execute)),
+        ] {
+            self.settings
+                .put(&format!("customPlatforms.{name}.{field}"), value);
+        }
     }
 
     /// The lobby's code and what the game is doing, as one line.
