@@ -1,0 +1,100 @@
+<!-- @dsCard group="Client" viewport="1000x620" name="Client GUI" subtitle="The Electron window: waiting, in game, settings, lobby browser, overlay" -->
+<meta charset="utf-8">
+<title>AnotherCrewLink — client GUI</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+body{margin:0;background:#141218;color:var(--text-body);font-family:var(--font-ui);min-height:100vh}
+@keyframes acl-spin{to{transform:rotate(360deg)}}
+.stage{display:flex;gap:28px;padding:28px;align-items:flex-start;overflow-x:auto}
+.stage>*{flex:0 0 auto}
+.window{width:400px;height:520px;position:relative;overflow:hidden;background:var(--surface-app);box-shadow:0 18px 40px rgba(0,0,0,.55)}
+.window::-webkit-scrollbar{width:8px}
+.side{display:flex;flex-direction:column;gap:8px;width:200px}
+.side h1{font-size:15px;margin:0 0 4px;color:var(--text-quiet);font-weight:400}
+.tab{text-align:left;background:none;border:2px solid rgba(255,255,255,.25);color:#fff;border-radius:10px;padding:6px 10px;font-family:var(--font-ui);font-size:14px;cursor:pointer;transition:border-color 200ms ease-out}
+.tab:hover{border-color:var(--accent-action)}
+.tab[data-on="1"]{border-color:var(--accent-primary)}
+.note{font-size:11px;color:var(--text-quiet);line-height:1.5;font-family:var(--font-mono)}
+.browser{width:840px;height:340px;background:var(--surface-app);box-shadow:0 18px 40px rgba(0,0,0,.55);position:relative;overflow:hidden}
+.game{width:640px;height:360px;position:relative;overflow:hidden;background:radial-gradient(120% 100% at 30% 0%,#2b3b4e,#101418 70%);box-shadow:0 18px 40px rgba(0,0,0,.55)}
+::-webkit-scrollbar{width:8px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--acl-scroll-thumb);border-radius:5px}
+::-webkit-scrollbar-thumb:hover{background:var(--acl-scroll-thumb-hover)}
+</style>
+<div id="root"></div>
+<script type="text/babel" src="WaitingScreen.jsx"></script>
+<script type="text/babel" src="VoiceScreen.jsx"></script>
+<script type="text/babel" src="SettingsScreen.jsx"></script>
+<script type="text/babel" src="LobbyBrowserScreen.jsx"></script>
+<script type="text/babel" src="GameOverlay.jsx"></script>
+<script type="text/babel">
+const { TitleBar, Button } = window.ACL_9b5df9;
+
+function Kit() {
+  const [view, setView] = React.useState('menu');
+  const [settings, setSettings] = React.useState(false);
+  const [muted, setMuted] = React.useState(false);
+  const [deafened, setDeafened] = React.useState(false);
+  const [talking, setTalking] = React.useState(true);
+  const [overlayPos, setOverlayPos] = React.useState('top');
+  const [compact, setCompact] = React.useState(false);
+
+  React.useEffect(() => {
+    const t = setInterval(() => setTalking((v) => !v), 2200);
+    return () => clearInterval(t);
+  }, []);
+
+  const toggleMute = () => { setMuted((m) => !m); setDeafened(false); };
+  const toggleDeafen = () => { setDeafened((d) => { const n = !d; if (n) setMuted(false); return n; }); };
+
+  return (
+    <div className="stage">
+      <div className="side">
+        <h1>Client GUI</h1>
+        <button className="tab" data-on={view === 'menu' ? 1 : 0} onClick={() => { setView('menu'); setSettings(false); }}>Waiting for Among Us</button>
+        <button className="tab" data-on={view === 'voice' ? 1 : 0} onClick={() => { setView('voice'); setSettings(false); }}>In a lobby</button>
+        <button className="tab" data-on={view === 'error' ? 1 : 0} onClick={() => { setView('error'); setSettings(false); }}>Error state</button>
+        <button className="tab" data-on={settings ? 1 : 0} onClick={() => setSettings((s) => !s)}>Settings panel</button>
+        <button className="tab" data-on={view === 'lobbies' ? 1 : 0} onClick={() => setView('lobbies')}>Public lobbies</button>
+        <button className="tab" data-on={view === 'overlay' ? 1 : 0} onClick={() => setView('overlay')}>In-game overlay</button>
+        {view === 'overlay' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+            {['top', 'bottom_left', 'left', 'right'].map((p) => (
+              <button key={p} className="tab" data-on={overlayPos === p ? 1 : 0} onClick={() => setOverlayPos(p)}>{p.replace('_', ' ')}</button>
+            ))}
+            <button className="tab" data-on={compact ? 1 : 0} onClick={() => setCompact((c) => !c)}>compact: only talkers</button>
+          </div>
+        )}
+        <p className="note">Recreated from src/renderer — Menu.tsx, Voice.tsx, Settings.tsx, LobbyBrowser.tsx, Overlay.tsx. The window is frameless; the 24px bar is the drag handle.</p>
+      </div>
+
+      {view === 'lobbies' ? (
+        <div className="browser">
+          <TitleBar title="Public Lobbies" />
+          <div style={{ height: 'calc(100% - 24px)' }}><LobbyBrowserScreen /></div>
+        </div>
+      ) : view === 'overlay' ? (
+        <div className="game">
+          <GameOverlay position={overlayPos} compact={compact} />
+          <div style={{ position: 'absolute', bottom: 8, right: 10, fontSize: 11, color: 'rgba(255,255,255,.4)', fontFamily: 'var(--font-mono)' }}>the game, standing in for a screenshot</div>
+        </div>
+      ) : (
+        <div className="window">
+          <TitleBar version="1.0.6" onSettings={() => setSettings((s) => !s)} onReload={() => {}} onClose={() => {}} />
+          <div style={{ height: 'calc(100% - 24px)', boxSizing: 'border-box' }}>
+            {view === 'voice'
+              ? <VoiceScreen muted={muted} deafened={deafened} talking={talking} onToggleMute={toggleMute} onToggleDeafen={toggleDeafen} />
+              : <WaitingScreen error={view === 'error' ? "Couldn't connect to Among Us.\nPlease re-open AnotherCrewLink as Administrator." : ''} onLaunch={() => setView('voice')} />}
+          </div>
+          <SettingsScreen open={settings} onClose={() => setSettings(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Kit />);
+</script>

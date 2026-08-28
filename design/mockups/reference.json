@@ -1,0 +1,372 @@
+{
+  "$comment": "Machine-readable companion to the mockups. Values measured from the Electron client (src/renderer on nightly) and crates/acl-ui. Treat px as behavioural intent, not a pixel contract: the Rust/egui GUI may differ in layout and affordances but not in what a control does.",
+  "source": {
+    "repo": "greluc/AnotherCrewLink",
+    "branch": "nightly",
+    "implementation": "rust",
+    "retiring": "electron-node-ts"
+  },
+  "window": {
+    "resizable": true,
+    "frameless": true,
+    "min_width": 250,
+    "typical_width": 400,
+    "max_width": null,
+    "titlebar_height": 24,
+    "resize_strip_height": 4,
+    "always_on_top": "setting",
+    "background": "#25232a",
+    "titlebar_background": "#1d1a23",
+    "scrollbar": {
+      "width": 8,
+      "thumb": "rgba(255,255,255,.2)",
+      "thumb_hover": "rgba(255,255,255,.3)",
+      "radius": 5
+    }
+  },
+  "roster": {
+    "cell_width": "32%",
+    "cell_min": 60,
+    "cell_max": 120,
+    "cell_padding": 8,
+    "own_slot": 96,
+    "own_avatar": 68,
+    "slot": 76,
+    "avatar": 52
+  },
+  "states": {
+    "precedence": [
+      "bugged",
+      "disconnected",
+      "novoice",
+      "deafened",
+      "muted"
+    ],
+    "healthy_draws_nothing": true,
+    "every_state_has_hover_text": true,
+    "talking": {
+      "ring": "#2ecc71",
+      "drawn": "outside the body",
+      "fill": false
+    },
+    "dead": {
+      "opacity": 0.35,
+      "cosmetics": "hidden"
+    },
+    "badges": {
+      "muted": {
+        "icon": "mic_off",
+        "fill": "#ea3c2a",
+        "border": "#690a00",
+        "border_width": 2
+      },
+      "deafened": {
+        "icon": "volume_off",
+        "fill": "#ea3c2a",
+        "border": "#690a00",
+        "border_width": 2
+      },
+      "novoice": {
+        "icon": "link_off",
+        "fill": "#e67e22",
+        "border": "#694900",
+        "border_width": 2,
+        "rust_ring": "#dcb450"
+      },
+      "disconnected": {
+        "icon": "wifi_off",
+        "fill": "#ea3c2a",
+        "border": "#690a00",
+        "rust_ring": "#d25a5a"
+      },
+      "bugged": {
+        "icon": "error",
+        "fill": "red"
+      }
+    }
+  },
+  "crewmate": {
+    "shape": {
+      "circle": "electron client",
+      "sprite": "rust gui, preferred for new work"
+    },
+    "geometry_at_half_26": {
+      "radius": "half - 5",
+      "body": "radius - 2 at (-1.5,-1.5)",
+      "visor": "radius * 0.42 at (+radius*0.35, -radius*0.25)",
+      "visor_colour": "#BEE3F5"
+    },
+    "border_width": "max(2, size / 40)",
+    "cosmetics": {
+      "width": "130%",
+      "top": "-78%",
+      "left": "-14%",
+      "overhangs_frame": true
+    },
+    "recolour": "red channel = body, blue = shadow, green = visor tint #9acad5; only pixels with saturation > 0.4 near hue 0/120/240"
+  },
+  "lobby_code": {
+    "font": "Source Code Pro 500",
+    "size": 28,
+    "radius": 5,
+    "padding": 5,
+    "hidden_text": "LOBBY",
+    "tint": "local player's crew colour; use the pair's shadow half for bright colours"
+  },
+  "overlay": {
+    "interactive": false,
+    "opaque": false,
+    "positions": {
+      "menu": {
+        "veil": "rgba(0,0,0,.85)",
+        "width": 100,
+        "radius": 8,
+        "offset": [
+          8,
+          60
+        ]
+      },
+      "top": {
+        "veil": "rgba(0,0,0,.5)",
+        "width": 800,
+        "padding_top": 8
+      },
+      "bottom_left": {
+        "veil": "rgba(0,0,0,.35)"
+      },
+      "left": {
+        "veil": "#25232ac0",
+        "width": 300,
+        "padding": 10,
+        "radius": "25 on the inner side"
+      },
+      "right": {
+        "veil": "#25232ac0",
+        "width": 300,
+        "padding": 10,
+        "mirrored": true
+      },
+      "compact": {
+        "width": "9vh",
+        "draws": "talking players only",
+        "empty_when_silent": true
+      }
+    },
+    "avatar": {
+      "nominal": 100,
+      "side": "7.5 * (10 / count) vh",
+      "cap": "7.5vh"
+    },
+    "name": {
+      "size": 11,
+      "pill": "rgba(0,0,0,.32)",
+      "radius": 40,
+      "fade_ms": 400,
+      "shown_on": [
+        "left",
+        "right"
+      ]
+    },
+    "meeting": {
+      "glow": "0 0 h/100 h/100 <crew colour>",
+      "fade_ms": 400,
+      "hud_ratios": [
+        1.4749568221070812,
+        1.72
+      ]
+    }
+  },
+  "settings": {
+    "presentation": "full-height sheet at z-index 99 below the title bar",
+    "background": "#171717ad",
+    "blur": "4px (egui: fill opaque instead)",
+    "transition": "translateX(-100%) → 0, 100ms ease-in-out",
+    "header_height": 40,
+    "padding": {
+      "top": 8,
+      "sides": 16,
+      "bottom": 56
+    },
+    "section_order": [
+      "Lobby Settings",
+      "Audio",
+      "Volumes",
+      "Keyboard Shortcuts",
+      "Overlay",
+      "Advanced",
+      "BETA/DEBUG",
+      "Streaming",
+      "Troubleshooting"
+    ],
+    "ranges": {
+      "voice_distance": [
+        1,
+        10,
+        0.1
+      ],
+      "microphone_volume": [
+        0,
+        300,
+        2
+      ],
+      "sensitivity": [
+        0,
+        1,
+        0.05
+      ],
+      "master_volume": [
+        0,
+        200,
+        1
+      ]
+    },
+    "rules": [
+      "a control never writes a setting — it emits a change the caller applies",
+      "a consequence that is not obvious raises Are you sure? first",
+      "a disabled control says why on hover",
+      "device and server changes require a reload, and the panel says so"
+    ]
+  },
+  "lobby_browser": {
+    "columns": [
+      "Title",
+      "Host",
+      "Players",
+      "Mods",
+      "Language",
+      "Status"
+    ],
+    "head_background": "#1d1a23",
+    "row_odd": "#25232a",
+    "row_even": "#1d1a23",
+    "body_size": 14,
+    "cell_padding": 16,
+    "min_table_width": 700,
+    "sticky_head": true,
+    "action_disabled_when": [
+      "game in progress",
+      "lobby is full",
+      "mods do not match"
+    ]
+  },
+  "motion": {
+    "instant_ms": 50,
+    "fast_ms": 100,
+    "base_ms": 200,
+    "slow_ms": 400,
+    "easings": [
+      "linear",
+      "ease-out",
+      "ease-in-out"
+    ],
+    "entrances": false,
+    "bounces": false
+  },
+  "hover": {
+    "client_buttons": "border to #00ff00, nothing moves or scales",
+    "mui_controls": "12% tint wash",
+    "pressed": "no distinct state",
+    "disabled": "opacity .38 + tooltip"
+  },
+  "views": [
+    {
+      "file": "mockups/window-waiting.html",
+      "name": "Window · waiting for Among Us",
+      "size": [
+        400,
+        520
+      ],
+      "bare": "mockups/window-waiting.html?bare=1"
+    },
+    {
+      "file": "mockups/window-error.html",
+      "name": "Window · error",
+      "size": [
+        400,
+        400
+      ],
+      "bare": "mockups/window-error.html?bare=1"
+    },
+    {
+      "file": "mockups/window-lobby.html",
+      "name": "Window · in a lobby",
+      "size": [
+        400,
+        520
+      ],
+      "bare": "mockups/window-lobby.html?bare=1"
+    },
+    {
+      "file": "mockups/window-self-states.html",
+      "name": "Window · your own states",
+      "size": [
+        900,
+        340
+      ],
+      "bare": "mockups/window-self-states.html?bare=1"
+    },
+    {
+      "file": "mockups/window-settings.html",
+      "name": "Window · settings sheet",
+      "size": [
+        400,
+        560
+      ],
+      "bare": "mockups/window-settings.html?bare=1"
+    },
+    {
+      "file": "mockups/lobby-browser.html",
+      "name": "Lobby browser window",
+      "size": [
+        780,
+        360
+      ],
+      "bare": "mockups/lobby-browser.html?bare=1"
+    },
+    {
+      "file": "mockups/overlay-positions.html",
+      "name": "Overlay · positions",
+      "size": [
+        800,
+        450
+      ],
+      "bare": "mockups/overlay-positions.html?bare=1"
+    },
+    {
+      "file": "mockups/overlay-compact.html",
+      "name": "Overlay · compact",
+      "size": [
+        800,
+        400
+      ],
+      "bare": "mockups/overlay-compact.html?bare=1"
+    },
+    {
+      "file": "mockups/overlay-meeting.html",
+      "name": "Overlay · meeting",
+      "size": [
+        880,
+        495
+      ],
+      "bare": "mockups/overlay-meeting.html?bare=1"
+    },
+    {
+      "file": "mockups/player-states.html",
+      "name": "Player states",
+      "size": [
+        800,
+        540
+      ],
+      "bare": "mockups/player-states.html?bare=1"
+    },
+    {
+      "file": "mockups/crew-colours.html",
+      "name": "Crew colours · all twelve",
+      "size": [
+        800,
+        320
+      ],
+      "bare": "mockups/crew-colours.html?bare=1"
+    }
+  ]
+}

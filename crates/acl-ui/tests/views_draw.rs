@@ -40,6 +40,11 @@ use acl_ui::views::{lobby_browser, main, settings};
 /// once the first has put the id in the store.
 fn run(mut view: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
     let context = egui::Context::default();
+    // The same style the client starts with. Without it a view that asks for the icon
+    // family panics -- `FontFamily::Name("icons") is not bound to any fonts` -- which is
+    // how this call got here: the theme and the views have to agree, and a bare context
+    // agrees with neither.
+    acl_ui::views::theme::apply(&context);
     let mut first = context.run_ui(egui::RawInput::default(), &mut view);
     // The font atlas comes back as a texture the renderer is expected to upload, and
     // epaint panics on dropping one that nobody took. There is no renderer here, so it is

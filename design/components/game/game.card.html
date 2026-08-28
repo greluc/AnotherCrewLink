@@ -1,0 +1,38 @@
+<!-- @dsCard group="Components" viewport="700x320" name="Game" subtitle="Crewmates, roster slots, the lobby code, overlay veils" -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;background:var(--surface-app);color:var(--text-body);font-family:var(--font-ui)}.wrap{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:16px}.lbl{font-size:11px;color:var(--text-quiet)}.col{display:flex;flex-direction:column;gap:6px;align-items:flex-start}</style>
+<div id="root"></div>
+<script type="text/babel">
+const { Crewmate, PlayerSlot, LobbyCode, OverlayCapsule } = window.ACL_9b5df9;
+const crew = ['red','blue','green','pink','orange','yellow','black','white','purple','brown','cyan','lime'];
+const ASSETS = '../../assets';
+const HATS = ['pk01_Astronaut.png','pk04_MinerCap.png','pk02_Crown.png','flowerCrownHat.png','pk03_Fedora.png','pk02_ToiletPaperHat.png'];
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <div style={{padding:16,display:'flex',flexDirection:'column',gap:14}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+      {crew.map(c => <Crewmate key={c} size={44} assetBase={ASSETS} color={'var(--crew-'+c+')'} shadow={'var(--crew-'+c+'-shadow)'}/>)}
+    </div>
+    <div style={{display:'flex',gap:16,alignItems:'flex-end'}}>
+      <PlayerSlot name="Red" assetBase={ASSETS} hat={HATS[0]} color="var(--crew-red)" shadow="var(--crew-red-shadow)" talking/>
+      <PlayerSlot name="Blue" assetBase={ASSETS} hat={HATS[1]} color="var(--crew-blue)" shadow="var(--crew-blue-shadow)" badge="novoice"/>
+      <PlayerSlot name="Black" assetBase={ASSETS} color="var(--crew-black)" shadow="var(--crew-black-shadow)" alive={false}/>
+      <PlayerSlot name="You" own assetBase={ASSETS} hat={HATS[2]} badge="muted" color="var(--crew-cyan)" shadow="var(--crew-cyan-shadow)"/>
+      <div className="col"><span className="lbl">lobby code</span><LobbyCode code="XKJDPQ" background="var(--crew-cyan)"/></div>
+    </div>
+    <div style={{display:'flex',gap:12,alignItems:'center'}}>
+      <OverlayCapsule position="top">
+        <PlayerSlot name="Lime" size={44} slot={60} assetBase={ASSETS} hat={HATS[3]} color="var(--crew-lime)" shadow="var(--crew-lime-shadow)" talking/>
+        <PlayerSlot name="Pink" size={44} slot={60} assetBase={ASSETS} color="var(--crew-pink)" shadow="var(--crew-pink-shadow)"/>
+      </OverlayCapsule>
+      <OverlayCapsule position="left" compact>
+        <PlayerSlot name="Cyan" size={44} slot={60} assetBase={ASSETS} hat={HATS[4]} color="var(--crew-cyan)" shadow="var(--crew-cyan-shadow)" talking/>
+      </OverlayCapsule>
+    </div>
+  </div>
+);
+</script>

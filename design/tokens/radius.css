@@ -1,0 +1,13 @@
+/* Four radii and one circle. Nothing in the client is subtly rounded. */
+:root{
+  --radius-sm:5px;              /* lobby code, tooltip, scrollbar thumb */
+  --radius-md:8px;              /* overlay wrapper */
+  --radius-lg:10px;             /* buttons, volume-icon corner */
+  --radius-capsule:25px;        /* compact overlay player capsule */
+  --radius-pill:40px;           /* the overlay name plate */
+  --radius-round:50%;           /* every avatar and every status badge */
+  --border-launch:4px;          /* launch button outer border */
+  --border-launch-inner:2px;    /* where two buttons meet */
+  --border-button:2px;          /* Reload / support button */
+  --border-badge:2px;           /* the ring around a mic-off badge */
+}

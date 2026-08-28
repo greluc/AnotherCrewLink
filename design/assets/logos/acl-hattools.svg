@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="AnotherCrewLink TOOLS">
+<rect width="256" height="256" rx="56" fill="#1d1a23"></rect>
+<g fill="none" stroke="#38FEDC" stroke-linecap="round" stroke-width="10">
+<circle cx="128" cy="132" r="30" opacity="1" fill="#38FEDC" stroke="none"></circle>
+<path d="M128 62a70 70 0 0 1 0 140" opacity=".85"></path>
+<path d="M128 22a110 110 0 0 1 0 220" opacity=".35"></path>
+</g>
+<text x="128" y="238" text-anchor="middle" font-family="'Varela Round',system-ui,sans-serif" font-size="34" fill="#ffffff" opacity=".92">TOOLS</text>
+</svg>

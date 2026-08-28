@@ -1,0 +1,34 @@
+/* Two families, no third. Sizes below are the ones the client actually uses. */
+:root{
+  --font-ui-stack:var(--font-ui);
+  --font-mono-stack:var(--font-mono);
+  --weight-regular:400; /* @kind other */
+  --weight-medium:500; /* @kind other */           /* the launch button and Source Code Pro */
+
+  /* Full-page surfaces (the server status page, and anything else read in a browser
+     rather than in a 400px window). The client window never uses these. */
+  --size-stat:44px;              /* a counter that is the point of the panel */
+  --size-hero:34px;              /* a page's own name */
+  --size-lede:18px;              /* one paragraph of standfirst */
+  --size-meta:13px;              /* labels under a counter, footnotes */
+
+  --size-code:28px;              /* the lobby code, Voice.tsx classes.code */
+  --size-display:24px;           /* "Open via" / launch button */
+  --size-title:20px;             /* your own name, "Waiting for Among Us" */
+  --size-button:19px;            /* the Reload button in SupportLink */
+  --size-h6:20px;                /* MUI variant h6, every settings section */
+  --size-tooltip:15px;           /* theme override, MuiTooltip */
+  --size-body:14px;              /* table body, MUI body2 */
+  --size-caption:12px;
+  --size-name-overlay:11px;      /* acl-ui slot name */
+  --size-badge:10px;             /* acl-ui muted/deafened badges */
+
+  --line-tight:1.2; /* @kind other */
+  --line-body:1.6; /* @kind other */
+  --tracking-code:.02em; /* @kind other */
+
+  --text-display:var(--weight-medium) var(--size-display)/var(--line-tight) var(--font-ui);
+  --text-heading:var(--weight-regular) var(--size-h6)/var(--line-tight) var(--font-ui);
+  --text-lobby-code:var(--weight-medium) var(--size-code)/1 var(--font-mono);
+  --text-ui:var(--weight-regular) var(--size-body)/var(--line-body) var(--font-ui);
+}

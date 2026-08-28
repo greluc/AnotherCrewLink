@@ -34,6 +34,8 @@
 //! does not need to start either. `experiments/gui-spike` measured this rung, so the
 //! performance number already on record is the one this runs on.
 
+use acl_ui::views::theme;
+
 mod audio;
 mod controls;
 mod hat_store;
@@ -60,7 +62,7 @@ const MIN_WIDTH: i32 = 250;
 const MIN_HEIGHT: i32 = 350;
 
 /// How tall the title bar is drawn.
-const TITLE_BAR: f32 = 32.0;
+const TITLE_BAR: f32 = acl_ui::views::theme::TITLEBAR_H;
 
 /// The smallest rectangle containing both.
 ///
@@ -358,6 +360,20 @@ impl Devices {
     }
 }
 
+/// One icon in the window chrome.
+///
+/// Frameless and `#777`, which is what the design system means by an icon button: "Icons
+/// in chrome are `#777` and nothing else." The 2px white border the style gives every
+/// other button belongs to the outline buttons -- the launch control and reload -- and on
+/// a 24px strip it turns three icons into three boxes.
+fn chrome_icon(ui: &mut egui::Ui, glyph: &str, hint: &str) -> egui::Response {
+    let text = egui::RichText::new(glyph)
+        .font(acl_ui::views::theme::icon_font(18.0))
+        .color(acl_ui::views::theme::ICON_QUIET);
+    ui.add(egui::Button::new(text).frame(false))
+        .on_hover_text(hint)
+}
+
 /// Says what the window frame just did, when asked to.
 ///
 /// Behind `ACL_CHROME_LOG` because it is a line per click and nobody needs that by default.
@@ -569,7 +585,13 @@ fn main() -> eframe::Result<()> {
             wgpu_options: renderer_options(acl_ui::renderer::chain(accelerated)),
             ..Default::default()
         },
-        Box::new(move |_| Ok(Box::new(Client::new(file, &paths)))),
+        Box::new(move |creation| {
+            // Before the first frame. Fonts and the palette are the window's whole
+            // identity, and a frame drawn with egui's defaults would be a flash of a
+            // different product.
+            acl_ui::views::theme::apply(&creation.egui_ctx);
+            Ok(Box::new(Client::new(file, &paths)))
+        }),
     )
 }
 
@@ -1995,65 +2017,97 @@ impl Client {
             chrome_log(|| "title bar: move started".to_owned());
         }
 
+        // `#1d1a23`, and the whole strip is the drag region.
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::ZERO, theme::BG_TITLEBAR);
+
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
-            ui.horizontal_centered(|ui| {
-                // Everything in one right-to-left row, controls added first so they take
-                // their space from the right and the *name* is what gives way. Laid out the
-                // other way round -- name first -- a 250-point window pushed the buttons off
-                // the end and clipped the title mid-word as well.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕").on_hover_text(say("buttons.close")).clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    if ui
-                        .button("—")
-                        .on_hover_text(say("client.buttons.minimise"))
-                        .clicked()
-                    {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                    }
+            // Settings and reload flush left, close flush right, the name centred between
+            // them. Three separate passes over the same strip rather than one flow,
+            // because a centred label cannot be centred by a layout that has already
+            // spent the row on buttons.
+            let mut page_now = *page;
+            let mut used_left = 0.0_f32;
+            let mut used_right = 0.0_f32;
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+                let group = ui.horizontal_centered(|ui| {
+                    ui.add_space(4.0);
                     // One button rather than two, and it says where it goes rather than
                     // where you are: a gear on the settings page reads as "settings are
-                    // here", which is where you already were.
-                    // Leaving the settings is what applies the three capture settings a
-                    // device can only be opened with, so the arrow says so -- which is what
-                    // `buttons.exit` is for on the shipped client.
-                    let (glyph, hint) = match page {
-                        Screen::Main => ("⚙", say("settings.title")),
-                        Screen::Settings | Screen::Lobbies => ("⏴", say("buttons.exit")),
+                    // here", which is where you already were. Leaving the settings is what
+                    // applies the three capture settings a device can only be opened with,
+                    // so the arrow carries `buttons.exit`.
+                    let (glyph, hint) = match page_now {
+                        Screen::Main => (theme::icon::SETTINGS, say("settings.title")),
+                        Screen::Settings | Screen::Lobbies => {
+                            (theme::icon::ARROW_BACK, say("buttons.exit"))
+                        }
                     };
-                    if ui.button(glyph).on_hover_text(hint).clicked() {
-                        *page = match page {
+                    if chrome_icon(ui, glyph, &hint).clicked() {
+                        page_now = match page_now {
                             Screen::Main => Screen::Settings,
                             Screen::Settings | Screen::Lobbies => Screen::Main,
                         };
                     }
-                    if *page == Screen::Main
-                        && ui
-                            .button("🌐")
-                            .on_hover_text(say("buttons.public_lobby"))
+                    reload = chrome_icon(ui, theme::icon::REFRESH, &say("client.buttons.reload"))
+                        .clicked();
+                    if page_now == Screen::Main
+                        && chrome_icon(ui, theme::icon::PUBLIC, &say("buttons.public_lobby"))
                             .clicked()
                     {
-                        *page = Screen::Lobbies;
+                        page_now = Screen::Lobbies;
                     }
-                    reload = ui
-                        .button("⟳")
-                        .on_hover_text(say("client.buttons.reload"))
-                        .clicked();
-                    // The version beside the name, as the shipped client shows it: it is
-                    // the first thing anybody is asked for when they report something.
-                    ui.label(
-                        egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
-                            .weak()
-                            .small(),
-                    );
-                    // Last, so it fills what is left and truncates there.
-                    ui.add(
-                        egui::Label::new(egui::RichText::new("AnotherCrewLink").strong())
-                            .truncate(),
-                    );
                 });
+                used_left = group.response.rect.width();
             });
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+                let group =
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        if chrome_icon(ui, theme::icon::CLOSE, &say("buttons.close")).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if chrome_icon(ui, theme::icon::MINIMIZE, &say("client.buttons.minimise"))
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                    });
+                used_right = group.response.rect.width();
+            });
+            *page = page_now;
+
+            // The name and version, centred *in what the icons left*, in the accent. The
+            // version is beside it because it is the first thing anybody is asked for when
+            // they report something.
+            //
+            // Centred on the bar rather than on the gap, it sits under the icons at 250
+            // points -- which is the width this window has to work at, not a corner case.
+            // So the two groups are measured and the name is painted between them, clipped
+            // rather than overlapping: a name that runs out of room gives way, and the
+            // controls do not.
+            let name = concat!("AnotherCrewLink v", env!("CARGO_PKG_VERSION"));
+            let gap = egui::Rect::from_min_max(
+                egui::pos2(bar.left() + used_left + 8.0, bar.top()),
+                egui::pos2(bar.right() - used_right - 8.0, bar.bottom()),
+            );
+            if gap.width() > 24.0 {
+                // No wrap. A 24-point strip has room for one line, and a name that wraps
+                // in it is a name drawn over the row below.
+                let galley = ui.painter().layout_no_wrap(
+                    name.to_owned(),
+                    egui::FontId::proportional(14.0),
+                    theme::PURPLE,
+                );
+                ui.painter().with_clip_rect(gap).galley(
+                    egui::pos2(
+                        gap.center().x - galley.size().x / 2.0,
+                        gap.center().y - galley.size().y / 2.0,
+                    ),
+                    galley,
+                    theme::PURPLE,
+                );
+            }
         });
         reload
     }

@@ -1,0 +1,24 @@
+<!-- @dsCard group="Components" viewport="700x260" name="Core" subtitle="Buttons, the launch group, icons, headings" -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;background:var(--surface-app);color:var(--text-body);font-family:var(--font-ui)}.wrap{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:16px}.lbl{font-size:11px;color:var(--text-quiet)}.col{display:flex;flex-direction:column;gap:6px;align-items:flex-start}</style>
+<div id="root"></div>
+<script type="text/babel">
+const { Button, OutlineButton, LaunchButton, IconButton, Icon, SectionHeading, Divider } = window.ACL_9b5df9;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <div className="wrap">
+    <div className="col"><span className="lbl">text / primary</span><Button>Confirm</Button></div>
+    <div className="col"><span className="lbl">contained / secondary</span><Button variant="contained" color="secondary">Reset offsets</Button></div>
+    <div className="col"><span className="lbl">text / grey</span><Button color="grey">Skip</Button></div>
+    <div className="col"><span className="lbl">disabled</span><Button variant="contained" color="secondary" disabled>Show code</Button></div>
+    <div className="col"><span className="lbl">outline, hover = green</span><OutlineButton>Reload</OutlineButton></div>
+    <div className="col"><span className="lbl">launch group</span><LaunchButton label="Steam" platforms={['Steam','Epic Games','Microsoft','Custom']} /></div>
+    <div className="col"><span className="lbl">icon buttons</span><div style={{display:'flex'}}><IconButton icon="settings" label="s"/><IconButton icon="refresh" label="r"/><IconButton icon="close" label="c"/><IconButton icon="mic" color="#fff" label="m"/></div></div>
+    <div className="col" style={{width:180}}><span className="lbl">heading + divider</span><SectionHeading align="left">Audio</SectionHeading><Divider spacing={8}/></div>
+  </div>
+);
+</script>
