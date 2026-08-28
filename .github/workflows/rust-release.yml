@@ -78,7 +78,11 @@ jobs:
           fi
 
       - name: Build
-        run: cargo build --locked --release --bin anothercrewlink --bin acl-helper
+        # The updater too. The installer has copied `acl-updater.exe` since it was written
+        # -- with `/nonfatal`, so a build that did not produce one skipped it in silence --
+        # and no build produced one. A client with an update button and no updater beside it
+        # is a button that reports a missing file.
+        run: cargo build --locked --release --bin anothercrewlink --bin acl-helper --bin acl-updater
 
       # A shipped binary carries its own dependency list, so `cargo audit bin` still works
       # against an artefact months after the tree that built it moved on. The `auditable`
@@ -87,7 +91,9 @@ jobs:
         run: cargo install cargo-auditable --locked --version 0.7.0
 
       - name: Rebuild with the dependency list embedded
-        run: cargo auditable build --locked --release --bin anothercrewlink --bin acl-helper
+        run: >-
+          cargo auditable build --locked --release
+          --bin anothercrewlink --bin acl-helper --bin acl-updater
 
       - name: The third-party attribution
         run: |
@@ -149,7 +155,34 @@ jobs:
           subject-path: |
             target/release/anothercrewlink.exe
             target/release/acl-helper.exe
+            target/release/acl-updater.exe
             installer/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe
+
+      # The manifest the client's update check fetches. Written here and signed nowhere
+      # near here: `acl-release write` needs no key, and `acl-release sign` needs the
+      # private half, which §4.9 item 3 says must never be a workflow secret. So CI
+      # produces the document and the maintainer signs it offline and uploads both.
+      #
+      # Without this there was no manifest at all, and the client's check had nothing to
+      # fetch -- which is the other half of why the update path did nothing.
+      - name: Build the ceremony tool
+        run: cargo build --locked --release --features ceremony -p acl-updater --bin acl-release
+
+      - name: Write the manifest
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          installer="installer/AnotherCrewLink-Setup-$version.exe"
+          ./target/release/acl-release write             --version "$version"             --url "https://github.com/${{ github.repository }}/releases/download/v$version/AnotherCrewLink-Setup-$version.exe"             --artefact "$installer"             --into manifest.json
+          echo "The manifest still has to be signed offline:"
+          echo "  ACL_RELEASE_KEY_PASSWORD=... acl-release sign --manifest manifest.json --key <key>"
+
+      - name: Upload the manifest for signing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: manifest-${{ steps.version.outputs.version }}
+          path: manifest.json
+          if-no-files-found: error
 
       - name: Upload the installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -165,6 +198,7 @@ jobs:
           path: |
             target/release/anothercrewlink.exe
             target/release/acl-helper.exe
+            target/release/acl-updater.exe
             THIRD-PARTY.html
           if-no-files-found: error
 

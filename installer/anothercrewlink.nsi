@@ -58,7 +58,11 @@ Section "Install"
 
   File "${SOURCE_DIR}\anothercrewlink.exe"
   File "${SOURCE_DIR}\acl-helper.exe"
-  File /nonfatal "${SOURCE_DIR}\acl-updater.exe"
+  ; Not /nonfatal any more. It was, and a build that produced no updater therefore made an
+  ; installer that silently had none -- which is how the client shipped with an update path
+  ; that had no program at the end of it. A missing updater is a failed build now, not a
+  ; quiet omission.
+  File "${SOURCE_DIR}\acl-updater.exe"
   ; The locale tree, which the client looks for beside its executable before it looks
   ; anywhere else. Without it every string in the window is its own key.
   SetOutPath "$INSTDIR\static\locales"

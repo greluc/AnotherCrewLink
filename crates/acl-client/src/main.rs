@@ -40,6 +40,7 @@ mod hat_store;
 mod net;
 mod reader;
 mod settings_page;
+mod updates;
 
 use std::path::PathBuf;
 
@@ -888,6 +889,8 @@ struct Client {
     /// messages for the one that matters. `None` until the first frame, which is what makes
     /// the setting take effect on the way up as well as when it is changed.
     on_top: Option<bool>,
+    /// Whether there is a newer version, once the check has said.
+    updates: updates::Updates,
     /// Why the game would not start, if somebody pressed the button and it did not.
     ///
     /// Kept rather than shown once: the button is on a screen that repaints five times a
@@ -955,6 +958,7 @@ impl Client {
             reader,
             last_seen: None,
             overlay_shown: false,
+            updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
             launch_trouble: None,
             listed: None,
             on_top: None,
@@ -2126,6 +2130,40 @@ impl Client {
         format!("{code} — {:?}", state.game_state)
     }
 
+    /// The one line an update gets, and the button that takes it.
+    ///
+    /// Drawn before the game reader is asked anything, for two reasons. It is not part of
+    /// the reader's status -- a waiting update is a good thing to see, and belongs above the
+    /// list of what is wrong rather than under it -- and `status_strip` holds a borrow of
+    /// the reader, which is what pressing this cannot have.
+    fn offer_the_update(&mut self, ui: &mut egui::Ui) {
+        let Some(updates::Offer::Ready(version)) = self.updates.offer() else {
+            return;
+        };
+        let version = version.clone();
+        let mut pressed = false;
+        ui.horizontal(|ui| {
+            ui.label(format!("Version {version} is available."));
+            pressed = ui.button("Update and restart").clicked();
+        });
+        if !pressed {
+            return;
+        }
+        match updates::install() {
+            Ok(()) => {
+                acl_core::log_info!("update", "started the updater for {version}");
+                // An installer cannot write over files this process is holding open, so
+                // leaving is part of installing rather than a courtesy.
+                self.write_window_state();
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(why) => {
+                acl_core::log_warn!("update", "could not start the updater: {why}");
+                self.launch_trouble = Some(why);
+            }
+        }
+    }
+
     /// The line of things that are wrong, and the one number that says whether it works.
     ///
     /// Four sources in one strip rather than four panels: none of them is why anybody
@@ -2169,9 +2207,14 @@ impl Client {
             }
             _ => None,
         };
+        let update_trouble = match self.updates.offer() {
+            Some(updates::Offer::Trouble(why)) => Some(why.as_str()),
+            _ => None,
+        };
         for (what, trouble) in [
             (None, reader.trouble()),
             (Some("Server"), link_trouble),
+            (Some("Update"), update_trouble),
             (Some("Hats"), self.hats.trouble()),
             (Some("Audio"), self.audio.trouble()),
         ] {
@@ -2303,6 +2346,7 @@ impl eframe::App for Client {
         }
         self.hats.pump();
         self.link.pump();
+        self.updates.pump();
         // Once a frame, and it decays on its own: a peer who stops sending is not in the
         // next one, with nothing having to notice they went quiet.
         self.speaking = self.link.take_speaking();
@@ -2430,6 +2474,8 @@ impl eframe::App for Client {
                 }
                 Screen::Main => {}
             }
+
+            self.offer_the_update(ui);
 
             let Some(reader) = self.reader.as_ref() else {
                 ui.label("The game reader could not be started.");
