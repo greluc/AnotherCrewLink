@@ -275,6 +275,24 @@ pub(crate) struct Placement {
     pub(crate) reverb: bool,
 }
 
+/// How much audio the mixer tries to keep in front of the speaker.
+///
+/// Three frames, which is sixty milliseconds. Enough that a late burst of packets does not
+/// leave the speaker with nothing to play, and short enough that it is not heard as delay --
+/// it sits on top of the jitter buffer's own sixty, and the two together are what a player
+/// experiences as the lag between somebody speaking and being heard.
+#[cfg(feature = "audio")]
+const TARGET_DEPTH: usize = FRAME_SAMPLES * 2 * 3;
+
+/// The most frames one round will produce before going back for more packets.
+///
+/// A bound rather than a target. If the speaker has fallen a long way behind -- the machine
+/// was asleep, the device stalled -- catching up in one go would mean a long burst of mixing
+/// with the packet channel unattended. Ten frames is two hundred milliseconds of catching
+/// up per round, which closes any real gap in a few rounds.
+#[cfg(feature = "audio")]
+const MOST_AT_ONCE: usize = 10;
+
 /// How deep the jitter buffer is, in packets.
 ///
 /// Three, which is 60 ms at this frame size. `acl-audio`'s own tests measure what each
@@ -295,8 +313,14 @@ pub(crate) struct Audio {
     placements: Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     /// The capture settings that change while it runs, read by the capture callback.
     tuning: Arc<Tuning>,
-    /// What the speaker callback drains, so a test tone can be put into it.
-    playing: Arc<Mutex<std::collections::VecDeque<f32>>>,
+    /// The test tone, on its own.
+    ///
+    /// It used to go into `playing`, and "is a tone playing" was "is that queue not empty" --
+    /// which is also true whenever anybody is *talking*, because the mixer fills the same
+    /// queue. So the button's label flickered between start and stop several times a second
+    /// as the queue filled and drained, and pressing stop threw away everybody's audio
+    /// rather than the tone.
+    tone: Arc<Mutex<std::collections::VecDeque<f32>>>,
     /// Why there is no audio, when there is none.
     trouble: Option<String>,
     /// Kept alive: dropping a `cpal` stream stops it.
@@ -322,6 +346,8 @@ impl Audio {
         // test go through the device the client is actually playing on.
         let playing: Arc<Mutex<std::collections::VecDeque<f32>>> =
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let tone: Arc<Mutex<std::collections::VecDeque<f32>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
         // Three hundred transforms to cut the reverb's impulse response into blocks, which
         // is a tenth of a second the mixing loop does not have -- it has twenty
         // milliseconds. Done here, on a thread of its own, so it is ready long before the
@@ -345,6 +371,7 @@ impl Audio {
             capture,
             &tuning,
             &playing,
+            &tone,
         ) {
             Ok(streams) => Self {
                 incoming,
@@ -352,7 +379,7 @@ impl Audio {
                 activity,
                 placements,
                 tuning,
-                playing,
+                tone,
                 trouble: None,
                 _streams: streams,
             },
@@ -362,7 +389,7 @@ impl Audio {
                 activity,
                 placements,
                 tuning,
-                playing,
+                tone,
                 trouble: Some(why),
                 _streams: Vec::new(),
             },
@@ -449,13 +476,16 @@ impl Audio {
     /// with anything in it while nothing is being received is the tone, and the button only
     /// has to know whether to say start or stop.
     pub(crate) fn testing_speaker(&self) -> bool {
-        self.playing.lock().is_ok_and(|playing| !playing.is_empty())
+        self.tone.lock().is_ok_and(|tone| !tone.is_empty())
     }
 
     /// Stops one, by dropping what has not been played.
+    ///
+    /// Only the tone. It shared a queue with the mixer until 2026-08-28, and stopping the
+    /// test used to clear that -- taking every peer's audio with it.
     pub(crate) fn stop_testing_speaker(&self) {
-        if let Ok(mut playing) = self.playing.lock() {
-            playing.clear();
+        if let Ok(mut tone) = self.tone.lock() {
+            tone.clear();
         }
     }
 
@@ -474,9 +504,10 @@ impl Audio {
             (rate, (rate * 0.18) as usize)
         };
 
-        let Ok(mut ready) = self.playing.lock() else {
+        let Ok(mut ready) = self.tone.lock() else {
             return;
         };
+        ready.clear();
         for frequency in [A, E] {
             for sample in 0..note {
                 #[expect(
@@ -492,7 +523,12 @@ impl Audio {
                     reason = "a sample index inside one short note"
                 )]
                 let fade = 1.0 - (sample as f32 / note as f32);
-                ready.push_back(0.25 * fade * (std::f32::consts::TAU * frequency * time).sin());
+                // Twice, because the queue the speaker reads is interleaved stereo. Pushed
+                // once, the tone played across the two channels at double speed and half
+                // the length -- audible as a blip rather than as the two notes it is.
+                let value = 0.25 * fade * (std::f32::consts::TAU * frequency * time).sin();
+                ready.push_back(value);
+                ready.push_back(value);
             }
         }
     }
@@ -507,6 +543,10 @@ impl Audio {
     /// The order matters in one way: the mixing thread is started first, so a packet that
     /// arrives while a device is still opening has somewhere to go.
     #[cfg(feature = "audio")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one function because it opens one machine's audio: the two devices share             the reference queue between them, and splitting it would put the order they             are opened in -- speaker first, so a microphone failure costs nothing -- in             two places"
+    )]
     fn open(
         packets: Receiver<Incoming>,
         encoded: &Sender<Vec<u8>>,
@@ -515,6 +555,7 @@ impl Audio {
         capture: Capture,
         tuning: &Arc<Tuning>,
         ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+        tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
         // What the mixing thread produces and the output callback consumes. A mutex the
         // callback only ever *tries*: blocking there would miss a deadline measured in
@@ -534,7 +575,7 @@ impl Audio {
         let host = cpal::default_host();
         // The speaker first, because a client that can hear is useful on its own and a
         // microphone failure should not cost it.
-        let speaker = open_speaker(&host, &ready, &played)?;
+        let speaker = open_speaker(&host, &ready, tone, &played)?;
         let microphone = open_microphone(&host, encoded, voice, &played, capture, tuning)?;
         Ok(vec![speaker, microphone])
     }
@@ -556,6 +597,7 @@ impl Audio {
 fn open_speaker(
     host: &cpal::Host,
     ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+    tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
@@ -566,6 +608,7 @@ fn open_speaker(
     let config = at_any_rate(&output, false)?;
     let channels = config.channels.max(1) as usize;
     let playing = Arc::clone(ready);
+    let testing = Arc::clone(tone);
     let recording = Arc::clone(played);
 
     let stream = output
@@ -582,6 +625,17 @@ fn open_speaker(
                             break;
                         };
                         *slot = sample;
+                    }
+                }
+                // On top of whatever is being said, not instead of it. The point of the
+                // button is to prove this device makes a sound, and a test that silenced
+                // the lobby to do it would be answering a different question.
+                if let Ok(mut tone) = testing.try_lock() {
+                    for slot in buffer.iter_mut() {
+                        let Some(sample) = tone.pop_front() else {
+                            break;
+                        };
+                        *slot += sample;
                     }
                 }
                 // A copy for the canceller, averaged to mono. Tried rather than waited on:
@@ -886,30 +940,8 @@ fn mix(
     let mut said_it_was_not_loaded = false;
 
     loop {
-        // Blocks until something arrives, then takes everything else that has. A frame is
-        // produced per round, which is what keeps this in step with the packets rather
-        // than with a timer that would drift against them.
-        let Ok(first) = packets.recv() else {
+        if !take_packets(packets, &mut listeners) {
             return;
-        };
-        let mut arrived = vec![first];
-        while let Ok(next) = packets.try_recv() {
-            arrived.push(next);
-        }
-        for packet in arrived {
-            let listener = match listeners.entry(packet.peer.clone()) {
-                std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
-                std::collections::btree_map::Entry::Vacant(empty) => {
-                    // libopus refusing a decoder for a configuration this fixed would be
-                    // remarkable, and it is still not a reason to stop the thread that
-                    // every other peer's audio goes through.
-                    let Ok(listener) = Listener::new() else {
-                        continue;
-                    };
-                    empty.insert(listener)
-                }
-            };
-            listener.push(&packet);
         }
 
         let placed = placements
@@ -939,97 +971,110 @@ fn mix(
         // seconds of decay after a switch is flicked, and modelling it would mean carrying a
         // "still connected" flag that no longer answers to any rule.
         reverbs.retain(|peer, _| placed.get(peer).is_some_and(|p| p.reverb));
-        mixer.begin();
-        let mut anything = false;
-        for (peer, listener) in &mut listeners {
-            let Ok(true) = listener.next_frame(&mut mono) else {
-                continue;
-            };
-            let placement = placed.get(peer).copied().unwrap_or_default();
-            if placement.gain <= 0.0 && !placement.reverb {
-                // Out of range, dead, behind a wall -- whatever the rule was, it was
-                // applied on the frame loop and the answer is silence. Not mixing is
-                // cheaper than mixing zero and sounds the same.
-                //
-                // Unless a reverb is connected, in which case zero is not silence: the
-                // convolver still has three seconds of this peer in it, and feeding it the
-                // zeroes is what lets the tail ring out rather than stop dead.
-                continue;
-            }
-            // The gain first, then the panner, which is the order the Electron graph has:
-            // a `GainNode` into a `PannerNode`. Reversing them is audible, because the
-            // distance model is not linear in the gain.
-            for sample in &mut mono {
-                *sample *= placement.gain;
-            }
-            let source = if placement.spatial {
-                placement.source
-            } else {
-                // Centred, and still at its distance: turning off panning is not turning
-                // off the distance model.
-                acl_audio::panner::Position {
-                    x: 0.0,
-                    y: 0.0,
-                    z: -placement.source.length(),
-                }
-            };
 
-            // The wet branch is taken here, from the gain and *before* the muffle. In
-            // `Voice.tsx` both effects hang off the same gain node and each connects to the
-            // destination, so the two are branches that get summed -- not a chain. A dead
-            // impostor holding the radio is heard through both at once.
-            let heard_wet = placement.reverb
-                && haunt(
-                    peer,
-                    &mono,
-                    &placement,
-                    source,
-                    &mut reverbs,
-                    &mut wet,
-                    &mut said_it_was_not_loaded,
-                );
-            if heard_wet {
-                mixer.add(&wet);
-                anything = true;
-            }
+        // How far behind the speaker is, in frames. Everything below runs that many times
+        // rather than once: the decision above is the same for all of them -- it is
+        // recomputed five times a second and describes where people are, not what the next
+        // twenty milliseconds sound like -- so it is read once and the mixing repeats.
+        let behind = {
+            let depth = ready.lock().map_or(0, |queue| queue.len());
+            (TARGET_DEPTH.saturating_sub(depth) / (FRAME_SAMPLES * 2)).max(1)
+        };
+        for _ in 0..behind.min(MOST_AT_ONCE) {
+            mixer.begin();
+            let mut anything = false;
+            for (peer, listener) in &mut listeners {
+                let Ok(true) = listener.next_frame(&mut mono) else {
+                    continue;
+                };
+                let placement = placed.get(peer).copied().unwrap_or_default();
+                if placement.gain <= 0.0 && !placement.reverb {
+                    // Out of range, dead, behind a wall -- whatever the rule was, it was
+                    // applied on the frame loop and the answer is silence. Not mixing is
+                    // cheaper than mixing zero and sounds the same.
+                    //
+                    // Unless a reverb is connected, in which case zero is not silence: the
+                    // convolver still has three seconds of this peer in it, and feeding it the
+                    // zeroes is what lets the tail ring out rather than stop dead.
+                    continue;
+                }
+                // The gain first, then the panner, which is the order the Electron graph has:
+                // a `GainNode` into a `PannerNode`. Reversing them is audible, because the
+                // distance model is not linear in the gain.
+                for sample in &mut mono {
+                    *sample *= placement.gain;
+                }
+                let source = if placement.spatial {
+                    placement.source
+                } else {
+                    // Centred, and still at its distance: turning off panning is not turning
+                    // off the distance model.
+                    acl_audio::panner::Position {
+                        x: 0.0,
+                        y: 0.0,
+                        z: -placement.source.length(),
+                    }
+                };
 
-            // The direct path, and it is only there when nothing replaced it: `applyEffect`
-            // disconnects `gain -> destination` as it connects an effect. So a peer with a
-            // muffle is heard through the muffle, a peer with only the reverb is heard
-            // through the reverb alone, and a peer with neither is heard as they are.
-            if direct_path_survives(placement.muffle.is_some(), heard_wet) {
-                // After the gain and before the panner, which is where `Voice.tsx` puts it:
-                // `applyEffect(gain, muffle, destination)` inserts it between the two. The
-                // panner here runs after the gain rather than before it, and that changes
-                // nothing -- a gain is a scalar, and so is each side of an equal-power pan,
-                // so filtering the mono signal is the same signal either way.
-                if let Some(wanted) = placement.muffle {
-                    muffle_for(peer, wanted, &mut muffles).process_block(&mut mono);
+                // The wet branch is taken here, from the gain and *before* the muffle. In
+                // `Voice.tsx` both effects hang off the same gain node and each connects to the
+                // destination, so the two are branches that get summed -- not a chain. A dead
+                // impostor holding the radio is heard through both at once.
+                let heard_wet = placement.reverb
+                    && haunt(
+                        peer,
+                        &mono,
+                        &placement,
+                        source,
+                        &mut reverbs,
+                        &mut wet,
+                        &mut said_it_was_not_loaded,
+                    );
+                if heard_wet {
+                    mixer.add(&wet);
+                    anything = true;
                 }
-                let panned = placement.panner.process_block(&mono, source);
-                // Copied rather than sliced: `process_block` returns two samples per input
-                // and `stereo` is sized for exactly that, so these agree -- but a length
-                // that is asserted by construction is one a later change can break
-                // silently, and this does not panic when it does.
-                stereo.fill(0.0);
-                for (slot, sample) in stereo.iter_mut().zip(panned.iter()) {
-                    *slot = *sample;
+
+                // The direct path, and it is only there when nothing replaced it: `applyEffect`
+                // disconnects `gain -> destination` as it connects an effect. So a peer with a
+                // muffle is heard through the muffle, a peer with only the reverb is heard
+                // through the reverb alone, and a peer with neither is heard as they are.
+                if direct_path_survives(placement.muffle.is_some(), heard_wet) {
+                    // After the gain and before the panner, which is where `Voice.tsx` puts it:
+                    // `applyEffect(gain, muffle, destination)` inserts it between the two. The
+                    // panner here runs after the gain rather than before it, and that changes
+                    // nothing -- a gain is a scalar, and so is each side of an equal-power pan,
+                    // so filtering the mono signal is the same signal either way.
+                    if let Some(wanted) = placement.muffle {
+                        muffle_for(peer, wanted, &mut muffles).process_block(&mut mono);
+                    }
+                    let panned = placement.panner.process_block(&mono, source);
+                    // Copied rather than sliced: `process_block` returns two samples per input
+                    // and `stereo` is sized for exactly that, so these agree -- but a length
+                    // that is asserted by construction is one a later change can break
+                    // silently, and this does not panic when it does.
+                    stereo.fill(0.0);
+                    for (slot, sample) in stereo.iter_mut().zip(panned.iter()) {
+                        *slot = *sample;
+                    }
+                    mixer.add(&stereo);
+                    anything = true;
                 }
-                mixer.add(&stereo);
-                anything = true;
             }
-        }
-        if !anything {
-            continue;
-        }
-        let finished = mixer.finish();
-        if let Ok(mut ready) = ready.lock() {
-            // A cap, because a speaker that has stopped consuming must not turn into a
-            // queue that grows without limit. Two hundred milliseconds is well past what
-            // any device buffers and well short of a memory problem.
-            const CAP: usize = FRAME_SAMPLES * 2 * 10;
-            if ready.len() < CAP {
-                ready.extend(finished.iter().copied());
+            if !anything {
+                // Nobody had a frame to give, so there is nothing to catch up on and another
+                // round would only ask the same question again.
+                break;
+            }
+            let finished = mixer.finish();
+            if let Ok(mut ready) = ready.lock() {
+                // A cap, because a speaker that has stopped consuming must not turn into a
+                // queue that grows without limit. Two hundred milliseconds is well past what
+                // any device buffers and well short of a memory problem.
+                const CAP: usize = FRAME_SAMPLES * 2 * 10;
+                if ready.len() < CAP {
+                    ready.extend(finished.iter().copied());
+                }
             }
         }
     }
@@ -1114,6 +1159,51 @@ fn haunt(
     for [on_the_left, on_the_right] in into.as_chunks_mut::<2>().0 {
         *on_the_left *= left;
         *on_the_right *= right;
+    }
+    true
+}
+
+/// Puts everything that has arrived into its peer's jitter buffer.
+///
+/// Waits up to one frame for the first packet and then takes the rest without waiting.
+/// `false` means the channel has closed, which is the window dropping the pipeline.
+///
+/// The wait has a limit because **the packets are not a clock**. They arrive in bursts --
+/// the window hands them over five times a second -- and the mixer used to block here and
+/// then produce exactly one frame per burst. Ten packets in, one frame out, is a tenth of
+/// real time: two people heard each other slowed down, stuttering, and further behind with
+/// every second. The speaker is the clock, and the caller tops its queue up whether or not
+/// anything arrived, so this must come back either way.
+#[cfg(feature = "audio")]
+fn take_packets(
+    packets: &Receiver<Incoming>,
+    listeners: &mut std::collections::BTreeMap<String, Listener>,
+) -> bool {
+    let frame = std::time::Duration::from_millis(u64::from(acl_audio::codec::FRAME_MS));
+    let mut arrived = Vec::new();
+    match packets.recv_timeout(frame) {
+        Ok(first) => arrived.push(first),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+    }
+    while let Ok(next) = packets.try_recv() {
+        arrived.push(next);
+    }
+
+    for packet in arrived {
+        let listener = match listeners.entry(packet.peer.clone()) {
+            std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
+            std::collections::btree_map::Entry::Vacant(empty) => {
+                // libopus refusing a decoder for a configuration this fixed would be
+                // remarkable, and it is still not a reason to stop the thread that every
+                // other peer's audio goes through.
+                let Ok(listener) = Listener::new() else {
+                    continue;
+                };
+                empty.insert(listener)
+            }
+        };
+        listener.push(&packet);
     }
     true
 }
