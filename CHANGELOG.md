@@ -1,5 +1,28 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.5
+
+alpha.4 gave the client an icon and it was the wrong one. This is the right one.
+
+### Fixed
+
+- **The icon was BetterCrewLink's.** Not a placeholder and not a near miss — the actual
+  logo of the project this one was forked from, which had been sitting in the tree since
+  the fork and was the only ready-made icon in it. So alpha.4 fixed a client with no logo
+  by giving it somebody else's.
+
+  It is now the AnotherCrewLink mark from this project's own design system: the ring on
+  its dark plate. Everywhere it appears — the window, the taskbar, Explorer, a shortcut,
+  Add/Remove Programs, the prompt Windows shows when the client asks for permission to
+  read the game, and the setup and uninstaller, which had shown the installer toolkit's
+  default because nobody had given them one either.
+
+  **The 1.x app was wearing it too**, and now is not. The next 1.x release, if there is
+  one, carries the AnotherCrewLink mark; the installed one keeps what it has until then.
+
+Nothing else changed. Everything alpha.3's notes say about what is proven and what is not
+still applies.
+
 ## v2.0.0-alpha.4
 
 One thing you can see, a day after alpha.3. Everything alpha.3's notes say about what is
@@ -24,6 +47,10 @@ talk to anybody.
 
   Its properties say what it is now, too — name, version, licence — where before the
   Details tab was empty.
+
+> **Corrected in alpha.5.** The icon this describes was BetterCrewLink's, taken from the
+> artwork the fork inherited rather than from this project's design system. The account of
+> what was missing is accurate; the thing put in its place was not ours. See alpha.5 above.
 
 ### Everything else in this release is the part that publishes it
 
