@@ -64,6 +64,28 @@ const MIN_WIDTH: i32 = 250;
 /// See [`MIN_WIDTH`].
 const MIN_HEIGHT: i32 = 350;
 
+/// The size a window opens at when nothing has been saved yet.
+///
+/// **Not the minimum**, which is what stood here and is what `src/main/index.ts` passes
+/// `windowStateKeeper` as its default. A floor is not a choice: 250 by 350 is the smallest
+/// this window is allowed to be, and opening a fresh installation there means every new
+/// player meets the product at its most cramped.
+///
+/// 400 by 520 is the size the design system draws the client at -- every mockup under
+/// `design/mockups/` sets it, and `reference.json` names 400 as the typical width against
+/// 250 as the minimum. Somebody who has sized the window keeps their size; this is only
+/// for the first run and for a `windows.json` that has gone missing.
+const DEFAULT_WIDTH: i32 = 400;
+/// See [`DEFAULT_WIDTH`].
+const DEFAULT_HEIGHT: i32 = 520;
+
+/// How long the geometry has to hold still before it is written down.
+///
+/// Long enough that a drag is one write rather than a hundred, short enough that letting
+/// go and pulling the plug keeps the size. The window repaints five times a second when
+/// nothing is happening, so this is noticed within a frame of expiring.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// How tall the title bar is drawn.
 const TITLE_BAR: f32 = acl_ui::views::theme::TITLEBAR_H;
 
@@ -536,7 +558,7 @@ fn main() -> eframe::Result<()> {
 
     let file = paths.window_state_file();
     let saved = read_state(&file);
-    let opening = restore(saved, &displays(), MIN_WIDTH, MIN_HEIGHT);
+    let opening = restore(saved, &displays(), DEFAULT_WIDTH, DEFAULT_HEIGHT);
 
     #[expect(
         clippy::cast_precision_loss,
@@ -856,8 +878,12 @@ impl Roster for Seat<'_> {
 struct Client {
     state_file: PathBuf,
     reader: Option<reader::Reader>,
-    /// What the window was last seen at, for saving on the way out.
+    /// What the window was last seen at.
     last_seen: Option<WindowState>,
+    /// What is already in the file, so a settled window is not rewritten every frame.
+    written: Option<WindowState>,
+    /// When the geometry last changed. `None` once it has been written.
+    moved_at: Option<std::time::Instant>,
     /// The hat artwork, fetched and decoded on a thread of its own.
     hats: hat_store::Loader,
     /// The dressed crewmates the main window is showing. See [`Portraits`].
@@ -997,6 +1023,8 @@ impl Client {
             // where somebody would find out about it, so it opens and says so.
             reader,
             last_seen: None,
+            written: None,
+            moved_at: None,
             overlay_shown: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
@@ -1139,17 +1167,26 @@ impl Client {
     ///
     /// Named for what it does rather than `App::save`, which eframe calls with its own
     /// storage and on its own schedule -- a different thing that happens to share a verb.
-    fn write_window_state(&self) {
+    fn write_window_state(&mut self) {
+        self.moved_at = None;
         let Some(state) = self.last_seen else {
             return;
         };
+        // Every other window's entry is read back and put again, so this writes one key
+        // rather than the file: the overlay keeps its own, and so does anything added
+        // later.
+        if self.written == Some(state) {
+            return;
+        }
         let mut stored = std::fs::read_to_string(&self.state_file)
             .ok()
             .and_then(|text| serde_json::from_str::<Stored>(&text).ok())
             .unwrap_or_default();
         stored.set(acl_ui::window_state::MAIN_WINDOW, state);
-        if let Ok(text) = serde_json::to_string(&stored) {
-            let _ = std::fs::write(&self.state_file, text);
+        if let Ok(text) = serde_json::to_string(&stored)
+            && std::fs::write(&self.state_file, text).is_ok()
+        {
+            self.written = Some(state);
         }
     }
 
@@ -2709,9 +2746,16 @@ impl eframe::App for Client {
         self.keep_listed();
         self.carry_audio();
 
-        // Remembered every frame and written once, on the way out. The shipped keeper
-        // debounces instead, because it is reacting to move and resize events; this is
-        // already awake, so there is nothing to debounce.
+        // Remembered every frame, and written down once it has stopped moving.
+        //
+        // **Not only on the way out**, which is what this did until 2026-08-28. A client
+        // that is killed, or that the driver takes down with it, closes without running
+        // the line that writes -- and the next start has nothing to restore, so it opens
+        // at `MIN_WIDTH` by `MIN_HEIGHT`. That is a floor, not a size anybody chose, and
+        // it is how a window somebody had sized to their screen came back at 250x350.
+        //
+        // The shipped keeper debounces for the same reason, off move and resize events.
+        // This is already awake every frame, so the debounce is a timestamp instead.
         let minimised = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
         let maximised = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
         let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
@@ -2722,14 +2766,22 @@ impl eframe::App for Client {
                 clippy::cast_possible_truncation,
                 reason = "screen coordinates, rounded to the pixel they are stored as"
             )]
-            {
-                self.last_seen = Some(WindowState {
-                    width: outer.width() as i32,
-                    height: outer.height() as i32,
-                    x: Some(outer.min.x as i32),
-                    y: Some(outer.min.y as i32),
-                });
+            let seen = WindowState {
+                width: outer.width() as i32,
+                height: outer.height() as i32,
+                x: Some(outer.min.x as i32),
+                y: Some(outer.min.y as i32),
+            };
+            if self.last_seen != Some(seen) {
+                self.last_seen = Some(seen);
+                self.moved_at = Some(std::time::Instant::now());
             }
+        }
+        if self
+            .moved_at
+            .is_some_and(|since| since.elapsed() >= SETTLE)
+        {
+            self.write_window_state();
         }
 
         // Composed on the same cadence the frames arrive at, which is the helper's five a
