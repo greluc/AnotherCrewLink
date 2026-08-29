@@ -387,7 +387,20 @@ mod tests {
     fn temporary(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("acl-store-{name}"));
         let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("a directory");
+        // Retried, because Windows removes a directory *asynchronously*: the call returns
+        // once the last handle is marked for deletion and the name survives until it
+        // actually closes, so a `create_dir_all` on the next line can fail with access
+        // denied. Once in roughly ten full-suite runs, which is exactly often enough to be
+        // dismissed as noise and exactly rare enough to waste an afternoon later.
+        for attempt in 0..50 {
+            match std::fs::create_dir_all(&path) {
+                Ok(()) => return path,
+                Err(_) if attempt + 1 < 50 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("could not make {}: {error}", path.display()),
+            }
+        }
         path
     }
 
