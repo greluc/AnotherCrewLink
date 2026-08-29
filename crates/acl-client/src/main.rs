@@ -764,6 +764,12 @@ fn main() -> eframe::Result<()> {
     // Before anything else has anything to say. Every diagnostic in this binary goes here
     // and nowhere else, because a windows-subsystem process has no standard error.
     acl_core::logging::open(&paths.log_file());
+    // Immediately after, and the order matters: a logger installed once the transport has
+    // already complained is a logger that missed the complaint. Everything the
+    // dependencies log went to the `log` crate's default no-op sink until 2026-08-29 --
+    // including `webrtc`'s "Skipping unsupported non-UDP TURN url", which is the only
+    // evidence a player on a UDP-blocked network has for why they can hear nobody.
+    acl_core::logging::bridge_dependency_logs();
     acl_core::log_info!(
         "client",
         "AnotherCrewLink {} starting",

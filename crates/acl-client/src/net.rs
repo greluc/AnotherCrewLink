@@ -1082,6 +1082,20 @@ async fn follow(
                 rtc.urls(),
                 rtc.ice_transport_policy
             );
+            // Said plainly, because the player it affects is the one who can hear nobody
+            // and has no other clue. `webrtc =0.20.3` skips every TURN-over-TCP and every
+            // `turns:` URL before it allocates -- so a server that advertises only those
+            // has, for this client, no relay at all, and a player behind a UDP-blocking
+            // network has nothing to fall back to. The transport's own warning now reaches
+            // the log as well; this is the one a person can read.
+            if acl_net::ice::has_relay(&rtc.ice_servers)
+                && !acl_net::ice::usable_relay(&rtc.ice_servers)
+            {
+                acl_core::log_warn!(
+                    "net",
+                    "this server advertises a relay only over TCP or TLS, which this client's                      transport cannot use; a network that blocks UDP will not connect"
+                );
+            }
             match mesh.as_mut() {
                 Some(mesh) => mesh.reconfigure(rtc),
                 None => *mesh = Some(acl_core::peers::PeerSet::new(rtc)),

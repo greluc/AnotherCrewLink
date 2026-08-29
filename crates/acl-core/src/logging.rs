@@ -140,6 +140,60 @@ pub fn open(path: &std::path::Path) -> bool {
     true
 }
 
+/// Sends everything the dependencies log into this file too.
+///
+/// **They logged into nothing until 2026-08-29.** No crate in this workspace installed an
+/// implementation of the `log` facade, so every `warn!` and `error!` from every dependency
+/// went to the default no-op logger. The one that matters is the transport's:
+/// `webrtc-0.20.3` discards every TURN-over-TCP and every `turns:` URL it is handed --
+///
+/// ```text
+/// warn!("Skipping unsupported non-UDP TURN url {}", url);
+/// ```
+///
+/// -- and that line is the only evidence a player on a UDP-blocked network has for why
+/// they can hear nobody. It was written to a logger that dropped it.
+///
+/// `Info` and above, because `Debug` from a WebRTC stack is thousands of lines a second
+/// and this file is four mebibytes.
+///
+/// Called once, as early as [`open`]: a logger installed after the transport has already
+/// complained is a logger that missed the complaint.
+pub fn bridge_dependency_logs() {
+    /// The `log` crate's target is the module path, which is what a reader needs to tell
+    /// the transport's complaints from the codec's.
+    struct Bridge;
+
+    impl log::Log for Bridge {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Info
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if !self.enabled(record.metadata()) {
+                return;
+            }
+            let level = match record.level() {
+                log::Level::Error => Level::Error,
+                log::Level::Warn => Level::Warn,
+                _ => Level::Info,
+            };
+            // The target rather than a fixed source, so a line says which crate produced
+            // it -- `webrtc::peer_connection` reads very differently from `opus`.
+            write(record.target(), level, &record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    static BRIDGE: Bridge = Bridge;
+    // A second call is not an error: `set_logger` refuses it, and refusing is the right
+    // outcome -- there is one sink and it is already connected.
+    if log::set_logger(&BRIDGE).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
 /// Writes one line, if anybody is listening.
 ///
 /// A write that fails takes the sink down for the session, which is [`Sink`]'s rule and

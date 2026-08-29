@@ -69,6 +69,46 @@ pub fn is_relay_server(server: &IceServer) -> bool {
     server.urls.iter().any(|url| is_relay_url(url))
 }
 
+/// Whether this transport can actually allocate through a URL.
+///
+/// **`webrtc =0.20.3` cannot use a relay over TCP or TLS**, and says so only to a logger:
+/// `peer_connection/transports/turn_relayer.rs:250` skips every `turns:` URL for being
+/// secure and every `?transport=tcp` one for not being UDP, before it allocates anything.
+/// The connections are also built with `with_udp_addrs` and nothing else, so there are no
+/// ICE-TCP host candidates either -- this client is UDP-only on every candidate type there
+/// is.
+///
+/// That is a limitation of the transport rather than a decision of this project's, and it
+/// is the reason [`usable_relay`] exists beside [`is_relay_server`]. `with_tcp_relays`
+/// still adds the TCP forms: they cost one entry each, they are what a future transport
+/// will use, and a URL the relayer skips gathers nothing rather than failing. What must
+/// not happen is this client *believing* it has a fallback it cannot reach.
+#[must_use]
+pub fn transport_can_use(url: &str) -> bool {
+    // `turns:` is TLS, which the relayer refuses outright.
+    if !url.starts_with("turn:") {
+        return false;
+    }
+    // A transport it names has to be UDP. No transport means UDP, which is the default in
+    // RFC 7065 and what the relayer's own parser produces.
+    match url.split_once("transport=") {
+        None => true,
+        Some((_, rest)) => rest.split(['&', '#']).next() == Some("udp"),
+    }
+}
+
+/// Whether any entry offers a relay this transport can allocate through.
+///
+/// The honest version of [`has_relay`], and the one a *decision* should be made on.
+/// `has_relay` answers what the server advertised, which is what a server operator is told
+/// about; this answers what will actually gather a candidate.
+#[must_use]
+pub fn usable_relay(servers: &[IceServer]) -> bool {
+    servers
+        .iter()
+        .any(|server| server.urls.iter().any(|url| transport_can_use(url)))
+}
+
 /// Whether there is a relay to fall back to.
 ///
 /// Forcing relay mode with no relay advertised produces a connection that cannot gather
@@ -194,7 +234,7 @@ impl RtcConfig {
     pub fn new(servers: &[IceServer], force_relay: bool) -> Self {
         let ice_servers = with_tcp_relays(servers);
         Self {
-            ice_transport_policy: if force_relay && has_relay(&ice_servers) {
+            ice_transport_policy: if force_relay && usable_relay(&ice_servers) {
                 IceTransportPolicy::Relay
             } else {
                 IceTransportPolicy::All
@@ -279,6 +319,35 @@ mod tests {
     }
 
     #[test]
+    fn a_relay_this_transport_cannot_reach_does_not_count_as_one() {
+        // `webrtc =0.20.3` skips every `turns:` URL and every `?transport=tcp` one before
+        // it allocates, so a deployment offering only those has, as far as this client is
+        // concerned, no relay at all. Forcing relay mode onto it would gather nothing --
+        // which is relay rule three, and the rule cannot be applied by a check that
+        // believes the advertisement.
+        assert!(transport_can_use("turn:relay.example:3478"));
+        assert!(transport_can_use("turn:relay.example:3478?transport=udp"));
+        assert!(!transport_can_use("turn:relay.example:3478?transport=tcp"));
+        assert!(!transport_can_use("turns:relay.example:5349"));
+        assert!(!transport_can_use("stun:stun.example:3478"));
+
+        let tls_only = [relay("turns:relay.example:5349")];
+        assert!(
+            has_relay(&tls_only),
+            "the server did advertise one, and its operator is told so"
+        );
+        assert!(
+            !usable_relay(&tls_only),
+            "and this transport cannot allocate through it"
+        );
+        assert_eq!(
+            RtcConfig::new(&tls_only, true).ice_transport_policy,
+            IceTransportPolicy::All,
+            "so relay-only would leave the connection with no candidates at all"
+        );
+    }
+
+    #[test]
     fn relay_only_is_refused_when_there_is_no_relay() {
         // Relay rule three. Forcing relay mode with nothing to relay through leaves the
         // connection unable to gather any candidate at all -- worse than the direct
@@ -301,11 +370,13 @@ mod tests {
             RtcConfig::new(&[relay("turn:relay.example:3478")], true).ice_transport_policy,
             IceTransportPolicy::Relay
         );
-        // Including a TLS-only deployment, which `has_relay` counts and a substring check
-        // for "turn:" would miss.
+        // A TLS-only deployment is a relay the *server* advertises and this transport
+        // cannot allocate through, so relay-only is refused for it too. See
+        // `a_relay_this_transport_cannot_reach_does_not_count_as_one`, which is where that
+        // distinction lives.
         assert_eq!(
             RtcConfig::new(&[relay("turns:relay.example:5349")], true).ice_transport_policy,
-            IceTransportPolicy::Relay
+            IceTransportPolicy::All
         );
     }
 

@@ -62,6 +62,7 @@ dependencies = [
  "acl-types",
  "async-trait",
  "bytes",
+ "log",
  "postcard",
  "rtc",
  "serde_json",
