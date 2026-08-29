@@ -174,7 +174,19 @@ fn replay(frame: &RecordedFrame) -> Option<(SparseProcess, Module)> {
     let base = parse_hex(&recorded.base)?;
     let size = parse_hex(&recorded.size)?;
 
-    let mut process = SparseProcess::new(frame.is64).with_module("GameAssembly.dll", base, size);
+    let mut process = SparseProcess::new(frame.is64)
+        .with_module("GameAssembly.dll", base, size)
+        // The module's first byte, which the recording does not contain because the
+        // Electron reader never read it. The process it was recorded from was running, and
+        // a running process has its PE header mapped -- since 2026-08-29 `read_state`
+        // reads one byte there to tell a game between rounds from a game that has closed,
+        // and a replay without it describes a process that does not exist.
+        //
+        // Laid down before the recorded regions so any of them that covers this address
+        // wins. `SparseProcess::read_exact` searches every region starting at or before an
+        // address until one covers the whole range, so a one-byte region cannot shadow a
+        // wider one either way.
+        .with_region(base, vec![0x4d]);
     for read in &frame.reads {
         // A region that cannot be parsed is dropped, not fatal. Returning `None` here
         // discards the whole frame, and one unusable address among hundreds of good ones

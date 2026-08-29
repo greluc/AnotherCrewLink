@@ -80,9 +80,10 @@ pub const MENU_HOLD_FRAMES: i32 = 20;
 ///
 /// # Errors
 ///
-/// Returns [`ReadError`] when a read the frame cannot do without fails — the client
-/// pointer, or the game state. Everything else degrades to a default rather than failing
-/// the frame, because a missing camera should not silence a lobby.
+/// Returns [`ReadError`] when the module base cannot be read, which is the one thing that
+/// distinguishes a game that is running from a game that has closed. Everything else
+/// degrades to a default rather than failing the frame, because a missing camera should
+/// not silence a lobby.
 #[allow(clippy::too_many_lines)]
 // A frame has twenty fields and reading them is what this function is. Splitting it
 // further would move the reads away from the comments that explain why each one is
@@ -93,6 +94,30 @@ pub fn read_state(
     context: &mut ReadContext,
 ) -> Result<AmongUsState, ReadError> {
     let base = context.module_base;
+
+    // The one read that is allowed to fail the frame, and it is a fix of 2026-08-29.
+    //
+    // Every other read below is hedged, deliberately, because the Electron reader never
+    // fails a frame either. The consequence was that this function was infallible for any
+    // `ProcessMemory` at all -- including one whose every read fails -- and the doc comment
+    // above promised errors it could not produce.
+    //
+    // What that cost: after the game exits, the reads all fall back, `gameState` lands on
+    // 4, the lobby code reads as -1 and becomes `MENU`, and the helper emitted well-formed
+    // menu frames at five hertz for ever. `Sampler::sample` therefore never returned
+    // `None`, so the helper's re-attach arm was dead code and the game was opened exactly
+    // once per helper process. A player who restarted Among Us had no proximity voice for
+    // the rest of the session, and nothing said so -- the client simply believed they were
+    // in the menu, left the voice room, and did not go back.
+    //
+    // One byte at the module base: that is the PE header, mapped for as long as the
+    // process lives and unreadable the moment it does not. It costs one
+    // `ReadProcessMemory` per frame against the several dozen below it. A process-table
+    // scan would answer the same question for eighteen milliseconds, which is most of a
+    // frame -- and would answer it wrongly for a game that has restarted into the same pid,
+    // where the handle is stale but the name is back.
+    let mut mapped = [0u8; 1];
+    memory.read_exact(base, &mut mapped)?;
 
     // Not `?`. The Electron reader never fails a frame: a read that goes nowhere returns
     // undefined, the value falls back, and the frame goes out as a menu frame. A reader
@@ -816,8 +841,20 @@ mod tests {
         serde_json::from_str(&text).expect("parses")
     }
 
+    const BASE: u64 = 0x1000_0000;
+
     fn context() -> ReadContext {
-        ReadContext::new(0x1000_0000, Mod::None)
+        ReadContext::new(BASE, Mod::None)
+    }
+
+    /// A process that is running and has nothing else mapped.
+    ///
+    /// The module base carries a byte because a live process always has its PE header
+    /// mapped, and since 2026-08-29 that is the one read `read_state` will fail a frame
+    /// for -- it is what separates a game that is between rounds from a game that has
+    /// closed. A fixture with nothing at the base describes a process that does not exist.
+    fn running(is_64bit: bool) -> SparseProcess {
+        SparseProcess::new(is_64bit).with_region(BASE, vec![0x4d])
     }
 
     #[test]
@@ -828,7 +865,7 @@ mod tests {
         // forces the state. A reader that gives up instead disagrees with it on every
         // frame where the game is starting, closing or between rounds — thousands of them
         // in a real session, and gate G1 counted every one.
-        let empty = SparseProcess::new(false);
+        let empty = running(false);
         let state = read_state(&empty, &offsets(), &mut context()).expect("a frame, not an error");
         assert_eq!(state.game_state, GameState::Menu);
         assert_eq!(state.lobby_code, "MENU");
@@ -836,6 +873,30 @@ mod tests {
         // And the two fields that keep a starting value rather than a read one.
         assert_eq!(state.max_players, 10);
         assert!((state.light_radius - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_process_that_is_gone_fails_the_frame_rather_than_reading_as_a_menu() {
+        // The distinction this whole `Result` exists for, and it did not exist until
+        // 2026-08-29: every read in `read_state` was hedged, so the function was infallible
+        // for any process at all. A game that had closed read as `gameState` 4, a lobby
+        // code of -1, and therefore `MENU` -- a well-formed menu frame, emitted at five
+        // hertz for ever.
+        //
+        // What that cost is not a blank overlay. `Sampler::sample` never returned `None`,
+        // so the helper's re-attach arm was dead code and the game was opened exactly once
+        // per helper process; and the client reads `MENU` as "not in a lobby", so it left
+        // the voice room and never went back. A player who restarted Among Us had no
+        // proximity voice for the rest of the session, with nothing anywhere to say why.
+        let gone = SparseProcess::new(false);
+        assert!(
+            read_state(&gone, &offsets(), &mut context()).is_err(),
+            "a process with nothing mapped at its module base is not a running game"
+        );
+
+        // And the case it must not be confused with: a game that is running and simply not
+        // in a lobby yet. One byte at the base is the difference.
+        assert!(read_state(&running(false), &offsets(), &mut context()).is_ok());
     }
 
     #[test]
@@ -906,9 +967,11 @@ mod tests {
         let state_offset = inner_client_offset(&offsets, "gameState").expect("the bundle has it");
 
         let inner = 0x2000u64;
-        let mut process = SparseProcess::new(false);
+        // `running`, so the module base is mapped: `read_state` reads one byte there to
+        // tell a game that is between rounds from one that has closed.
+        let mut process = running(false);
         // Walk the chain, laying down a pointer at each step it dereferences.
-        let mut address = 0x1000_0000u64;
+        let mut address = BASE;
         for (index, step) in chain.iter().enumerate() {
             address = address.checked_add_signed(*step).expect("in range");
             if index + 1 < chain.len() {

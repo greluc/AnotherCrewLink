@@ -534,7 +534,7 @@ mod tests {
         // meaning anything -- so there is nothing to extrapolate towards and no reason to
         // spend a decode per frame on a peer who is not sending.
         let mut last = frame;
-        for _ in 0..u32::try_from(STARVATION_FRAMES).unwrap() + 2 {
+        for _ in 0..STARVATION_FRAMES + 2 {
             last = buffer.pop().unwrap().unwrap();
         }
         assert_eq!(last.source, FrameSource::Silence);
