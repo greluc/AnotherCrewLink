@@ -494,6 +494,11 @@ pub struct Lookup {
     /// Keyed by the build hash the game broadcasts, plus `default`.
     pub versions: BTreeMap<String, LookupEntry>,
     /// The patterns used to find that hash in the first place.
+    ///
+    /// Carried as it is on disk rather than typed, because it is round-tripped: a lookup
+    /// that gained a field would otherwise lose it on the way to the cache. Read it
+    /// through [`Lookup::broadcast_pattern`], which is the only shape this project uses
+    /// and the one [`Lookup::validate`] checks.
     pub patterns: serde_json::Value,
     /// Moves whenever the contents do; a lower one arriving is a rollback.
     #[serde(
@@ -545,6 +550,21 @@ pub struct BundleContext {
     pub held_bundle_version: Option<i64>,
 }
 
+/// The broadcast signature inside a bare `patterns` object.
+///
+/// The same read as [`Lookup::broadcast_pattern`], for the elevated helper: it is sent the
+/// `patterns` object on its own, because it has no business holding the version table and
+/// the file paths that go with it.
+#[must_use]
+pub fn broadcast_pattern_in(
+    patterns: &serde_json::Value,
+    is_64bit: bool,
+) -> Option<SignatureEntry> {
+    let arch = if is_64bit { "x64" } else { "x86" };
+    let entry = patterns.get(arch)?.get("broadcastVersion")?;
+    serde_json::from_value(entry.clone()).ok()
+}
+
 impl Lookup {
     /// Checks the structure, the file paths and the envelope.
     ///
@@ -561,6 +581,36 @@ impl Lookup {
                 "the fallback entry is absent",
             ));
         }
+        // The patterns are handed to the elevated helper, which scans a running game's
+        // memory with them. A malformed one is a scan that reads nothing, but this is the
+        // one place the mirror's bytes reach the elevated half at all, so it is checked
+        // here on the same footing as the offsets themselves rather than trusted because
+        // it came in the same file. Absent is allowed -- the older lookups have no
+        // patterns at all and simply cannot be keyed by build.
+        for arch in ["x64", "x86"] {
+            let Some(entry) = self
+                .patterns
+                .get(arch)
+                .and_then(|by| by.get("broadcastVersion"))
+            else {
+                continue;
+            };
+            let at = format!("lookup.patterns.{arch}.broadcastVersion");
+            let parsed: SignatureEntry = serde_json::from_value(entry.clone())
+                .map_err(|why| Rejected::new(Rejection::WrongType, at.clone(), format!("{why}")))?;
+            validate_signature(&parsed, &at)?;
+            if parsed.sig.is_none() {
+                // Empty is how an *offsets* file says "this build has no such function",
+                // and `validate_signature` allows it for that reason. Here it would be a
+                // pattern that finds nothing, offered as though it would.
+                return Err(Rejected::new(
+                    Rejection::MissingField,
+                    format!("{at}.sig"),
+                    "a broadcast pattern with no signature finds no build",
+                ));
+            }
+        }
+
         for (id, entry) in &self.versions {
             let at = format!("lookup.versions.{id}");
             if !is_relative_json_path(&entry.file) {
@@ -617,6 +667,18 @@ impl Lookup {
             ));
         }
         Ok(())
+    }
+
+    /// The signature that finds the game's build number, for one architecture.
+    ///
+    /// `patterns.x64.broadcastVersion` or `patterns.x86.broadcastVersion`, which is what
+    /// `GameReader.ts:527-543` reads and what `offsetsValidator.ts:488-498` checks. Absent
+    /// is not an error: a lookup without it simply cannot be keyed by build, and the
+    /// `default` entry is what the caller falls back to — the behaviour of every client
+    /// before 2026-08-29.
+    #[must_use]
+    pub fn broadcast_pattern(&self, is_64bit: bool) -> Option<SignatureEntry> {
+        broadcast_pattern_in(&self.patterns, is_64bit)
     }
 
     /// The entry for a game build, falling back to `default`.
@@ -727,6 +789,56 @@ mod tests {
         assert!(
             lookup.entry_for("no-such-build").is_some(),
             "falls back to default"
+        );
+
+        // The pattern that makes the key knowable in the first place. Both architectures,
+        // because the helper picks by the width of the game it found.
+        for is_64bit in [false, true] {
+            let pattern = lookup
+                .broadcast_pattern(is_64bit)
+                .expect("the shipped lookup carries a broadcast pattern");
+            assert!(pattern.sig.is_some());
+            assert_eq!(pattern.pattern_offset, Some(3));
+            crate::scan::Pattern::parse(pattern.sig.as_deref().unwrap())
+                .expect("and it is a pattern the scanner can read");
+        }
+
+        // And a real build key resolves to something other than the default's file only
+        // when the mirror says so -- what matters here is that the keys are the decimal
+        // strings the helper will send.
+        assert!(
+            lookup.versions.keys().any(|key| key.parse::<i32>().is_ok()),
+            "the lookup is keyed by build numbers, or nothing can use one"
+        );
+    }
+
+    #[test]
+    fn a_broadcast_pattern_that_finds_nothing_is_refused() {
+        // Empty is how an *offsets* file says "this build has no such function". Here it
+        // would be a pattern offered as though it worked, and the helper would scan the
+        // whole module for it and come back with no build every time.
+        let mut lookup: Lookup = serde_json::from_str(include_str!("../assets/lookup.json"))
+            .expect("the shipped lookup parses");
+        lookup.patterns["x64"]["broadcastVersion"] = serde_json::json!({});
+        let rejected = lookup
+            .validate(&BundleContext {
+                client_version: "2.0.0".to_owned(),
+                held_bundle_version: None,
+            })
+            .expect_err("an empty broadcast pattern is not a pattern");
+        assert_eq!(rejected.path, "lookup.patterns.x64.broadcastVersion.sig");
+
+        let mut lookup: Lookup = serde_json::from_str(include_str!("../assets/lookup.json"))
+            .expect("the shipped lookup parses");
+        lookup.patterns["x86"]["broadcastVersion"]["sig"] = serde_json::json!("ZZ ZZ");
+        assert!(
+            lookup
+                .validate(&BundleContext {
+                    client_version: "2.0.0".to_owned(),
+                    held_bundle_version: None,
+                })
+                .is_err(),
+            "a signature the scanner cannot parse reaches the elevated helper otherwise"
         );
     }
 

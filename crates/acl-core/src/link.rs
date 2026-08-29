@@ -48,6 +48,17 @@ pub enum Event {
     /// Reported rather than swallowed, and not fatal: one unreadable frame is not a reason
     /// to tear down a helper that is otherwise answering.
     Undecodable(String),
+    /// The helper found the game, and what it read out of it.
+    ///
+    /// The answer to a question this side cannot ask: which architecture the game is, and
+    /// which build. Both are needed to pick the right offsets file, and both are only
+    /// knowable from inside a process that has opened the game.
+    Attached {
+        /// Whether the game is the 64-bit build.
+        is_64bit: bool,
+        /// The build number, or `None` when the pattern found nothing.
+        build: Option<i32>,
+    },
 }
 
 /// Why the link could not be established.
@@ -89,6 +100,12 @@ pub struct Offsets<'a> {
     pub for_32bit: &'a [u8],
     /// The bundle for a 64-bit game.
     pub for_64bit: &'a [u8],
+    /// The lookup's `patterns` object, if there is one to send.
+    ///
+    /// What the helper scans the game with to find its build number. `None` is not a
+    /// failure: a lookup without patterns simply cannot be keyed by build, which is where
+    /// every client stood before 2026-08-29, and the `default` entry still applies.
+    pub patterns: Option<&'a [u8]>,
 }
 
 /// The helper, and the conversation with it.
@@ -180,9 +197,22 @@ impl Link {
             _ => return Err(LinkError::NotAGreeting),
         }
 
+        // The patterns first, because the helper scans with them on its very first attach
+        // and an attach can happen on the tick after `StartReading`.
+        if let Some(patterns) = offsets.patterns {
+            transport.send(&CoreMessage::SetBuildPatterns {
+                patterns: patterns.to_vec(),
+            })?;
+        }
+
         // Offsets before the instruction to read, because the helper has nothing to read
         // the game with until they arrive. Both of them: which applies is decided by the
         // process the helper finds, and only the helper can see that.
+        //
+        // These are the *guess* -- the lookup's `default` entry -- and they stay, because
+        // a helper with no bundle for the game's width does not attach at all and would
+        // never get far enough to report a build. What the build changes is the file the
+        // core sends afterwards, through `set_offsets`.
         transport.send(&CoreMessage::SetOffsets {
             is_64bit: false,
             bundle: offsets.for_32bit.to_vec(),
@@ -239,6 +269,9 @@ impl Link {
                     self.lost();
                     return events;
                 }
+                HelperMessage::Attached { is_64bit, build } => {
+                    events.push(Event::Attached { is_64bit, build });
+                }
                 // `Ready` again, or a variant a newer helper knows about. Neither is an
                 // error: the enum is `non_exhaustive` so that this can happen.
                 _ => {}
@@ -256,6 +289,23 @@ impl Link {
             self.lost();
         }
         events
+    }
+
+    /// Sends one architecture's offsets to a helper that is already running.
+    ///
+    /// The second half of keying the store by build. The handshake sends the `default`
+    /// guess for both architectures; once [`Event::Attached`] names the build, the core
+    /// fetches the file that build wants and sends it here.
+    ///
+    /// The helper drops its sampler on every bundle and re-resolves the signatures on the
+    /// next tick, so this replaces what it is reading with rather than adding to it.
+    /// Sending a bundle identical to the one it already has therefore costs a re-attach
+    /// and a full set of pattern scans -- which is why the caller compares first.
+    ///
+    /// Silently does nothing when there is no helper, for the reason `place_overlay` does.
+    #[cfg(windows)]
+    pub fn set_offsets(&mut self, is_64bit: bool, bundle: Vec<u8>) {
+        self.tell(&CoreMessage::SetOffsets { is_64bit, bundle });
     }
 
     /// Puts the overlay where the game is.

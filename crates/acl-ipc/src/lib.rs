@@ -71,6 +71,28 @@ pub enum HelperMessage {
         /// A message for the log, not for a user.
         reason: String,
     },
+    /// The helper has found the game and read its build number.
+    ///
+    /// Sent unprompted, once per successful attach, before the first
+    /// [`HelperMessage::GameState`] of that attach. **This is the half of the offsets
+    /// store that could not exist before:** the store's lookup is keyed by a number
+    /// compiled into `GameAssembly.dll`, and only a process that has opened the game can
+    /// read it. The core answers with a second [`CoreMessage::SetOffsets`] when the build
+    /// turns out to want a different file from the one guessed at start-up.
+    ///
+    /// Volunteered rather than asked for, because the core has no way to know when the
+    /// helper has attached: a request would have to be polled, and every poll is a
+    /// full-module scan of a process that is usually not running.
+    Attached {
+        /// Whether the game is the 64-bit build. The core sends a bundle per architecture
+        /// and only now knows which one is in play.
+        is_64bit: bool,
+        /// The build number, or `None` when the pattern found nothing — an older lookup
+        /// with no pattern at all, or a game this one does not match. The core then keeps
+        /// the `default` entry, which is what every client did before this message
+        /// existed.
+        build: Option<i32>,
+    },
 }
 
 /// What the core asks the elevated helper to do.
@@ -158,6 +180,22 @@ pub enum CoreMessage {
     PresentOverlay,
     /// Exit.
     Shutdown,
+    /// The byte patterns that find the game's build number.
+    ///
+    /// One per architecture, as the `patterns` object of the offsets lookup — opaque here
+    /// for the reason [`CoreMessage::SetOffsets`] is opaque. Sent in the handshake,
+    /// because the scan happens on the first attach and the helper must already hold them
+    /// by then.
+    ///
+    /// **Validated by the core before it is sent.** These bytes come from the offsets
+    /// mirror and are used to scan a running game's memory in an elevated process, which
+    /// makes this the one place a remote file reaches the elevated half. §6 of
+    /// `docs/rust-port/06-security.md` puts the fetching in the core precisely so the
+    /// checking can happen there too.
+    SetBuildPatterns {
+        /// The `patterns` object, as the JSON it is on disk.
+        patterns: Vec<u8>,
+    },
 }
 
 /// The version both sides check on connect.
@@ -165,7 +203,13 @@ pub enum CoreMessage {
 /// An elevated process and an unelevated one are updated together, but not atomically: an
 /// installer that replaces one binary and fails on the other leaves a mismatched pair on
 /// disk. Refusing to talk is better than reading a struct that has changed shape.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// **Raised to 2 on 2026-08-29**, for [`HelperMessage::Attached`] and
+/// [`CoreMessage::SetBuildPatterns`]. Both enums are `#[non_exhaustive]` and the helper
+/// ignores a variant it does not know, so a new core against an old helper would not
+/// crash -- it would simply never learn the build, and never say why. The version is what
+/// turns that into a sentence in the log.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub mod pipe;
 pub mod stream;

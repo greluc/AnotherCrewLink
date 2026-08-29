@@ -238,6 +238,17 @@ fn the_link_reads_a_real_game() {
                     frames += 1;
                     last = Some(state);
                 }
+                // The helper says what it attached to before its first frame. Asserted
+                // rather than tolerated: this is the only test that runs the build scan
+                // against a real game, so it is the only place that can show the pattern
+                // still matches the shipped Among Us.
+                acl_core::link::Event::Attached { is_64bit, build } => {
+                    eprintln!("attached: is_64bit={is_64bit} build={build:?}");
+                    assert!(
+                        build.is_some(),
+                        "the broadcast pattern found no build in a running game; the                          lookup's pattern has gone stale against this Among Us"
+                    );
+                }
                 other => panic!("unexpected: {other:?}"),
             }
         }
@@ -376,7 +387,30 @@ fn wait_for_overlay(mut matches: impl FnMut(windows_sys::Win32::Foundation::RECT
 const OFFSETS: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
     for_32bit: include_bytes!("../../acl-game/assets/offsets-x86.json"),
     for_64bit: include_bytes!("../../acl-game/assets/offsets-x64.json"),
+    // The real lookup's, so the helper does the build scan it does in production. The
+    // test that reads a live game asserts on what comes back.
+    patterns: Some(PATTERNS),
 };
+
+/// The `patterns` object of the shipped lookup.
+///
+/// A copy, because [`OFFSETS`] is a `const` and pulling one field out of a JSON asset is
+/// not something a `const` can do. `the_patterns_here_are_the_shipped_ones` keeps the copy
+/// honest, so a lookup whose patterns change cannot leave a stale duplicate here.
+const PATTERNS: &[u8] = br#"{"x64":{"broadcastVersion":{"sig":"33 D2 B9 ? ? ? ? 48 83 C4 ? E9 ? ? ? ?","patternOffset":3,"addressOffset":0}},"x86":{"broadcastVersion":{"sig":"6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 08 C3","patternOffset":3,"addressOffset":0}}}"#;
+
+#[test]
+fn the_patterns_here_are_the_shipped_ones() {
+    let lookup: serde_json::Value =
+        serde_json::from_str(include_str!("../../acl-game/assets/lookup.json"))
+            .expect("the shipped lookup parses");
+    let mine: serde_json::Value = serde_json::from_slice(PATTERNS).expect("the copy parses");
+    assert_eq!(
+        lookup.get("patterns"),
+        Some(&mine),
+        "the patterns copied into this test have drifted from the shipped lookup"
+    );
+}
 
 /// Runs the exchange on a worker thread and gives up on it.
 ///

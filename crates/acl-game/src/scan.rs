@@ -249,6 +249,39 @@ pub fn resolve_signature(
     Ok(resolved)
 }
 
+/// The four bytes a signature points at, as a number rather than as an address.
+///
+/// [`resolve_signature`] answers *where* something is; this answers *what is written
+/// there*. The game's build is a constant compiled into the version-broadcast call, so
+/// there is nothing to dereference and nothing that would satisfy `module.contains` — the
+/// value is a build number like `50663350`, not a pointer.
+///
+/// `GameReader.ts:528-546` is the same read: `findPattern(..., getLocation = true)`
+/// returns `matchOffset + patternOffset + addressOffset` without dereferencing, and
+/// `readMemory('int', modBaseAddr, that)` reads a signed 32-bit little-endian value at it.
+///
+/// # Errors
+///
+/// Returns [`ReadError`] when the offsets walk out of the address space or the memory
+/// cannot be read.
+pub fn read_immediate(
+    memory: &dyn ProcessMemory,
+    matched_at: u64,
+    pattern_offset: i64,
+    address_offset: i64,
+) -> Result<i32, ReadError> {
+    let at = matched_at
+        .checked_add_signed(pattern_offset)
+        .and_then(|at| at.checked_add_signed(address_offset))
+        .ok_or(ReadError::Chain {
+            step: 0,
+            reason: "the offsets move past the address space",
+        })?;
+    let mut immediate = [0u8; 4];
+    memory.read_exact(at, &mut immediate)?;
+    Ok(i32::from_le_bytes(immediate))
+}
+
 /// A .NET `List<T>` or array, as Unity lays it out.
 ///
 /// Both are a header, a pointer to a buffer, and a count. The buffer's elements start
@@ -341,6 +374,40 @@ mod tests {
         assert_eq!(pattern.len(), 8);
         assert!(pattern.matches_at(&[0x48, 0x8b, 0x05, 9, 9, 9, 9, 0x48]));
         assert!(!pattern.matches_at(&[0x48, 0x8b, 0x06, 9, 9, 9, 9, 0x48]));
+    }
+
+    #[test]
+    fn reads_the_build_number_the_game_broadcasts() {
+        // The real x64 pattern, over the instructions it was written for:
+        // `xor edx,edx` / `mov ecx, 50663350` / `add rsp,0x28` / `jmp rel32`. The build is
+        // the immediate at offset three, and the point is that it is *not* dereferenced --
+        // 50663350 is a number, not an address, and nothing in the module contains it.
+        let mut bytes = vec![0u8; 0x1000];
+        let code = [
+            0x33, 0xD2, // xor edx, edx
+            0xB9, // mov ecx, imm32
+        ];
+        bytes[0x100..0x100 + code.len()].copy_from_slice(&code);
+        bytes[0x103..0x107].copy_from_slice(&50_663_350_i32.to_le_bytes());
+        bytes[0x107..0x10b].copy_from_slice(&[0x48, 0x83, 0xC4, 0x28]);
+        bytes[0x10b..0x110].copy_from_slice(&[0xE9, 0, 0, 0, 0]);
+
+        let process = SparseProcess::new(true).with_region(0x1000_0000, bytes);
+        let pattern = Pattern::parse("33 D2 B9 ? ? ? ? 48 83 C4 ? E9 ? ? ? ?").unwrap();
+        let matched = find_pattern(&process, &module(), &pattern, 0)
+            .unwrap()
+            .expect("the pattern is in the region");
+        assert_eq!(matched, 0x1000_0100);
+        assert_eq!(read_immediate(&process, matched, 3, 0).unwrap(), 50_663_350);
+    }
+
+    #[test]
+    fn an_immediate_outside_the_region_is_an_error_rather_than_a_number() {
+        // A pattern that matches at the very end of a module has no four bytes to read,
+        // and the build must then be unknown rather than whatever follows in memory.
+        let process = SparseProcess::new(true).with_region(0x1000_0000, vec![0u8; 0x10]);
+        assert!(read_immediate(&process, 0x1000_000e, 3, 0).is_err());
+        assert!(read_immediate(&process, u64::MAX, 3, 0).is_err());
     }
 
     #[test]

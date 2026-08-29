@@ -235,12 +235,33 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>, cache: &std::path::
     // helper they already asked for is resuming what they asked for.
     let mut restart_due: Option<std::time::Instant> = None;
     let mut wanted = false;
+    // Which offsets file the helper is reading with, so a build that wants the same one
+    // costs nothing. A second `SetOffsets` makes the helper drop its sampler and resolve
+    // every signature again, which is a full set of pattern scans -- worth it for a
+    // different build, wasted for the same one.
+    #[cfg(windows)]
+    let mut sent_file: Option<String> = None;
+    // Where a build-keyed fetch lands. It runs on a thread of its own because it is HTTP
+    // with a timeout, and this thread is the one draining game state.
+    #[cfg(windows)]
+    let (found_offsets, offsets_arriving) = std::sync::mpsc::channel::<(bool, String, Vec<u8>)>();
     loop {
+        #[cfg(windows)]
+        while let Ok((is_64bit, file, bundle)) = offsets_arriving.try_recv() {
+            sent_file = Some(file);
+            link.set_offsets(is_64bit, bundle);
+        }
+
         match orders.recv_timeout(TICK) {
             Ok(Command::Start) => {
                 wanted = true;
                 restart_due = None;
-                start(&mut link, reports, cache);
+                #[cfg(windows)]
+                {
+                    sent_file = start(&mut link, reports, cache);
+                }
+                #[cfg(not(windows))]
+                let _ = start(&mut link, reports, cache);
             }
             Ok(Command::Stop) => {
                 // Asked for, so it stays down. The restart below is for a helper that went
@@ -293,6 +314,35 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>, cache: &std::path::
                 // One frame that would not decode is not worth interrupting somebody
                 // about, and the link has already decided it is not fatal.
                 Event::Undecodable(_) => {}
+                Event::Attached { is_64bit, build } => {
+                    // The moment the guess can be checked. Everything before this ran on
+                    // what the mirror calls the current build; this is the game saying
+                    // which build it actually is.
+                    let Some(build) = build else {
+                        acl_core::log_info!(
+                            "reader",
+                            "the helper found the game but not its build; keeping the                              offsets it was given"
+                        );
+                        continue;
+                    };
+                    let cache = cache.to_path_buf();
+                    let already = sent_file.clone();
+                    let found_offsets = found_offsets.clone();
+                    // Detached on purpose. If it finishes after the helper has gone, the
+                    // send finds a receiver that is still there -- the loop owns it -- and
+                    // the bundle is handed to whatever helper is running then, which will
+                    // report its own build and correct it if that was wrong.
+                    std::thread::Builder::new()
+                        .name("offsets".to_owned())
+                        .spawn(move || {
+                            if let Some((file, bundle)) =
+                                refetch_for_build(&cache, build, already.as_deref(), is_64bit)
+                            {
+                                let _ = found_offsets.send((is_64bit, file, bundle));
+                            }
+                        })
+                        .ok();
+                }
             }
         }
 
@@ -305,7 +355,7 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>, cache: &std::path::
                 Some(due) if std::time::Instant::now() >= due => {
                     restart_due = None;
                     acl_core::log_info!("reader", "the helper is gone; starting another");
-                    start(&mut link, reports, cache);
+                    sent_file = start(&mut link, reports, cache);
                 }
                 Some(_) => {}
             }
@@ -320,7 +370,7 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>, cache: &std::path::
 /// is not here yet — nothing has asked the helper to read a game it could not — so this
 /// tries the first and reports what happened.
 #[cfg(windows)]
-fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) {
+fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) -> Option<String> {
     let _ = reports.send(Report::State(HelperState::Starting));
     let executable = match acl_core::launch::helper_beside_this_one() {
         Ok(path) => path,
@@ -329,7 +379,7 @@ fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) {
                 "could not work out where the helper is: {error}"
             )));
             let _ = reports.send(Report::State(HelperState::Lost));
-            return;
+            return None;
         }
     };
     if !acl_core::launch::is_plausible_helper(&executable) {
@@ -338,16 +388,17 @@ fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) {
             executable.display()
         )));
         let _ = reports.send(Report::State(HelperState::Lost));
-        return;
+        return None;
     }
 
     // Fetched here rather than held in a constant, and on this thread: it is two HTTP
     // requests with a timeout, and the thread it blocks is the reader's own, which has
     // nothing else to do until the helper is up.
-    let (for_32bit, for_64bit) = offsets_for_the_helper(reports, cache);
+    let guessed = offsets_for_the_helper(reports, cache);
     let offsets = acl_core::link::Offsets {
-        for_32bit: &for_32bit,
-        for_64bit: &for_64bit,
+        for_32bit: &guessed.for_32bit,
+        for_64bit: &guessed.for_64bit,
+        patterns: guessed.patterns.as_deref(),
     };
     match link.start(&executable, Elevation::AsIs, offsets) {
         Ok(()) => {}
@@ -356,13 +407,15 @@ fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) {
         }
     }
     let _ = reports.send(Report::State(link.state()));
+    guessed.file
 }
 
 #[cfg(not(windows))]
-fn start(_link: &mut Link, reports: &Sender<Report>, _cache: &std::path::Path) {
+fn start(_link: &mut Link, reports: &Sender<Report>, _cache: &std::path::Path) -> Option<String> {
     let _ = reports.send(Report::Trouble(
         "the game reader is a Windows binary and there is no other implementation".to_owned(),
     ));
+    None
 }
 
 /// The compiled-in floor, both architectures of it.
@@ -374,7 +427,25 @@ fn start(_link: &mut Link, reports: &Sender<Report>, _cache: &std::path::Path) {
 const FLOOR: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
     for_32bit: include_bytes!("../../acl-game/assets/offsets-x86.json"),
     for_64bit: include_bytes!("../../acl-game/assets/offsets-x64.json"),
+    // The floor's own lookup carries patterns, but the floor is what is left when the
+    // lookup could not be read at all -- and a build number is no use without the version
+    // table that turns it into a file.
+    patterns: None,
 };
+
+/// What the first round produced, and what a second round would have to beat.
+#[cfg(windows)]
+struct Guess {
+    /// The 32-bit bundle that went across.
+    for_32bit: Vec<u8>,
+    /// The 64-bit one.
+    for_64bit: Vec<u8>,
+    /// The lookup's `patterns` object, for the helper's build scan.
+    patterns: Option<Vec<u8>>,
+    /// Which offsets file these came from, so a build that wants the same one costs
+    /// nothing. `None` when the lookup could not be read and this is the floor.
+    file: Option<String>,
+}
 
 /// The offsets to give the helper: the mirror's, the cache's, or the floor's.
 ///
@@ -387,24 +458,28 @@ const FLOOR: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
 ///
 /// HTTP on this side of the pipe, which is §6: no HTTP client in the elevated process.
 ///
-/// # What this does not do yet
+/// # This is the guess, not the answer
 ///
-/// The lookup is keyed by the build hash the game broadcasts, and only the helper can read
-/// that -- it is in the game's memory. Asking it would need a round trip the pipe protocol
-/// does not have: offsets are sent once, at start, before the helper has attached to
-/// anything. So this takes the lookup's `default` entry, which is what the mirror says the
-/// current build is.
+/// The lookup is keyed by a build number compiled into `GameAssembly.dll`, and only a
+/// process that has opened the game can read it. So this takes the `default` entry -- what
+/// the mirror says the current build is -- and sends the lookup's byte patterns along with
+/// it. The helper scans with them on its first attach and reports what it found; if that
+/// build wants a different file, [`refetch_for_build`] fetches it and the core sends a
+/// second `SetOffsets`.
 ///
-/// That is right for the case the store exists for -- the game updated, the mirror
-/// published, this client did not change -- and no worse than the floor for anybody else,
-/// because the floor is one specific build too. Reading the broadcast hash needs a
-/// `GetBuild` message and a second `SetOffsets`, and is a protocol change rather than a
-/// wiring one.
+/// The guess still has to be sent, and sent for both architectures: a helper with no
+/// bundle for the game's width does not attach at all, and would never get far enough to
+/// read a build.
 #[cfg(windows)]
-fn offsets_for_the_helper(reports: &Sender<Report>, cache: &std::path::Path) -> (Vec<u8>, Vec<u8>) {
+fn offsets_for_the_helper(reports: &Sender<Report>, cache: &std::path::Path) -> Guess {
     use acl_game::store::{HttpFetcher, OffsetStore};
 
-    let floor = || (FLOOR.for_32bit.to_vec(), FLOOR.for_64bit.to_vec());
+    let floor = || Guess {
+        for_32bit: FLOOR.for_32bit.to_vec(),
+        for_64bit: FLOOR.for_64bit.to_vec(),
+        patterns: None,
+        file: None,
+    };
     let store = OffsetStore::new(cache, env!("CARGO_PKG_VERSION"));
     let fetcher = HttpFetcher;
 
@@ -460,5 +535,70 @@ fn offsets_for_the_helper(reports: &Sender<Report>, cache: &std::path::Path) -> 
             }
         }
     };
-    (one(false, FLOOR.for_32bit), one(true, FLOOR.for_64bit))
+    Guess {
+        for_32bit: one(false, FLOOR.for_32bit),
+        for_64bit: one(true, FLOOR.for_64bit),
+        // Validated before it left the store -- `Lookup::validate` checks the broadcast
+        // pattern on the same footing as the offsets themselves, because this is the one
+        // thing a remote file contributes to what the elevated helper does.
+        patterns: serde_json::to_vec(&lookup.patterns).ok(),
+        file: Some(entry.file.clone()),
+    }
+}
+
+/// The offsets for a build the helper has just reported, if they differ from the guess.
+///
+/// Runs on a thread of its own: it is two HTTP requests with a timeout, and the reader's
+/// own thread is the one draining game state from the helper. Blocking it here would stop
+/// proximity for as long as the mirror takes to answer, which on an unreachable mirror is
+/// the full timeout.
+///
+/// Returns nothing when the build is the one already sent, when the lookup does not
+/// describe it, or when the file cannot be had. **The last is deliberate.** The store
+/// refuses to serve the compiled-in floor for a build it does not describe, and falling
+/// back to it here would be the one thing that refusal exists to prevent: offsets for a
+/// different game. The helper keeps reading with the guess, which is at least a bundle
+/// somebody published for *some* build, and says so in the log.
+#[cfg(windows)]
+fn refetch_for_build(
+    cache: &std::path::Path,
+    build: i32,
+    already_sent: Option<&str>,
+    is_64bit: bool,
+) -> Option<(String, Vec<u8>)> {
+    use acl_game::store::{HttpFetcher, OffsetStore};
+
+    let store = OffsetStore::new(cache, env!("CARGO_PKG_VERSION"));
+    let fetcher = HttpFetcher;
+    let lookup = store.load_lookup(&fetcher).ok()?.value;
+
+    let key = build.to_string();
+    // `entry_for` falls back to `default` for a build it does not know, which is what
+    // makes an unrecognised build cost nothing rather than fail.
+    let entry = lookup.entry_for(&key)?;
+    if already_sent == Some(entry.file.as_str()) {
+        return None;
+    }
+
+    match store.load_offsets(&fetcher, is_64bit, &entry.file) {
+        Ok(loaded) => {
+            let bundle = serde_json::to_vec(&loaded.value).ok()?;
+            acl_core::log_info!(
+                "reader",
+                "the game reports build {key}; switching to {} from the {:?}",
+                entry.file,
+                loaded.source
+            );
+            Some((entry.file.clone(), bundle))
+        }
+        Err(error) => {
+            acl_core::log_warn!(
+                "reader",
+                "the game reports build {key}, which wants {}, and it could not be had: \
+                 {error}; keeping what the helper has",
+                entry.file
+            );
+            None
+        }
+    }
 }

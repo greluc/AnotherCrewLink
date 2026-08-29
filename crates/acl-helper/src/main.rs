@@ -279,6 +279,10 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
     // rather than being a reason to stop reading the game.
     let overlay = acl_helper::overlay::start().ok();
     let mut offsets = Bundles::default();
+    // The `patterns` object of the offsets lookup, when the core has one to send. Held
+    // rather than folded into `Bundles` because it is not a bundle: it is what finds out
+    // *which* bundle the game wants, and it arrives once for both architectures.
+    let mut patterns: Option<serde_json::Value> = None;
     let mut sampler: Option<Sampler> = None;
     let mut reading = false;
     // Gathered so the loop below stays one screen. Each is a piece of what the helper
@@ -333,6 +337,16 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
                             );
                             return Ok(());
                         }
+                    }
+                }
+                CoreMessage::SetBuildPatterns { patterns: bytes } => {
+                    // A malformed patterns object is not worth stopping for: without it
+                    // the build is simply unknown, which is where every helper stood
+                    // before this message existed, and the core's `default` bundle still
+                    // reads the game.
+                    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        Ok(parsed) => patterns = Some(parsed),
+                        Err(_) => patterns = None,
                     }
                 }
                 CoreMessage::StartReading => reading = true,
@@ -400,6 +414,7 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
             sample_once(
                 transport,
                 &offsets,
+                patterns.as_ref(),
                 &mut sampler,
                 &mut next_attempt,
                 &mut said_denied,
@@ -445,13 +460,14 @@ impl Bundles {
 fn sample_once(
     transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>,
     offsets: &Bundles,
+    patterns: Option<&serde_json::Value>,
     sampler: &mut Option<Sampler>,
     next_attempt: &mut Instant,
     said_denied: &mut bool,
 ) -> Result<(), Fatal> {
     if sampler.is_none() {
         let mut denied = false;
-        let Some(attached) = Sampler::attach(offsets, &mut denied) else {
+        let Some(attached) = Sampler::attach(offsets, patterns, &mut denied) else {
             if denied && !*said_denied {
                 // Once per helper, because the retry runs every seven and a half seconds
                 // and this is a sentence for a person to read rather than a log to page
@@ -468,6 +484,12 @@ fn sample_once(
             return Ok(());
         };
         *said_denied = false;
+        // Before the first frame of this attach, so the core can answer with the bundle
+        // this build actually wants before anything is read through the guess.
+        transport.send(&HelperMessage::Attached {
+            is_64bit: attached.is_64bit,
+            build: attached.build,
+        })?;
         *sampler = Some(attached);
     }
     let Some(active) = sampler.as_mut() else {
@@ -523,6 +545,33 @@ struct Sampler {
     process: acl_game::windows::WindowsProcess,
     resolved: Offsets,
     context: ReadContext,
+    /// The width of the game this attached to, which the core cannot see.
+    is_64bit: bool,
+    /// The build it broadcasts, when the pattern found one.
+    build: Option<i32>,
+}
+
+/// The build number the game broadcasts, or `None` if it could not be read.
+///
+/// Never fatal. A pattern that does not match is a lookup that predates this build, and a
+/// read that fails is a game that closed between the module lookup and here -- in both
+/// cases the core keeps the `default` entry it already sent, which is exactly what every
+/// client did before the build could be read at all.
+#[cfg(windows)]
+fn read_build(
+    process: &acl_game::windows::WindowsProcess,
+    module: &acl_game::Module,
+    signature: &acl_game::offsets::SignatureEntry,
+) -> Option<i32> {
+    let pattern = acl_game::scan::Pattern::parse(signature.sig.as_deref()?).ok()?;
+    let matched = acl_game::scan::find_pattern(process, module, &pattern, 0).ok()??;
+    acl_game::scan::read_immediate(
+        process,
+        matched,
+        signature.pattern_offset.unwrap_or(0),
+        signature.address_offset.unwrap_or(0),
+    )
+    .ok()
 }
 
 #[cfg(windows)]
@@ -537,7 +586,11 @@ impl Sampler {
     ///
     /// `denied` is set when that happens, so `sample_once` can say so once rather than on
     /// every retry.
-    fn attach(offsets: &Bundles, denied: &mut bool) -> Option<Self> {
+    fn attach(
+        offsets: &Bundles,
+        patterns: Option<&serde_json::Value>,
+        denied: &mut bool,
+    ) -> Option<Self> {
         use acl_game::ProcessMemory;
 
         let process = match acl_game::windows::WindowsProcess::open_by_name(GAME_EXECUTABLE) {
@@ -556,13 +609,26 @@ impl Sampler {
         // The bundle is chosen here, where the game's width is known. Choosing on the
         // other side of the pipe would be guessing, and a wrong guess resolves every
         // pointer chain to nothing -- which reads as a game that is not running.
-        let bundle = offsets.pick(process.is_64bit())?;
+        let is_64bit = process.is_64bit();
+        let bundle = offsets.pick(is_64bit)?;
+
+        // Before the offsets are resolved, and independent of whether they resolve. The
+        // build number is an immediate compiled into the version-broadcast call, so it
+        // needs nothing from the bundle -- which is the whole point: the core cannot know
+        // which bundle to send until this has been read.
+        let build = patterns
+            .as_ref()
+            .and_then(|patterns| acl_game::offsets::broadcast_pattern_in(patterns, is_64bit))
+            .and_then(|signature| read_build(&process, &module, &signature));
+
         let resolved = resolve_offsets(&process, &module, bundle).ok()?.offsets;
         let context = ReadContext::new(module.base, acl_game::mods::Mod::None);
         Some(Self {
             process,
             resolved,
             context,
+            is_64bit,
+            build,
         })
     }
 
