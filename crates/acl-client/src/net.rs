@@ -107,6 +107,11 @@ pub(crate) enum Report {
     /// Boxed because [`Event`] is large and this is a channel of them; an unboxed variant
     /// makes every message the size of the largest one.
     Event(Box<Event>),
+    /// What the worst-off peer says it is losing, as a percentage.
+    ///
+    /// From the RTCP receiver reports, once a second. It decides how much redundancy the
+    /// Opus encoder carries -- see `PeerSet::worst_loss`.
+    Loss(f32),
     /// A peer was heard from.
     ///
     /// The *name*, not the packet. Audio goes straight from the signalling worker to the
@@ -142,6 +147,13 @@ pub(crate) enum State {
 
 /// The session, as the window holds it.
 pub(crate) struct Link {
+    /// Decides how much redundancy the encoder should carry, from what peers report.
+    ///
+    /// Here rather than on the worker because it is a decision and the worker's job is
+    /// measurement -- and because `Link` is what the window asks for the answer.
+    fec: acl_audio::fec::FecController,
+    /// The last percentage the controller settled on, waiting to be applied.
+    loss: Option<u8>,
     /// Where the worker delivers arriving audio.
     ///
     /// Behind a lock because it is replaced whenever the audio pipeline is rebuilt, and
@@ -276,6 +288,8 @@ impl Link {
             // stays idle.
             .ok();
         let link = Self {
+            fec: acl_audio::fec::FecController::new(),
+            loss: None,
             commands,
             to_mixer,
             force_relay,
@@ -305,6 +319,14 @@ impl Link {
             *held = sender;
         }
         packets
+    }
+
+    /// A new redundancy percentage for the encoder, if the controller has settled on one.
+    ///
+    /// Taken rather than read: it is applied once, and asking again on the next frame would
+    /// reconfigure an encoder that is already right.
+    pub(crate) fn take_loss(&mut self) -> Option<u8> {
+        self.loss.take()
     }
 
     /// Where the microphone sends what it has encoded.
@@ -348,6 +370,18 @@ impl Link {
                     self.state = state;
                 }
                 Report::Event(event) => self.absorb(*event),
+                Report::Loss(percent) => {
+                    // Straight to the controller and on to the encoder. The controller has
+                    // the smoothing and the dead band, so this is a report and not a
+                    // decision.
+                    if let Some(applied) = self.fec.observe_percent(percent) {
+                        acl_core::log_info!(
+                            "audio",
+                            "peers report {percent:.1}% loss; carrying {applied}% redundancy"
+                        );
+                        self.loss = Some(applied);
+                    }
+                }
                 Report::Speaking(socket_id) => {
                     // A moment rather than a level. The window redraws five times a second
                     // and audio arrives fifty times a second, so what it needs is "recently"
@@ -730,6 +764,8 @@ fn run(
     };
 
     let mut held = Held::default();
+    // When the peers were last asked what they are losing. See the call below.
+    let mut measured = std::time::Instant::now();
     loop {
         // Without a session there is nothing to await, so the command channel is blocked
         // on. With one, everything waiting is taken before the session is attended to.
@@ -833,6 +869,18 @@ fn run(
                     to_mixer,
                     answers,
                 ));
+                // Once a second, which is roughly how often RTCP receiver reports arrive
+                // and far less often than this loop runs. `get_stats` walks every
+                // connection's accumulators, so it is not a per-round question.
+                if measured.elapsed() >= std::time::Duration::from_secs(1) {
+                    measured = std::time::Instant::now();
+                    if let Some(mesh) = held.mesh.as_ref()
+                        && let Some(loss) = runtime.block_on(mesh.worst_loss())
+                        && answers.send(Report::Loss(loss)).is_err()
+                    {
+                        return;
+                    }
+                }
                 // Every round, because a repair is decided by elapsed time rather than by
                 // an event: a link that has been quiet for four seconds has to be noticed
                 // by something that looks, and a rebuild scheduled for two seconds hence

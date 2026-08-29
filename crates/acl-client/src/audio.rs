@@ -179,6 +179,18 @@ pub(crate) struct Tuning {
     /// lobby. Twenty milliseconds is the smallest that error can be, and this makes it
     /// that.
     transmitting: std::sync::atomic::AtomicBool,
+    /// What the far ends say they are losing, as a percentage the encoder is told.
+    ///
+    /// `Encoder::new` switches Opus's in-band FEC on and sets the loss percentage to zero,
+    /// and libopus spends bits on redundancy in proportion to that number -- so the switch
+    /// was on and emitted nothing, while the receive side dutifully called `decode_lost`
+    /// looking for a redundancy that was never there. `FecController` decided what to send
+    /// and had no caller either.
+    ///
+    /// Read by the capture callback when it changes, which is a few times a minute at
+    /// most: the controller has a dead band precisely so the encoder is not reconfigured
+    /// on every report.
+    packet_loss: std::sync::atomic::AtomicU8,
 }
 
 impl Default for Tuning {
@@ -192,6 +204,7 @@ impl Default for Tuning {
             // switches were still being read would send the first frames of every session
             // from a muted microphone.
             transmitting: std::sync::atomic::AtomicBool::new(false),
+            packet_loss: std::sync::atomic::AtomicU8::new(0),
         }
     }
 }
@@ -214,6 +227,24 @@ impl Tuning {
     pub(crate) fn transmit(&self, on: bool) {
         self.transmitting
             .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tells the encoder how much loss to protect against.
+    ///
+    /// A percentage, from the RTCP receiver reports the far ends send back. Applied by the
+    /// capture callback on the next frame.
+    pub(crate) fn protect_against(&self, percent: u8) {
+        self.packet_loss
+            .store(percent, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The loss percentage, if it has changed since `applied`.
+    fn loss_if_moved(&self, applied: &mut u8) -> Option<u8> {
+        let wanted = self.packet_loss.load(std::sync::atomic::Ordering::Relaxed);
+        (wanted != *applied).then(|| {
+            *applied = wanted;
+            wanted
+        })
     }
 
     /// Whether the capture callback should be handing frames over.
@@ -498,6 +529,11 @@ impl Audio {
             last = Some(speaking);
         }
         last
+    }
+
+    /// Tells the encoder how much loss to protect against.
+    pub(crate) fn protect_against(&self, percent: u8) {
+        self.tuning.protect_against(percent);
     }
 
     /// Replaces what every peer sounds like.
@@ -893,6 +929,8 @@ fn open_microphone(
     let tuning = Arc::clone(tuning);
     // What generation of the sensitivity setting the detector was last built for.
     let mut tuned_for = 0_u64;
+    // What the encoder was last told about loss, so it is reconfigured only on a change.
+    let mut protecting = 0_u8;
     let detecting = capture.voice_detection;
     let voice = voice.clone();
     let sink = sink.clone();
@@ -1007,6 +1045,13 @@ fn open_microphone(
                         for sample in &mut frame {
                             *sample = (*sample * gain).clamp(-1.0, 1.0);
                         }
+                    }
+
+                    // How much redundancy to carry, from what the far ends report losing.
+                    // Set here rather than at the report, because `set_packet_loss` touches
+                    // the encoder and the encoder belongs to this callback.
+                    if let Some(percent) = tuning.loss_if_moved(&mut protecting) {
+                        let _ = opus.set_packet_loss(percent);
                     }
 
                     // The gate, on the frame it applies to. Everything above it still

@@ -3173,6 +3173,13 @@ impl Client {
                 self.link.say_speaking(false);
             }
         }
+        // How much redundancy the encoder should carry, from what the far ends report
+        // losing. `Encoder::new` switches Opus's in-band FEC on and libopus emits nothing
+        // until it is told a loss percentage, so this is what makes the whole recovery
+        // path -- the `decode_lost` the receive side has always called -- real.
+        if let Some(percent) = self.link.take_loss() {
+            self.audio.protect_against(percent);
+        }
         if let Some(speaking) = self.audio.take_voice_activity() {
             self.local_talking = speaking;
             // A `false` always goes out -- somebody who stops talking has stopped talking

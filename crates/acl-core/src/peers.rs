@@ -683,6 +683,46 @@ impl PeerSet {
         acl_net::ice::has_relay(&self.config.ice_servers)
     }
 
+    /// The worst packet loss any peer reports back, as a percentage.
+    ///
+    /// From the RTCP receiver reports, which is the only place this end can learn what the
+    /// *other* ends are missing -- and it is what decides how much redundancy the encoder
+    /// should spend. `Encoder::new` switches Opus's in-band FEC on and then sets the loss
+    /// percentage to zero; libopus spends bits on redundancy in proportion to that number,
+    /// so until 2026-08-29 the switch was on and emitted nothing. The receive side has
+    /// always called `decode_lost`, looking for a redundancy the send side never put in.
+    ///
+    /// The worst rather than the mean, because there is one encoder for the whole lobby:
+    /// the frames that reach the player on the bad connection are the same frames everybody
+    /// else gets, so the protection has to suit the worst of them.
+    ///
+    /// `None` when nothing has reported yet, which is the first few seconds of a call --
+    /// receiver reports arrive about once a second.
+    pub async fn worst_loss(&self) -> Option<f32> {
+        use webrtc::peer_connection::{RTCStatsReportEntry, StatsSelector};
+
+        let now = std::time::Instant::now();
+        let mut worst: Option<f32> = None;
+        for peer in self.peers.values() {
+            let report = peer.connection.get_stats(now, StatsSelector::None).await;
+            for entry in report.iter() {
+                if let RTCStatsReportEntry::RemoteInboundRtp(stats) = entry {
+                    // The field is a fraction from nought to one; the controller works in
+                    // percent, and so does libopus.
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "a fraction between nought and one, times a hundred"
+                    )]
+                    let percent = (stats.fraction_lost * 100.0) as f32;
+                    if percent.is_finite() {
+                        worst = Some(worst.map_or(percent, |held: f32| held.max(percent)));
+                    }
+                }
+            }
+        }
+        worst
+    }
+
     /// Tears down everything.
     pub async fn close_all(&mut self) {
         let peers: Vec<String> = self.peers.keys().cloned().collect();
