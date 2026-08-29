@@ -981,16 +981,60 @@ fn open_microphone(
     };
     let mut reference_at_48k: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
     let mut packet = Vec::new();
+    // The callback's own buffer, sized once for a generous block. `clear` keeps the
+    // capacity, so the downmix never allocates -- and the `break` above keeps it from
+    // being grown by a device that hands over more than this.
+    let mut mono: Vec<f32> = Vec::with_capacity(
+        usize::try_from(config.sample_rate).unwrap_or(48_000) / 10 + FRAME_SAMPLES,
+    );
 
+    // Between the callback and the thread that is allowed to think.
+    //
+    // §3.2 rule 1: the audio callback never allocates, never locks, never logs. Everything
+    // below the downmix used to run *inside* `build_input_stream`'s callback -- the echo
+    // canceller, a 1024-point transform, the voice detector and the Opus encoder, with four
+    // `Vec` allocations per twenty-millisecond frame. `acl_audio::ring::Ring` was written
+    // as this exact seam, documented as this exact seam, and had no caller: gate G2's
+    // fourth criterion held for every component in `acl-audio` and not for the one place
+    // they are assembled.
+    //
+    // Half a second of the device's own samples. Big enough that a worker delayed by a
+    // scheduling hiccup loses nothing, small enough that a worker which has stopped does
+    // not hold half a minute of stale speech.
+    let ring_capacity = usize::try_from(config.sample_rate).unwrap_or(48_000) / 2;
+    let captured = Arc::new(Mutex::new(
+        acl_audio::ring::Ring::new(ring_capacity.max(FRAME_SAMPLES * 4))
+            .map_err(|error| format!("the capture ring refused {ring_capacity}: {error}"))?,
+    ));
+
+    // One frame at the device's rate, which is what the worker reads and the resampler
+    // takes. At 48 kHz it is `FRAME_SAMPLES`; at 16 kHz it is a third of that, and the
+    // resampler turns each into exactly one 20 ms frame.
+    let device_frame = usize::try_from(
+        u64::from(config.sample_rate) * u64::from(acl_audio::codec::FRAME_MS) / 1000,
+    )
+    .unwrap_or(FRAME_SAMPLES)
+    .max(1);
+
+    let filling = Arc::clone(&captured);
     let stream = input
         .build_input_stream(
             config,
             move |buffer: &[f32], _: &_| {
-                // Down to mono here rather than later: the encoder is mono, and carrying
-                // two channels as far as the encoder only to average them there is twice
-                // the memory for the same answer.
-                let mut mono: Vec<f32> = Vec::with_capacity(buffer.len());
+                // Everything this callback does, and deliberately: a downmix into a buffer
+                // it already owns, and a write into a ring that never allocates.
+                //
+                // Down to mono here rather than on the worker because the encoder is mono
+                // and carrying two channels across the seam is twice the memory for the
+                // same answer.
+                mono.clear();
                 for frame in buffer.chunks(channels) {
+                    if mono.len() == mono.capacity() {
+                        // A device handing over more than the buffer was sized for. The
+                        // rest is dropped rather than grown into: growing is an allocation,
+                        // and this is the one place that must not make one.
+                        break;
+                    }
                     let sum: f32 = frame.iter().sum();
                     #[expect(
                         clippy::cast_precision_loss,
@@ -998,15 +1042,59 @@ fn open_microphone(
                     )]
                     mono.push(sum / channels as f32);
                 }
+                // Tried, not waited on. The only other holder is the worker, and it holds
+                // it for a copy; a lost race drops one block, which the ring counts.
+                if let Ok(mut ring) = filling.try_lock() {
+                    ring.write(&mono);
+                }
+            },
+            // Printed rather than swallowed. Measured on a real machine: exactly one
+            // underrun, at start-up, and none in the twenty seconds after -- the first
+            // callback pays for the encoder's and the canceller's warm-up while the device
+            // is already running. Worth knowing about, and worth not mistaking for the
+            // recurring kind, which would sound like a stutter rather than like nothing.
+            |error| acl_core::log_warn!("audio", "input stream: {error}"),
+            None,
+        )
+        .map_err(|error| format!("the microphone could not be opened: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("the microphone would not start: {error}"))?;
 
+    // The thread that is allowed to think. Everything the callback used to do is here, in
+    // the same order, against the same state -- what changed is which thread it happens on.
+    std::thread::Builder::new()
+        .name("capture".to_owned())
+        .spawn(move || {
+            let mut from_device = vec![0.0_f32; device_frame];
+            loop {
+                // `read_frame`, not `read`: it takes a whole frame or nothing, where
+                // `read` consumes whatever is there and a short answer would throw those
+                // samples away. Its own doc calls this "what the worker wants", and until
+                // 2026-08-29 there was no worker to want it.
+                let whole = match captured.lock() {
+                    Ok(mut ring) => ring.read_frame(&mut from_device),
+                    // The stream is gone, which is a client on its way out.
+                    Err(_) => return,
+                };
+                if !whole {
+                    // Nothing whole to work on. A quarter of a frame, so a worker that has
+                    // just missed one is only ever five milliseconds behind it -- and this
+                    // is the only sleep on the send path.
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        u64::from(acl_audio::codec::FRAME_MS) / 4,
+                    ));
+                    continue;
+                }
+                let mono = &from_device;
                 match rates.as_mut() {
                     Some(rates) => {
                         converted.clear();
-                        if rates.push(&mono, &mut converted).is_ok() {
+                        if rates.push(mono, &mut converted).is_ok() {
                             pending.extend_from_slice(&converted);
                         }
                     }
-                    None => pending.extend_from_slice(&mono),
+                    None => pending.extend_from_slice(mono),
                 }
 
                 while pending.len() >= FRAME_SAMPLES {
@@ -1139,19 +1227,10 @@ fn open_microphone(
                         return;
                     }
                 }
-            },
-            // Printed rather than swallowed. Measured on a real machine: exactly one
-            // underrun, at start-up, and none in the twenty seconds after -- the first
-            // callback pays for the encoder's and the canceller's warm-up while the device
-            // is already running. Worth knowing about, and worth not mistaking for the
-            // recurring kind, which would sound like a stutter rather than like nothing.
-            |error| acl_core::log_warn!("audio", "input stream: {error}"),
-            None,
-        )
-        .map_err(|error| format!("the microphone could not be opened: {error}"))?;
-    stream
-        .play()
-        .map_err(|error| format!("the microphone would not start: {error}"))?;
+            }
+        })
+        .map_err(|error| format!("the capture worker could not be started: {error}"))?;
+
     Ok(Box::new(stream))
 }
 
