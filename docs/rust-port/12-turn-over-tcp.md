@@ -135,10 +135,32 @@ a stream whose boundary is lost is a stream to close, not one to keep reading.
   a length-prefixed packet to a TURN server, and a TURN write landing on an ICE-TCP stream
   would send an Allocate to a peer. Both are accepted by the socket and understood by
   nobody. The fallback now skips TURN streams.
-- **Nagle off.** Every stream this transport opens carries real-time media or the
-  signalling for it, in packets far below the MSS. Nagle holds such a write until the
+- **Nagle off.** Every stream this transport opens or accepts carries real-time media or
+  the signalling for it, in packets far below the MSS. Nagle holds such a write until the
   previous segment is acknowledged — up to a frame of added latency on every packet, and
-  jitter of the same size. Two lines, and it helps ICE-TCP as much as it helps TURN.
+  jitter of the same size. Both the connect and the accept path, because an accepted stream
+  is the passive half of ICE-TCP and carries exactly the same traffic; setting it on only
+  one would have added the latency in one direction.
+- **The four-tuple carries no protocol.** `FourTuple` is an address pair, and that is what
+  the relayer keys its clients by, what a read off a stream is tagged with, and what a write
+  failure names. A TCP connection whose ephemeral source port happens to equal a bound UDP
+  socket's port therefore produces *the same key* as the UDP client on that socket — the two
+  become indistinguishable, and the TCP allocation is the one that loses. UDP and TCP
+  ephemeral ports come from independent namespaces over the same range, so this is roughly
+  a one-in-sixteen-thousand event per connection, and it is silent: the guard that catches
+  it returned `Ok(())`. It is caught explicitly now, the socket is given back, and the
+  connection is made again — a new draw of the source port, up to four times. On the
+  machine this feature exists for, UDP is blocked and that allocation is the only way
+  through, so losing it one time in sixteen thousand is not a rounding error.
+- **One connection per relay, however often it is advertised.** The UDP path is
+  deduplicated by the client map; a TCP client does not exist yet at the point the decision
+  is made, so the gather pass keeps its own record. Two entries naming the same relay used
+  to mean two allocations, and a relay's port range is finite.
+- **The family the machine actually has.** The TCP branch used to take the head of the
+  resolved list. A relay with both an A and a AAAA record would then be connected to over
+  IPv6 on a machine with no IPv6 route, and the connect fails for a reason that has nothing
+  to do with the relay. It now prefers an address whose family matches a socket this machine
+  bound.
 
 ## What is *not* in it
 
@@ -171,29 +193,77 @@ answer is not to stop offering TCP: it is to decide once per session whether thi
 can reach a relay over UDP at all, and offer the TCP form only when it cannot. That is a
 probe and a cached verdict, and it belongs in `acl-net`, not in the fork.
 
-## One limitation, stated rather than hidden
+## The writer, and what a full queue throws away
 
-`RTCTcpTransport::write` is awaited inside the driver's select loop. That is upstream's
-design and it was already true of ICE-TCP; what is new is that it is now on the media path.
-If a relay stops draining its socket, the TCP send buffer fills and that peer connection
-makes no progress at all until it drains — no reads, no timers, so ICE consent freshness
-fails and the connection dies.
+**Added 2026-08-29, after the first version of this document said it was not worth doing.**
 
-Measured rather than feared: at Opus rates the relay has to read nothing for roughly six
-seconds to fill a default send buffer, by which point the connection is failing for its own
-reasons. Each peer has its own driver and its own connection to the relay, so one stuck
-relay stalls one peer and not the lobby.
+`RTCTcpTransport::write` used to be awaited inside the driver's select loop. That was
+upstream's design and it was already true of ICE-TCP; what the fork changed is that it put
+that await on the media path. A relay that stops draining its socket would fill the send
+buffer and then stop that peer connection completely — no reads, no timers, so ICE consent
+freshness fails and the connection dies of a stall rather than of the network.
 
-The fix is a per-stream writer task with a bounded queue and drop-on-full, because queueing
-real-time audio is the wrong answer anyway. It is about eighty lines, it changes ICE-TCP's
-behaviour as well as TURN's, and it would roughly double a patch whose whole value is that
-a reviewer can read it. It is not done. If a relay is ever observed stalling a connection
-this way, that is what to write.
+It is gone. `write` is now a synchronous function that hands the framed bytes to a queue
+and returns; one task per stream empties that queue. **The property is enforced by the
+signature and not by a test**: the function returns `Result<usize>` and not a future, so
+there is nothing for the driver to await and no way to reintroduce the stall without
+changing the type.
+
+One task per stream, not one per packet. Two writers on one socket would interleave two
+half-messages and lose the framing boundary for good, which on a TURN stream is
+unrecoverable — there is no marker to resynchronise on.
+
+### What a real-time queue must decide
+
+A queue that only grows is a worse answer than a stall: it turns a wedged socket into a
+memory leak, and audio that arrives a second late is not audio. So the queue is bounded at
+64 messages — a little over a second at a 20 ms frame — and sheds.
+
+*What* it sheds is the whole design. Both framings carry more than media:
+
+- an ICE-TCP stream carries STUN connectivity checks, DTLS records — which is what the
+  data channel runs inside — and RTP/RTCP;
+- a TURN stream carries STUN control (Allocate, Refresh, `CreatePermission`, `ChannelBind`)
+  and `ChannelData`, and what is *inside* a `ChannelData` is again STUN, DTLS or RTP.
+
+Dropping a packet of RTP costs a frame of audio nobody will notice. Dropping a DTLS record
+breaks the connection that carries the audio, permanently. So the queue classifies by RFC
+7983 §7 — 128–191 is RTP and RTCP, everything else is not — and only RTP is ever dropped.
+The byte is read after the framing header, which is two bytes for RFC 4571 and four for
+`ChannelData`; reading offset zero would classify a DTLS record by the high half of its
+length, and a 128-byte record would look exactly like RTP. There is a test for precisely
+that mistake.
+
+The oldest media goes first, not the newest: what is at the front has waited longest and is
+least worth playing by the time it would arrive.
+
+And if nothing in the queue can be dropped — 64 control messages waiting on a socket that
+is not moving — the write fails instead. That stream is broken, and saying so lets the
+repair layer rebuild the peer; the alternatives are an unbounded queue on a dead socket or
+a silently corrupted handshake.
+
+### The failure that now arrives late
+
+A write error used to be the return value of the call the driver made. It is now reported
+by the writer task through a new driver event, and the driver does what it did before:
+drops the stream and hands `SocketWriteFailure` to the relayer, which removes the client and
+lets gathering finish. Without that report the Allocate would merely time out — the relayer
+does recover, eight seconds later, by way of `TurnEvent::TransactionTimeout` — so the event
+is what keeps the old timing rather than what prevents a hang.
+
+### Dropping a writer has to stop it
+
+`JoinHandle`'s documented behaviour on drop is to **detach**, not to cancel. A writer whose
+queue and doorbell have gone would therefore keep running and keep its `Arc` on the socket
+alive. `bind_transports` replaces the entire transport on every ICE restart, so each restart
+would leave a task parked in a write, holding a socket open on a port the rebind may want
+back. `Outbound` has a `Drop` that aborts, which is the only thing standing between this
+design and that leak.
 
 ## Where it lives
 
 - `vendor/webrtc/` — the fork. Six files differ from upstream.
-- `patches/webrtc-0.20.3-turn-tcp.patch` — the diff, 762 lines.
+- `patches/webrtc-0.20.3-turn-tcp.patch` — the diff, 1,407 lines.
 - `crates/acl-turn-framing/` — the stream splitter, no dependencies, nine tests.
 - `crates/acl-net/tests/turn_tcp.rs` — the proof.
 - `Cargo.toml` — `[patch.crates-io] webrtc = { path = "vendor/webrtc", version = "=0.20.3" }`.
@@ -223,11 +293,12 @@ is not a valid combination upstream: the runtime features are mutually exclusive
 
 ## What was verified
 
-- **The fork's own test suite, both trees.** 123 passed and 2 failed on the fork; 123
-  passed and 2 failed on the unmodified copy, the same two — they need a routable LAN
-  address this machine does not have. Identical results, so the patch changes no upstream
-  behaviour. CI does not re-run this, because gating on those two would gate on the
-  runner's networking.
+- **The fork's own test suite, both trees.** 131 passed and 2 failed on the fork — 123 of
+  those are upstream's and 8 are the send queue's — against 123 passed and 2 failed on the
+  unmodified copy. The same two failures on each: they need a routable LAN address this
+  machine does not have. No upstream test changed behaviour. CI re-runs the unit half and
+  not the integration half, because gating on those two would gate on the runner's
+  networking.
 - **`crates/acl-net/tests/turn_tcp.rs`.** Two peer connections, a real TURN server on
   loopback that speaks only TCP — long-term credentials, a UDP socket per allocation,
   permissions, channel bindings, Send indications and `ChannelData` both ways — and
@@ -241,9 +312,21 @@ is not a valid combination upstream: the runtime features are mutually exclusive
   answerer got 0` — the exact upstream symptom. Restoring the RFC 4571 prefix on TURN
   writes: `the client wrote something that is not TURN framing: a STUN length of 3 is not
   a multiple of four`, from the splitter, at the server.
-- The whole workspace suite, `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --features acl-updater/ceremony -- -D warnings`, `cargo deny check bans licenses`, and
-  `cargo vet`.
+- **`one_advertised_relay_is_allocated_over_udp_and_over_tcp`.** The same server, answering
+  on both transports on one port number, given to a client as the single bare `turn:` URL a
+  deployment advertises. `with_tcp_relays` adds the TCP form beside it and the client
+  allocates over each — so the fork did not trade one transport for the other. It also
+  asserts that both Allocates asked for a *UDP* relayed leg, which is the distinction the
+  whole fork turns on.
+- **The send queue's policy, in the fork's own unit tests**: that RTP is droppable and DTLS
+  and STUN are not, on both framings; that the classifying byte is read after the framing
+  header and not at offset zero; that a full queue loses the oldest media first, never
+  displaces control traffic, and reports a stream it cannot shed for rather than growing;
+  that a batch keeps its order; and that a TURN message goes out with nothing in front of
+  it. CI runs these — they open no sockets.
+- The whole workspace suite (1,138 tests), `cargo fmt --check`, `cargo clippy --workspace
+  --all-targets --features acl-updater/ceremony -- -D warnings`, `cargo deny check bans
+  licenses`, and `cargo vet`.
 
 ## If upstream ever fixes this
 

@@ -322,14 +322,15 @@ jobs:
     # known source. So this job re-derives the whole directory from the crates.io tarball
     # that the lock file pinned before the fork, plus `patches/webrtc-0.20.3-turn-tcp.patch`,
     # and fails on any difference. What is in the tree is then provably upstream plus
-    # exactly that diff, and the diff is 762 lines a reviewer can read.
+    # exactly that diff, and the diff is one file a reviewer can read.
     #
-    # The fork's own test suite is not run here. It was run by hand at fork time against
-    # both trees and gave identical results — 123 passed, 2 failed, the two failing the
-    # same way on the *unpatched* copy because they need a routable LAN address the
-    # runner does not have. Gating on them would gate on the runner's networking. What
-    # covers the patch's behaviour instead is `crates/acl-net/tests/turn_tcp.rs`, in the
-    # workspace suite: two peers, a real TURN server, TCP only, no other path.
+    # The fork's *integration* suite is not run here. It was run by hand against both
+    # trees and gave identical results — the two failures are identical on the unpatched
+    # copy, because they need a routable LAN address the runner does not have, and gating
+    # on them would gate on the runner's networking. Its **unit** tests are run: they open
+    # no sockets, and they are where the send queue's shedding policy is checked.
+    # `crates/acl-net/tests/turn_tcp.rs`, in the workspace suite, covers the rest: two
+    # peers, a real TURN server, and no path between them that is not the relay.
     runs-on: ubuntu-latest
     steps:
       - name: Check out Git repository
@@ -377,6 +378,13 @@ jobs:
           cargo check
           cargo check --no-default-features --features runtime-smol
           cargo check --no-default-features --features runtime-mock
+
+      # The unit tests only. They need no network, and they are what checks the one piece
+      # of policy the patch adds: which packet a full send queue drops, and which it must
+      # never drop.
+      - name: The fork's unit tests pass
+        working-directory: vendor/webrtc
+        run: cargo test --lib
 
   deny:
     # Advisories, licences, duplicate versions and crate sources — the policy is in

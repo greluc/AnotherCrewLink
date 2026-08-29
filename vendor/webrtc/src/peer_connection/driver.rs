@@ -258,6 +258,8 @@ pub(crate) enum PeerConnectionDriverEvent {
     TurnTcpStream {
         /// The relayer generation the connect was spawned in.
         generation: u64,
+        /// Which attempt this was, so the relayer can decide whether to try again.
+        attempt: u8,
         /// The TURN URL it was for.
         url: String,
         /// The address pair the socket got.
@@ -279,6 +281,13 @@ pub(crate) enum PeerConnectionDriverEvent {
         /// The TURN URL it was for.
         url: String,
     },
+    /// Writing to a TCP stream failed, and its writer has given up.
+    ///
+    /// **Added by AnotherCrewLink.** A write is no longer awaited in the driver's loop, so
+    /// its failure no longer arrives as the return value of a call the driver made. The
+    /// writer task owns none of the transport's state and must not tear anything down
+    /// itself; it reports, and the driver acts.
+    TcpStreamWriteFailed(FourTuple),
     WriteNotify,
     UpdateIceConfiguration {
         ice_servers: Vec<RTCIceServer>,
@@ -360,7 +369,11 @@ where
         // correct: they belong to the generation being replaced.
         self.udp_sockets.clear();
         self.mdns_socket = None;
-        self.tcp_transport = RTCTcpTransport::new(HashMap::new());
+        self.tcp_transport = RTCTcpTransport::new(
+            HashMap::new(),
+            Arc::clone(&runtime),
+            self.inner.driver_event_tx.clone(),
+        );
 
         if self.mdns_mode != MulticastDnsMode::Disabled {
             self.mdns_socket = Some(runtime.wrap_udp_socket(MulticastSocket::new().into_std()?)?);
@@ -409,7 +422,11 @@ where
             ));
         }
 
-        self.tcp_transport = RTCTcpTransport::new(tcp_listeners);
+        self.tcp_transport = RTCTcpTransport::new(
+            tcp_listeners,
+            Arc::clone(&runtime),
+            self.inner.driver_event_tx.clone(),
+        );
 
         // Rebuilt, not updated: a gatherer's STUN clients and TURN allocations are keyed by
         // 5-tuples that no longer exist, so there is nothing in the old ones worth carrying over.
@@ -447,6 +464,7 @@ where
         discard_local_candidates_during_ice_restart: bool,
     ) -> Self {
         let runtime = Arc::clone(&inner.runtime);
+        let events = inner.driver_event_tx.clone();
         Self {
             inner,
             // Placeholders until `bind_transports` runs; constructing them costs no I/O.
@@ -460,12 +478,12 @@ where
                 Vec::new(),
                 ice_servers.clone(),
                 ice_gather_policy,
-                runtime,
+                Arc::clone(&runtime),
             ),
             mdns_socket: None,
             udp_sockets: HashMap::new(),
             gso_scratch: Vec::new(),
-            tcp_transport: RTCTcpTransport::new(HashMap::new()),
+            tcp_transport: RTCTcpTransport::new(HashMap::new(), runtime, events),
             ice_gathering_active: false,
             stun_gathering_complete: false,
             turn_gathering_complete: false,
@@ -878,7 +896,11 @@ where
 
     async fn handle_write(&mut self, msg: TaggedBytesMut) -> Result<usize> {
         if msg.transport.transport_protocol == TransportProtocol::TCP {
-            self.tcp_transport.write(&msg).await
+            // Not awaited any more, and that is the point: this call now hands the bytes to
+            // the stream's own writer task and returns. Awaiting it here meant a socket
+            // that stopped draining stopped this whole loop -- no reads, no timers, no
+            // consent freshness -- for as long as it took. (Changed by AnotherCrewLink.)
+            self.tcp_transport.write(&msg)
         } else if msg.transport.peer_addr.port() == MDNS_PORT {
             if let Some(socket) = &self.mdns_socket {
                 Ok(socket
@@ -994,6 +1016,7 @@ where
             }
             RTCTurnRelayEventOut::ConnectTurnTcp {
                 generation,
+                attempt,
                 url,
                 peer_addr,
                 username,
@@ -1013,6 +1036,7 @@ where
                             let stream_peer = stream.peer_addr().unwrap_or(peer_addr);
                             PeerConnectionDriverEvent::TurnTcpStream {
                                 generation,
+                                attempt,
                                 url,
                                 four_tuple: FourTuple {
                                     local_addr,
@@ -1466,6 +1490,7 @@ where
             }
             PeerConnectionDriverEvent::TurnTcpStream {
                 generation,
+                attempt,
                 url,
                 four_tuple,
                 stream,
@@ -1482,6 +1507,7 @@ where
                     self.turn_relayer
                         .handle_event(RTCTurnRelayEventIn::TurnTcpConnected {
                             generation,
+                            attempt,
                             url,
                             four_tuple,
                             username,
@@ -1497,6 +1523,19 @@ where
                     .handle_event(RTCTurnRelayEventIn::TurnTcpFailed { generation, url })
                 {
                     error!("Failed to record a failed TURN TCP connection: {}", err);
+                }
+            }
+            PeerConnectionDriverEvent::TcpStreamWriteFailed(four_tuple) => {
+                error!("Dropping TCP stream {:?}: its writer failed", four_tuple);
+                self.tcp_transport.remove_stream(&four_tuple);
+                // The relayer keys its clients by the same four-tuple, so this reaches the
+                // TURN client on that stream if there is one and does nothing if there is
+                // not -- which is the same reaction an awaited write failure used to get.
+                if let Err(err) = self
+                    .turn_relayer
+                    .handle_event(RTCTurnRelayEventIn::SocketWriteFailure(four_tuple))
+                {
+                    error!("Failed to handle a TCP write failure: {}", err);
                 }
             }
             PeerConnectionDriverEvent::Close => {

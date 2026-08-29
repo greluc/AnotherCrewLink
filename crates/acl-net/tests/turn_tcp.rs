@@ -9,7 +9,8 @@
 //!
 //! The server below is a real TURN server, not a recording: long-term credentials, a UDP
 //! socket per allocation, permissions, channel bindings, Send indications and `ChannelData`
-//! in both directions. It speaks only TCP, and it hands out relayed addresses on loopback.
+//! in both directions. It answers on TCP **and** on UDP, on the same port number, which is
+//! what a real deployment advertises — and it hands out relayed addresses on loopback.
 //! Both peer connections are given nothing but its `turn:` URL under
 //! [`IceTransportPolicy::Relay`], so **every byte between them goes out over a TCP socket,
 //! through the server, and back**. If any part of the fork is wrong — the framing, the
@@ -74,69 +75,146 @@ const REALM: &str = "test.invalid";
 // The server
 // ---------------------------------------------------------------------------------------
 
-/// What one accepted TCP connection has allocated, if anything.
+/// What one client has allocated, if anything.
 struct Allocation {
     /// The socket the relayed address belongs to. Peers send to it; what arrives is
-    /// forwarded to the client over its TCP connection.
+    /// forwarded back to the client the way its request arrived.
     socket: Arc<UdpSocket>,
     /// Channel number to peer address, from `ChannelBind`.
     channels: HashMap<u16, SocketAddr>,
 }
 
-/// A TURN server that speaks TCP and nothing else.
+/// Which transport a request reached the server over.
+///
+/// Not the same thing as `REQUESTED-TRANSPORT`, and keeping the two apart is most of what
+/// this test exists to check: this is how the client reached the relay, that is what the
+/// relay should use to reach the far peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Over {
+    Udp,
+    Tcp,
+}
+
+/// Where an answer goes: down the stream it came in on, or back to the datagram's sender.
+///
+/// One dispatch table serves both transports, so the only thing that differs is this.
+#[derive(Clone)]
+enum Reply {
+    Stream(Arc<Mutex<OwnedWriteHalf>>),
+    Datagram(Arc<UdpSocket>, SocketAddr),
+}
+
+impl Reply {
+    /// One message back to the client, with nothing in front of it.
+    ///
+    /// RFC 8656 §3.1: a TURN message on a stream is delimited by its own header and by
+    /// nothing else. Adding a length prefix here — which is what RFC 4571 does, and what
+    /// the transport does for ICE-TCP — would make every byte after it unreadable. On a
+    /// datagram socket the question does not arise, which is the whole difference.
+    async fn send(&self, bytes: &[u8]) {
+        match self {
+            Self::Stream(writer) => {
+                let mut guard = writer.lock().await;
+                let _ = guard.write_all(bytes).await;
+                let _ = guard.flush().await;
+            }
+            Self::Datagram(socket, to) => {
+                let _ = socket.send_to(bytes, *to).await;
+            }
+        }
+    }
+
+    fn over(&self) -> Over {
+        match self {
+            Self::Stream(_) => Over::Tcp,
+            Self::Datagram(..) => Over::Udp,
+        }
+    }
+}
+
+/// What the server writes down for the test to read afterwards.
+#[derive(Clone, Default)]
+struct Watch {
+    /// Every `REQUESTED-TRANSPORT` value an Allocate carried, so the test can assert the
+    /// client asked for a *UDP* relayed leg whatever transport carried the request.
+    requested_transports: Arc<Mutex<Vec<u8>>>,
+    /// Which transport each Allocate arrived over, so the test can prove both are used.
+    allocated_over: Arc<Mutex<Vec<Over>>>,
+}
+
+/// A TURN server that answers on TCP and on UDP, on the same port number.
 ///
 /// Deliberately not general: it implements exactly the flow `rtc-turn`'s client performs,
 /// answers every request it is meant to answer, and does not pretend to enforce anything a
-/// real deployment must. What it does do faithfully is the *framing* — messages arrive back
-/// to back on a stream with no length prefix in front of them, which is the whole reason
-/// [`acl_turn_framing`] exists, and which is what a length-prefixed write would break.
+/// real deployment must. What it does do faithfully is the *framing* — on the stream,
+/// messages arrive back to back with no length prefix in front of them, which is the whole
+/// reason [`acl_turn_framing`] exists and what a length-prefixed write would break; on the
+/// datagram socket there is no framing at all, because each datagram is one message.
 struct TurnServer {
     addr: SocketAddr,
-    /// Every `REQUESTED-TRANSPORT` value an Allocate carried, so the test can assert the
-    /// client asked for a *UDP* relayed leg while talking over TCP.
-    requested_transports: Arc<Mutex<Vec<u8>>>,
+    watch: Watch,
 }
 
 impl TurnServer {
     async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let requested_transports = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&requested_transports);
+        let watch = Watch::default();
 
-        tokio::spawn(async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    return;
-                };
-                // Nagle off on the server side too. A relay that batches is a relay that
-                // adds a frame of latency to everything it carries.
-                let _ = stream.set_nodelay(true);
-                let seen = Arc::clone(&seen);
-                tokio::spawn(async move {
-                    serve(stream, seen).await;
-                });
-            }
-        });
+        // The same port number on both, because that is what a deployment advertises: one
+        // host and port that answers over either transport. TCP and UDP port spaces are
+        // separate, so taking a free TCP port and then asking for the same UDP port
+        // usually works; a few attempts covers the case where something else holds it.
+        for _ in 0..32 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let Ok(datagrams) = UdpSocket::bind(addr).await else {
+                continue;
+            };
 
-        Self {
-            addr,
-            requested_transports,
+            let streams = watch.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    // Nagle off on the server side too. A relay that batches is a relay
+                    // that adds a frame of latency to everything it carries.
+                    let _ = stream.set_nodelay(true);
+                    let watch = streams.clone();
+                    tokio::spawn(async move {
+                        serve_stream(stream, watch).await;
+                    });
+                }
+            });
+
+            let datagram_watch = watch.clone();
+            tokio::spawn(async move {
+                serve_datagrams(Arc::new(datagrams), datagram_watch).await;
+            });
+
+            return Self { addr, watch };
         }
+        panic!("could not take the same port number on TCP and on UDP");
     }
 
-    /// The URL a client is configured with. Names its transport explicitly, so
-    /// `with_tcp_relays` leaves it alone and the connection has exactly one relay to try.
+    /// The URL a deployment advertises: a host and a port, with no transport named.
+    ///
+    /// `with_tcp_relays` adds the TCP form beside it, which is what the client does for
+    /// every relay it is given — so one entry here becomes an allocation over each.
     fn url(&self) -> String {
+        format!("turn:{}", self.addr)
+    }
+
+    /// The same relay, named so that only the TCP form is offered.
+    fn tcp_only_url(&self) -> String {
         format!("turn:{}?transport=tcp", self.addr)
     }
 }
 
 /// One client connection, from the first byte to the last.
-async fn serve(stream: TcpStream, requested_transports: Arc<Mutex<Vec<u8>>>) {
+async fn serve_stream(stream: TcpStream, watch: Watch) {
     let peer = stream.peer_addr().unwrap();
     let (mut reader, writer) = stream.into_split();
-    let writer = Arc::new(Mutex::new(writer));
+    let reply = Reply::Stream(Arc::new(Mutex::new(writer)));
     let allocation: Arc<Mutex<Option<Allocation>>> = Arc::new(Mutex::new(None));
 
     // The same splitter the transport uses, on the other end of the same stream. If the
@@ -153,13 +231,33 @@ async fn serve(stream: TcpStream, requested_transports: Arc<Mutex<Vec<u8>>>) {
         loop {
             match frames.next_message() {
                 Ok(Some(message)) => {
-                    handle_from_client(&message, peer, &writer, &allocation, &requested_transports)
-                        .await;
+                    handle_from_client(&message, peer, &reply, &allocation, &watch).await;
                 }
                 Ok(None) => break,
                 Err(why) => panic!("the client wrote something that is not TURN framing: {why}"),
             }
         }
+    }
+}
+
+/// Every client on the datagram side, which needs no framing and therefore no splitter.
+///
+/// An allocation belongs to a 5-tuple, so it is keyed by the address the datagram came
+/// from — the one thing the stream side gets for free by having a connection.
+async fn serve_datagrams(socket: Arc<UdpSocket>, watch: Watch) {
+    let mut allocations: HashMap<SocketAddr, Arc<Mutex<Option<Allocation>>>> = HashMap::new();
+    let mut buf = vec![0_u8; 4096];
+    loop {
+        let Ok((n, from)) = socket.recv_from(&mut buf).await else {
+            return;
+        };
+        let allocation = Arc::clone(
+            allocations
+                .entry(from)
+                .or_insert_with(|| Arc::new(Mutex::new(None))),
+        );
+        let reply = Reply::Datagram(Arc::clone(&socket), from);
+        handle_from_client(&buf[..n], from, &reply, &allocation, &watch).await;
     }
 }
 
@@ -169,9 +267,9 @@ async fn serve(stream: TcpStream, requested_transports: Arc<Mutex<Vec<u8>>>) {
 async fn handle_from_client(
     message: &[u8],
     peer: SocketAddr,
-    writer: &Arc<Mutex<OwnedWriteHalf>>,
+    reply: &Reply,
     allocation: &Arc<Mutex<Option<Allocation>>>,
-    requested_transports: &Arc<Mutex<Vec<u8>>>,
+    watch: &Watch,
 ) {
     if !is_stun_message(message) {
         // ChannelData: the payload goes out of the allocation's socket to the peer the
@@ -244,7 +342,7 @@ async fn handle_from_client(
                 .unwrap();
             response.raw
         };
-        send(writer, &raw).await;
+        reply.send(&raw).await;
         return;
     }
 
@@ -257,8 +355,13 @@ async fn handle_from_client(
             // uses one field for both.
             let mut transport = RequestedTransport::default();
             if transport.get_from(&request).is_ok() {
-                requested_transports.lock().await.push(transport.protocol.0);
+                watch
+                    .requested_transports
+                    .lock()
+                    .await
+                    .push(transport.protocol.0);
             }
+            watch.allocated_over.lock().await.push(reply.over());
 
             let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
             let relayed = socket.local_addr().unwrap();
@@ -269,7 +372,7 @@ async fn handle_from_client(
 
             // Everything arriving on the relayed address goes back to this client, as
             // ChannelData when a channel is bound and as a Data indication before that.
-            let to_client = Arc::clone(writer);
+            let to_client = reply.clone();
             let alloc = Arc::clone(allocation);
             tokio::spawn(async move {
                 let mut buf = vec![0_u8; 2048];
@@ -315,7 +418,7 @@ async fn handle_from_client(
                             std::mem::take(&mut indication.raw)
                         }
                     };
-                    send(&to_client, &encoded).await;
+                    to_client.send(&encoded).await;
                 }
             });
 
@@ -335,7 +438,7 @@ async fn handle_from_client(
                     Box::new(Lifetime(Duration::from_secs(600))),
                 ],
             );
-            send(writer, &raw).await;
+            reply.send(&raw).await;
         }
     } else if method == METHOD_CREATE_PERMISSION || method == METHOD_REFRESH {
         {
@@ -343,7 +446,7 @@ async fn handle_from_client(
             // what the test is about is the transport underneath, not the access control
             // above it.
             let raw = encode_success(&request, &integrity, vec![]);
-            send(writer, &raw).await;
+            reply.send(&raw).await;
         }
     } else if method == METHOD_CHANNEL_BIND {
         {
@@ -356,7 +459,7 @@ async fn handle_from_client(
                 }
             }
             let raw = encode_success(&request, &integrity, vec![]);
-            send(writer, &raw).await;
+            reply.send(&raw).await;
         }
     } else if method == METHOD_BINDING {
         {
@@ -375,7 +478,7 @@ async fn handle_from_client(
                     .unwrap();
                 response.raw
             };
-            send(writer, &raw).await;
+            reply.send(&raw).await;
         }
     }
 }
@@ -401,17 +504,6 @@ fn encode_success(
     let mut response = Message::new();
     response.build(&setters).unwrap();
     response.raw
-}
-
-/// One message onto the stream, with nothing in front of it.
-///
-/// RFC 8656 §3.1: a TURN message on a stream is delimited by its own header and by
-/// nothing else. Adding a length prefix here — which is what RFC 4571 does, and what the
-/// transport does for ICE-TCP — would make every byte after it unreadable.
-async fn send(writer: &Arc<Mutex<OwnedWriteHalf>>, bytes: &[u8]) {
-    let mut guard = writer.lock().await;
-    let _ = guard.write_all(bytes).await;
-    let _ = guard.flush().await;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -529,7 +621,9 @@ async fn negotiate(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_relay_reached_over_tcp_carries_a_connection() {
     let server = TurnServer::start().await;
-    let url = server.url();
+    // Named with its transport, so `with_tcp_relays` leaves it alone and the connection has
+    // exactly one relay to try. There is no UDP path out of this test.
+    let url = server.tcp_only_url();
 
     let (offerer, mut from_offerer) = build(&url).await;
     let (answerer, mut from_answerer) = build(&url).await;
@@ -564,7 +658,7 @@ async fn a_relay_reached_over_tcp_carries_a_connection() {
     // between the relay and the far peer, not the one carrying the request — asking for
     // TCP there is RFC 6062, a different feature, which coturn refuses by default. Getting
     // this wrong is the failure mode that looks like everything else working.
-    let transports = server.requested_transports.lock().await.clone();
+    let transports = server.watch.requested_transports.lock().await.clone();
     assert!(
         !transports.is_empty(),
         "no Allocate ever reached the server"
@@ -630,4 +724,86 @@ async fn a_relay_reached_over_tcp_carries_a_connection() {
 
     offerer.close().await.expect("a clean close");
     answerer.close().await.expect("a clean close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_advertised_relay_is_allocated_over_udp_and_over_tcp() {
+    // The question this answers is whether the fork traded one transport for the other.
+    // It did not: a client given the URL a deployment actually advertises ends up with an
+    // allocation over each, because `with_tcp_relays` adds the TCP form beside the UDP one
+    // and the relayer now takes both instead of discarding the second.
+    let server = TurnServer::start().await;
+    let (connection, mut events) = build(&server.url()).await;
+
+    // Gathering starts when the local description is set, and relay-only means the only
+    // candidates that can arrive are relay ones.
+    let offer = connection.create_offer(None).await.expect("an offer");
+    connection
+        .set_local_description(offer)
+        .await
+        .expect("the local description");
+
+    let both = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let over = server.watch.allocated_over.lock().await.clone();
+            if over.contains(&Over::Udp) && over.contains(&Over::Tcp) {
+                return over;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+
+    let over = both.unwrap_or_else(|_| {
+        panic!(
+            "expected an allocation over each transport; the server saw {:?}",
+            futures_block_on(&server)
+        )
+    });
+    assert!(over.contains(&Over::Udp), "no allocation arrived over UDP");
+    assert!(over.contains(&Over::Tcp), "no allocation arrived over TCP");
+
+    // Both legs asked for a UDP relayed leg. The TCP one is the interesting half: the
+    // transport carrying the request changed and the attribute did not, which is the
+    // distinction the whole fork turns on.
+    let transports = server.watch.requested_transports.lock().await.clone();
+    assert!(
+        transports.iter().all(|protocol| *protocol == 17),
+        "every Allocate must ask for a UDP relayed leg (17); got {transports:?}"
+    );
+
+    // And both produced a candidate, so neither allocation was made and then dropped.
+    let mut relay_candidates = 0;
+    let gathered = tokio::time::timeout(PATIENCE, async {
+        loop {
+            while let Ok(event) = events.try_recv() {
+                if let Event::Candidate(candidate) = event
+                    && candidate.candidate.contains("typ relay")
+                {
+                    relay_candidates += 1;
+                }
+            }
+            if relay_candidates >= 2 {
+                return relay_candidates;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    assert!(
+        gathered.is_ok(),
+        "expected a relay candidate from each allocation, got {relay_candidates}"
+    );
+
+    connection.close().await.expect("a clean close");
+}
+
+/// What the server saw, for a failure message.
+fn futures_block_on(server: &TurnServer) -> Vec<Over> {
+    server
+        .watch
+        .allocated_over
+        .try_lock()
+        .map(|seen| seen.clone())
+        .unwrap_or_default()
 }

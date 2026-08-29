@@ -347,6 +347,12 @@ impl AsyncTcpListener for TcpListener {
     {
         Box::pin(async move {
             let (stream, addr) = self.io.accept().await?;
+            // Nagle off on this side too, added by AnotherCrewLink alongside the
+            // same call in `connect_tcp`. An accepted stream is the passive half of
+            // ICE-TCP and carries exactly the same real-time traffic; leaving Nagle on
+            // it would hold a small write until the previous segment is acknowledged,
+            // which is a frame of added latency in one direction only.
+            stream.set_nodelay(true)?;
             let local_addr = stream.local_addr()?;
             let peer_addr = stream.peer_addr()?;
             let (read_half, write_half) = stream.into_split();

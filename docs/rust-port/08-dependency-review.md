@@ -151,7 +151,7 @@ Record str0m's genuine advantages as known gaps rather than pretending the chose
 > `rtc-turn`, and that is still why it was chosen over str0m — but its relayer discarded
 > every `?transport=tcp` and every `turns:` URL before allocating, so the TURN support that
 > decided the choice did not cover the players who need TURN most. It is forked now:
-> `vendor/webrtc`, six files, 762 lines, re-derived from the pinned tarball by CI. See
+> `vendor/webrtc`, six files, re-derived from the pinned tarball by CI on every run. See
 > `docs/rust-port/12-turn-over-tcp.md`. The lesson for a future comparison is that "ships a
 > TURN client" is not the question; "allocates over the transports our users actually have"
 > is.

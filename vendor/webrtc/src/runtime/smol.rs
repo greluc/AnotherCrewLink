@@ -358,6 +358,12 @@ impl AsyncTcpListener for TcpListener {
         Box::pin(async move {
             let (std_stream, addr) = self.io.read_with(|io| io.accept()).await?;
             std_stream.set_nonblocking(true)?;
+            // Nagle off on this side too, added by AnotherCrewLink alongside the
+            // same call in `connect_tcp`. An accepted stream is the passive half of
+            // ICE-TCP and carries exactly the same real-time traffic; leaving Nagle on
+            // it would hold a small write until the previous segment is acknowledged,
+            // which is a frame of added latency in one direction only.
+            std_stream.set_nodelay(true)?;
             let std_stream2 = std_stream.try_clone()?;
             let read_io = ::smol::Async::new(std_stream)?;
             let write_io = ::smol::Async::new(std_stream2)?;

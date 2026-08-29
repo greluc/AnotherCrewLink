@@ -23,6 +23,17 @@ use std::time::Instant;
 
 const MAX_PENDING_PACKETS_PER_PEER: usize = 64;
 
+/// How many times a TURN connection over TCP may be made again after landing on a
+/// four-tuple that is already a client's.
+///
+/// **Added by AnotherCrewLink.** A `FourTuple` is an address pair and carries no protocol,
+/// so a TCP connection whose ephemeral source port happens to equal a bound UDP socket's
+/// port produces the same key as the UDP client on that socket — the two cannot be told
+/// apart, and one of them would be lost. Making the connection again draws a different
+/// port; the source range is thousands wide, so four attempts is far more than enough and
+/// is a bound rather than an expectation.
+const MAX_TURN_TCP_ATTEMPTS: u8 = 4;
+
 #[derive(Debug)]
 pub(crate) enum RTCTurnRelayEventIn {
     SocketWriteFailure(FourTuple),
@@ -33,6 +44,8 @@ pub(crate) enum RTCTurnRelayEventIn {
     TurnTcpConnected {
         /// The generation the connect was asked for in.
         generation: u64,
+        /// Which attempt this was, so a four-tuple collision can be given one more go.
+        attempt: u8,
         /// The URL it was for.
         url: String,
         /// What the driver registered the stream as.
@@ -66,9 +79,12 @@ pub(crate) enum RTCTurnRelayEventOut {
     /// until it has, because the client's local address must be the one the socket
     /// actually got.
     ConnectTurnTcp {
-        /// Which attempt this is. A connect spawned before the transports were rebound
-        /// must be discarded rather than registered into the new ones.
+        /// Which round of transports this belongs to. A connect spawned before the
+        /// transports were rebound must be discarded rather than registered into the new
+        /// ones.
         generation: u64,
+        /// How many times this connection has been made already, counting from zero.
+        attempt: u8,
         /// The URL, carried back so the candidate can name it.
         url: String,
         /// Where the server is.
@@ -338,6 +354,14 @@ impl RTCTurnRelayer {
 
         self.state = RTCIceGatheringState::Gathering;
 
+        // Which relays a TCP connection has already been asked for, so that a server
+        // advertised twice is one allocation and not two. The UDP path is deduplicated by
+        // `clients.contains_key` below, but a TCP client does not exist yet at the point
+        // the decision is made, so it needs its own record. (Added by AnotherCrewLink with
+        // the rest of TURN over TCP; a relay's port range is finite and holding two
+        // allocations where one would do is how a lobby exhausts it.)
+        let mut connecting: Vec<SocketAddr> = Vec::new();
+
         // Clone the handle up front so the per-server borrows below stay disjoint.
         let runtime = Arc::clone(&self.runtime);
 
@@ -378,13 +402,30 @@ impl RTCTurnRelayer {
                     // picks its own source and the four-tuple comes back from the driver
                     // once it has. Asking per interface would open one allocation per
                     // interface, and a relay's port range is finite.
-                    let Some(peer_addr) = resolved_addrs.first().copied() else {
+                    //
+                    // The family is chosen to match a socket this machine actually bound,
+                    // rather than taken from the head of the list: a relay with both an A
+                    // and a AAAA record would otherwise be connected to over IPv6 on a
+                    // machine with no IPv6 route, and the connect fails for a reason that
+                    // has nothing to do with the relay.
+                    let reachable = resolved_addrs.iter().copied().find(|addr| {
+                        self.local_addrs
+                            .iter()
+                            .any(|local| local.is_ipv4() == addr.is_ipv4())
+                    });
+                    let Some(peer_addr) = reachable.or_else(|| resolved_addrs.first().copied())
+                    else {
                         continue;
                     };
+                    if connecting.contains(&peer_addr) {
+                        continue;
+                    }
+                    connecting.push(peer_addr);
                     self.pending_connects += 1;
                     debug!("TURN over TCP: connecting to {} for {}", peer_addr, url);
                     self.events.push_back(RTCTurnRelayEventOut::ConnectTurnTcp {
                         generation: self.generation,
+                        attempt: 0,
                         url: url.to_string(),
                         peer_addr,
                         username: url.username.clone(),
@@ -586,10 +627,6 @@ impl RTCTurnRelayer {
         username: String,
         password: String,
     ) -> Result<()> {
-        if self.clients.contains_key(&four_tuple) {
-            return Ok(());
-        }
-
         let mut client = TurnClient::new(TurnClientConfig {
             stun_serv_addr: four_tuple.peer_addr.to_string(),
             turn_serv_addr: four_tuple.peer_addr.to_string(),
@@ -800,6 +837,7 @@ impl Protocol<TaggedBytesMut, TaggedBytesMut, RTCTurnRelayEventIn> for RTCTurnRe
             }
             RTCTurnRelayEventIn::TurnTcpConnected {
                 generation,
+                attempt,
                 url,
                 four_tuple,
                 username,
@@ -815,6 +853,40 @@ impl Protocol<TaggedBytesMut, TaggedBytesMut, RTCTurnRelayEventIn> for RTCTurnRe
                     );
                     self.events
                         .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
+                    return Ok(());
+                }
+                if self.clients.contains_key(&four_tuple) {
+                    // The socket drew a source port that one of the UDP sockets is already
+                    // bound to, so this connection's key is a client's key. `FourTuple` is
+                    // an address pair with no protocol in it, so nothing downstream could
+                    // tell the two apart: every read off this stream would be handed to the
+                    // UDP client, and this allocation would never be made. Give the socket
+                    // back and draw again.
+                    self.events
+                        .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
+                    if attempt < MAX_TURN_TCP_ATTEMPTS {
+                        debug!(
+                            "TURN over TCP: {:?} collides with a UDP client; connecting again",
+                            four_tuple
+                        );
+                        self.events.push_back(RTCTurnRelayEventOut::ConnectTurnTcp {
+                            generation,
+                            attempt: attempt + 1,
+                            url,
+                            peer_addr: four_tuple.peer_addr,
+                            username,
+                            password,
+                        });
+                        // Still outstanding, so the count is left alone and gathering keeps
+                        // waiting for it.
+                        return Ok(());
+                    }
+                    warn!(
+                        "TURN over TCP: gave up on {} after {} four-tuple collisions",
+                        url, MAX_TURN_TCP_ATTEMPTS
+                    );
+                    self.pending_connects = self.pending_connects.saturating_sub(1);
+                    self.maybe_emit_gathering_complete();
                     return Ok(());
                 }
                 self.pending_connects = self.pending_connects.saturating_sub(1);
