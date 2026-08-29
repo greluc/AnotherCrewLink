@@ -661,10 +661,6 @@ impl Audio {
 
         let mixing = Arc::clone(&ready);
         let placements = Arc::clone(placements);
-        std::thread::Builder::new()
-            .name("mixer".to_owned())
-            .spawn(move || mix(&packets, &mixing, &placements))
-            .map_err(|error| format!("the mixer could not be started: {error}"))?;
 
         let host = cpal::default_host();
         // The speaker first, because a client that can hear is useful on its own and a
@@ -675,8 +671,19 @@ impl Audio {
         // away, so the stream dropped and stopped. A player whose microphone was busy,
         // missing, or at a rate `choose` could not use heard *nobody*, when 1.x leaves
         // them listening and merely unable to speak.
-        let speaker = open_speaker(&host, &ready, tone, &played, capture)?;
-        match open_microphone(&host, sink, voice, &played, capture, tuning) {
+        let (speaker, speaker_rate) = open_speaker(&host, &ready, tone, &played, capture)?;
+
+        // After the speaker, because the mixer has to produce what the device takes: it
+        // works at 48 kHz and a device that opened at 44.1 kHz must be handed 44.1 kHz.
+        // Nothing is lost by the wait -- packets go into a channel that exists whether or
+        // not anything is draining it yet, which is what the old comment about starting
+        // the thread first was really relying on.
+        std::thread::Builder::new()
+            .name("mixer".to_owned())
+            .spawn(move || mix(&packets, &mixing, &placements, speaker_rate))
+            .map_err(|error| format!("the mixer could not be started: {error}"))?;
+
+        match open_microphone(&host, sink, voice, &played, capture, tuning, speaker_rate) {
             Ok(microphone) => Ok((vec![speaker, microphone], None)),
             Err(why) => {
                 acl_core::log_warn!("audio", "no microphone: {why}");
@@ -705,7 +712,7 @@ fn open_speaker(
     tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     capture: &Capture,
-) -> Result<Box<dyn std::any::Any + Send>, String> {
+) -> Result<(Box<dyn std::any::Any + Send>, u32), String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
     // The device the player picked, falling back to the system default. `find` matches on
@@ -721,6 +728,14 @@ fn open_speaker(
         .ok_or_else(|| "no output device".to_owned())?;
     let config = at_any_rate(&output, false)?;
     let channels = config.channels.max(1) as usize;
+    let rate = config.sample_rate;
+    if rate != acl_audio::stream::WANTED_RATE {
+        acl_core::log_info!(
+            "audio",
+            "the speaker opened at {rate} Hz, so the mix is resampled from {}",
+            acl_audio::stream::WANTED_RATE
+        );
+    }
     let playing = Arc::clone(ready);
     let testing = Arc::clone(tone);
     let recording = Arc::clone(played);
@@ -768,7 +783,7 @@ fn open_speaker(
     stream
         .play()
         .map_err(|error| format!("the speaker would not start: {error}"))?;
-    Ok(Box::new(stream))
+    Ok((Box::new(stream), rate))
 }
 
 /// What opening the devices produced: the streams to hold open, and what went wrong.
@@ -847,6 +862,7 @@ fn open_microphone(
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     capture: &Capture,
     tuning: &Arc<Tuning>,
+    speaker_rate: u32,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
@@ -938,6 +954,32 @@ fn open_microphone(
     let mut converted: Vec<f32> = Vec::new();
     // Reused, so draining the reference queue allocates nothing after the first frame.
     let mut reference_frames: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
+    // The reference comes off the *speaker*, which may be at a different rate from the
+    // microphone and from the canceller. An echo canceller fed a reference at the wrong
+    // rate removes nothing at all -- and does not fail, which is the whole hazard
+    // `apm.rs:18` names -- so a 44.1 kHz speaker beside a 48 kHz microphone silently
+    // undid the cancellation entirely.
+    //
+    // `None` at 48 kHz, which is almost every device.
+    let mut reference_rate = if speaker_rate == acl_audio::stream::WANTED_RATE {
+        None
+    } else {
+        let chunk =
+            usize::try_from(u64::from(speaker_rate) * u64::from(acl_audio::codec::FRAME_MS) / 1000)
+                .unwrap_or(FRAME_SAMPLES)
+                .max(1);
+        match acl_audio::resample::Resampler::new(speaker_rate, chunk) {
+            Ok(resampler) => Some(resampler),
+            Err(error) => {
+                acl_core::log_warn!(
+                    "audio",
+                    "no resampler for a {speaker_rate} Hz reference: {error}; the echo canceller will remove nothing"
+                );
+                None
+            }
+        }
+    };
+    let mut reference_at_48k: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
     let mut packet = Vec::new();
 
     let stream = input
@@ -983,10 +1025,29 @@ fn open_microphone(
                     // A lock is held for a copy here and for nothing else.
                     reference_frames.clear();
                     if let Ok(mut played) = reference.try_lock() {
-                        let whole = (played.len() / FRAME_SAMPLES) * FRAME_SAMPLES;
+                        // Whole frames *at the speaker's rate*, which is what the queue
+                        // holds: taking 48 kHz frames from a 44.1 kHz queue would slice
+                        // between samples and drift.
+                        let frame = reference_rate.as_ref().map_or(FRAME_SAMPLES, |_| {
+                            usize::try_from(
+                                u64::from(speaker_rate) * u64::from(acl_audio::codec::FRAME_MS)
+                                    / 1000,
+                            )
+                            .unwrap_or(FRAME_SAMPLES)
+                            .max(1)
+                        });
+                        let whole = (played.len() / frame) * frame;
                         reference_frames.extend(played.drain(..whole));
                     }
-                    for render in reference_frames.as_chunks::<FRAME_SAMPLES>().0 {
+                    let rendering = match reference_rate.as_mut() {
+                        None => &reference_frames,
+                        Some(to_48k) => {
+                            reference_at_48k.clear();
+                            let _ = to_48k.push(&reference_frames, &mut reference_at_48k);
+                            &reference_at_48k
+                        }
+                    };
+                    for render in rendering.as_chunks::<FRAME_SAMPLES>().0 {
                         let _ = apm.render(render);
                     }
                     let _ = apm.capture(&mut frame);
@@ -1141,6 +1202,80 @@ fn at_any_rate(device: &cpal::Device, input: bool) -> Result<cpal::StreamConfig,
     })
 }
 
+/// The four buffers a stereo resample needs, reused so the steady state allocates nothing.
+#[cfg(feature = "audio")]
+#[derive(Default)]
+struct Deinterleaved {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    left_out: Vec<f32>,
+    right_out: Vec<f32>,
+    interleaved: Vec<f32>,
+}
+
+/// Two resamplers from the mix's rate to the device's, or `None` when they match.
+///
+/// One per channel, because [`acl_audio::resample::Resampler`] is mono and the mix is
+/// interleaved stereo. Two of them is the honest way and costs the same arithmetic a
+/// stereo one would.
+#[cfg(feature = "audio")]
+fn stereo_resampler(
+    speaker_rate: u32,
+) -> Option<(
+    acl_audio::resample::Resampler,
+    acl_audio::resample::Resampler,
+)> {
+    if speaker_rate == acl_audio::stream::WANTED_RATE {
+        return None;
+    }
+    let one = || {
+        acl_audio::resample::Resampler::between(
+            acl_audio::stream::WANTED_RATE,
+            speaker_rate,
+            FRAME_SAMPLES,
+        )
+    };
+    if let (Ok(to_left), Ok(to_right)) = (one(), one()) {
+        return Some((to_left, to_right));
+    }
+    acl_core::log_warn!(
+        "audio",
+        "no resampler from 48000 to {speaker_rate}; the speaker will play at the wrong pitch"
+    );
+    None
+}
+
+/// Converts one interleaved-stereo frame to the device's rate.
+///
+/// `None` when `rubato` refuses a block, which drops that frame rather than handing the
+/// speaker samples at the wrong rate.
+#[cfg(feature = "audio")]
+fn to_device_rate<'a>(
+    pair: &mut (
+        acl_audio::resample::Resampler,
+        acl_audio::resample::Resampler,
+    ),
+    finished: &[f32],
+    scratch: &'a mut Deinterleaved,
+) -> Option<&'a [f32]> {
+    scratch.left.clear();
+    scratch.right.clear();
+    for sample in finished.as_chunks::<2>().0 {
+        scratch.left.push(sample[0]);
+        scratch.right.push(sample[1]);
+    }
+    scratch.left_out.clear();
+    scratch.right_out.clear();
+    pair.0.push(&scratch.left, &mut scratch.left_out).ok()?;
+    pair.1.push(&scratch.right, &mut scratch.right_out).ok()?;
+    scratch.interleaved.clear();
+    for (one, two) in scratch.left_out.iter().zip(scratch.right_out.iter()) {
+        scratch.interleaved.push(*one);
+        scratch.interleaved.push(*two);
+    }
+    Some(&scratch.interleaved)
+}
+
 /// The mixing thread: packets in, stereo frames out.
 ///
 /// Everything expensive happens here rather than in a callback. It keeps one [`Listener`]
@@ -1149,12 +1284,30 @@ fn at_any_rate(device: &cpal::Device, input: bool) -> Result<cpal::StreamConfig,
 ///
 /// It runs until the channel closes, which is when the window drops the pipeline.
 #[cfg(feature = "audio")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop, and the comments in it are the reasons each step is where it is:              the two questions `heard` and `mixed` answer, the order the effects are              connected in, and the rate the device took. Splitting it would put those              somewhere other than the code they explain"
+)]
 fn mix(
     packets: &Receiver<Incoming>,
     ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
+    speaker_rate: u32,
 ) {
     use acl_audio::mixer::Mixer;
+
+    // The mix is 48 kHz because the codec and the whole graph are; the device is whatever
+    // it opened at. There was no resampler on this side at all until 2026-08-29 -- the
+    // module documentation has promised one since it was written, "and back out to
+    // whatever the speakers want" -- so a device that opened at 44.1 kHz played every
+    // voice at 48/44.1 of its pitch and speed.
+    //
+    // One resampler per channel, because `Resampler` is mono and the mix is interleaved
+    // stereo. Two of them is the honest way and costs the same arithmetic a stereo one
+    // would. `None` on a 48 kHz device, which is almost all of them and the case that
+    // should cost nothing.
+    let mut to_device = stereo_resampler(speaker_rate);
+    let mut scratch = Deinterleaved::default();
 
     let mut listeners: std::collections::BTreeMap<String, Listener> =
         std::collections::BTreeMap::new();
@@ -1337,7 +1490,18 @@ fn mix(
                 // person who does speak.
                 continue;
             }
-            hand_over(ready, mixer.finish());
+            // Converted to the device's rate on the way out, when it is not 48 kHz. Here
+            // rather than in the output callback because a resampler is arithmetic and the
+            // callback has a deadline; the queue then holds exactly what the device takes.
+            let finished = mixer.finish();
+            match to_device.as_mut() {
+                None => hand_over(ready, finished),
+                Some(pair) => {
+                    if let Some(converted) = to_device_rate(pair, finished, &mut scratch) {
+                        hand_over(ready, converted);
+                    }
+                }
+            }
         }
 
         if reported.elapsed() >= std::time::Duration::from_secs(1) {

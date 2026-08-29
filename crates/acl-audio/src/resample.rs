@@ -40,14 +40,15 @@ impl std::fmt::Display for ResampleError {
 
 impl std::error::Error for ResampleError {}
 
-/// Converts one mono stream to [`TARGET_RATE`].
+/// Converts one mono stream between two rates.
 ///
 /// A rate that already matches costs nothing: the samples are copied straight through,
 /// which is both the fast path and the common one.
 pub struct Resampler {
-    /// `None` when the input is already at the target rate.
+    /// `None` when the input is already at the output rate.
     inner: Option<Inner>,
     input_rate: u32,
+    output_rate: u32,
 }
 
 struct Inner {
@@ -72,10 +73,26 @@ impl Resampler {
     ///
     /// Returns [`ResampleError`] if `rubato` refuses the ratio.
     pub fn new(input_rate: u32, chunk: usize) -> Result<Self, ResampleError> {
-        if input_rate == TARGET_RATE || input_rate == 0 {
+        Self::between(input_rate, TARGET_RATE, chunk)
+    }
+
+    /// A resampler between any two rates.
+    ///
+    /// The other direction is the speaker's: the mixer works at [`TARGET_RATE`] and a
+    /// device that opens at 44.1 kHz has to be handed 44.1 kHz, or it plays everything at
+    /// the wrong pitch. The output path had no resampler at all until 2026-08-29, which is
+    /// why the module documentation has promised one -- "and back out to whatever the
+    /// speakers want" -- since it was written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResampleError`] if `rubato` refuses the ratio.
+    pub fn between(input_rate: u32, output_rate: u32, chunk: usize) -> Result<Self, ResampleError> {
+        if input_rate == output_rate || input_rate == 0 || output_rate == 0 {
             return Ok(Self {
                 inner: None,
                 input_rate,
+                output_rate,
             });
         }
 
@@ -91,7 +108,7 @@ impl Resampler {
             oversampling_factor: 256,
             window: WindowFunction::BlackmanHarris2,
         };
-        let ratio = f64::from(TARGET_RATE) / f64::from(input_rate);
+        let ratio = f64::from(output_rate) / f64::from(input_rate);
         // `FixedAsync::Input`: a fixed number of frames in, however many come out. That is
         // the shape a capture callback has — the device decides how much it hands over,
         // and the resampler decides how much that becomes.
@@ -113,7 +130,14 @@ impl Resampler {
                 chunk,
             }),
             input_rate,
+            output_rate,
         })
+    }
+
+    /// The rate this converts to.
+    #[must_use]
+    pub const fn output_rate(&self) -> u32 {
+        self.output_rate
     }
 
     /// The rate this converts from.
