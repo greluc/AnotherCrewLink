@@ -1202,9 +1202,15 @@ impl Client {
         if let Some(reader) = reader.as_ref() {
             reader.ask_to_start();
         }
+        // The media path, end to end, with the window nowhere in it. Arriving packets go
+        // from the signalling worker straight to the mixer; encoded frames go from the
+        // capture callback straight back to the worker. Both used to travel through this
+        // window's paint, whose floor is two hundred milliseconds when the pointer is not
+        // over it.
+        let (link, packets) = net::Link::start();
         // Before the switch watcher, which writes the microphone gate into the capture
         // callback's `Tuning` and therefore needs one to write into.
-        let audio = audio::Audio::start(capture);
+        let audio = audio::Audio::start(capture, packets, &link.audio_sink());
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
@@ -1215,7 +1221,7 @@ impl Client {
             dead: std::collections::BTreeMap::new(),
             last_game_state: None,
             settings,
-            link: net::Link::start(),
+            link,
             controls: controls::Switchboard::start(audio.tuning()),
             audio,
             speaking: std::collections::BTreeSet::new(),
@@ -1604,9 +1610,6 @@ impl Client {
     /// deliberately: a player moves at the game's pace, and recomputing a gain fifty times a
     /// second would be forty-five recomputations of the same answer.
     fn carry_audio(&mut self) {
-        for packet in self.link.take_arrived() {
-            self.audio.receive(packet);
-        }
         // What the settings say, handed to the watcher rather than acted on here. It polls
         // at thirty milliseconds and writes the microphone gate straight into the capture
         // callback; this only has to keep it told.
@@ -1652,14 +1655,6 @@ impl Client {
         if wants_radio != self.announced.radio {
             self.announced.radio = wants_radio;
             self.link.say_on_radio(wants_radio);
-        }
-
-        // No gate here any more. It is applied in the capture callback, one frame before
-        // the packet exists, because applying it to a batch that has already been encoded
-        // and queued makes its precision the paint's -- two hundred milliseconds, which is
-        // most of a word.
-        for packet in self.audio.take_encoded() {
-            self.link.send_audio(packet);
         }
 
         let Some(state) = self
@@ -3221,7 +3216,17 @@ impl eframe::App for Client {
                 // only be given when the device is opened. `Settings.tsx` raises an
                 // "unsaved" count for exactly those and asks for a reconnect; this is that
                 // reconnect. Dropping the old handle stops its streams.
-                self.audio = audio::Audio::start(capture_settings(self.settings.config()));
+                //
+                // The media path is rewired with it: the new pipeline has a new mixing
+                // thread, and a worker still delivering to the old one would leave the
+                // client deaf from the first rebuild onwards.
+                let packets = self.link.rewire_audio();
+                self.audio = audio::Audio::start(
+                    capture_settings(self.settings.config()),
+                    packets,
+                    &self.link.audio_sink(),
+                );
+                self.controls = controls::Switchboard::start(self.audio.tuning());
             }
             ui.add_space(TITLE_BAR);
             ui.separator();

@@ -100,13 +100,13 @@ pub(crate) enum Report {
     /// Boxed because [`Event`] is large and this is a channel of them; an unboxed variant
     /// makes every message the size of the largest one.
     Event(Box<Event>),
-    /// Audio arrived from a peer.
-    Audio {
-        /// Whose.
-        socket_id: String,
-        /// The packet, on its way to a decoder.
-        packet: acl_core::peers::Incoming,
-    },
+    /// A peer was heard from.
+    ///
+    /// The *name*, not the packet. Audio goes straight from the signalling worker to the
+    /// mixing thread and does not pass through the window at all -- see `Link::start`.
+    /// What the window needs is the one question `roster::Voice` asks that nothing else
+    /// could answer: is this peer audible right now.
+    Speaking(String),
     /// A peer connection changed state.
     Peer {
         /// Whose.
@@ -135,6 +135,12 @@ pub(crate) enum State {
 
 /// The session, as the window holds it.
 pub(crate) struct Link {
+    /// Where the worker delivers arriving audio.
+    ///
+    /// Behind a lock because it is replaced whenever the audio pipeline is rebuilt, and
+    /// read by the worker between rounds. Contended once per rebuild against once per
+    /// fiftieth of a second, which is not contention.
+    to_mixer: std::sync::Arc<std::sync::Mutex<Sender<acl_core::peers::Incoming>>>,
     commands: Sender<Command>,
     /// Whether the player asked for every connection to go through a relay.
     ///
@@ -172,11 +178,6 @@ pub(crate) struct Link {
     /// until told otherwise rather than decaying — a peer who talks for ten seconds sends
     /// two messages, not five hundred.
     vocal: std::collections::BTreeSet<String>,
-    /// Packets that have arrived and not yet been handed to a decoder.
-    ///
-    /// Held for one frame at most: `take_arrived` empties it, and the caller hands them
-    /// straight on. A queue nobody drains is the failure this is shaped to make obvious.
-    arrived: Vec<acl_core::peers::Incoming>,
     /// Which peers have sent audio since the window last looked.
     ///
     /// When each was last heard, so "recently" is a length of time rather than "since the
@@ -212,28 +213,64 @@ pub(crate) struct Link {
 ///
 /// Five hundred survives two missed deliveries and still clears within half a second of
 /// somebody genuinely going. It is deliberately a duration and not the repaint interval:
-/// tying the two together is the mistake this whole evening has been made of. When the audio
-/// path stops travelling through the repaint loop, the gap this bridges shrinks to twenty
-/// milliseconds and this number can come down with it -- but not before, and not by
-/// accident.
+/// tying the two together is the mistake this whole evening has been made of.
+///
+/// **The audio itself no longer comes this way**, as of 2026-08-29 -- it goes from the
+/// worker straight to the mixing thread. What still arrives through the repaint loop is
+/// `Report::Speaking`, which is a name and a moment, so the gap this has to bridge is
+/// unchanged and so is the number. It could come down only if the window learnt about
+/// speech on a clock of its own, which it does not and has no reason to.
 const RECENTLY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Where encoded frames go on their way out.
+///
+/// A named type rather than a bare `Sender<Command>`, so the capture callback can be given
+/// the one thing it is allowed to do with the worker's channel and nothing else.
+#[derive(Clone)]
+pub(crate) struct AudioSink(std::sync::mpsc::Sender<Command>);
+
+impl AudioSink {
+    /// Hands one encoded frame over. `false` means the worker has gone.
+    pub(crate) fn send(&self, packet: Vec<u8>) -> bool {
+        self.0.send(Command::SendAudio(packet)).is_ok()
+    }
+}
 
 impl Link {
     /// Starts the thread. Nothing is connected until [`Link::connect`] is called.
-    pub(crate) fn start() -> Self {
+    ///
+    /// `to_mixer` is where arriving audio goes -- straight from this worker to the mixing
+    /// thread, with the window nowhere in between. **That is a fix of 2026-08-29 and it is
+    /// structural rather than incidental.** Packets used to reach the mixer as
+    /// `Report::Audio`, which `Link::pump` drains and `Client::carry_audio` forwards, both
+    /// of them inside `eframe`'s `update` -- a loop whose floor is two hundred
+    /// milliseconds when the pointer is not over the window, which is the whole time
+    /// anybody is playing. Fifty packets a second arrived and were delivered ten at a time,
+    /// five times a second, in both directions.
+    ///
+    /// Outgoing audio goes the other way for the same reason: the capture callback sends
+    /// `Command::SendAudio` into the command channel itself, through [`Link::audio_sink`].
+    /// Neither direction passes through a paint any more, and `take_arrived` and
+    /// `take_encoded` are gone rather than merely unused -- a method that exists is a
+    /// method something can start calling again.
+    pub(crate) fn start() -> (Self, Receiver<acl_core::peers::Incoming>) {
+        let (to_mixer, packets) = std::sync::mpsc::channel::<acl_core::peers::Incoming>();
+        let to_mixer = std::sync::Arc::new(std::sync::Mutex::new(to_mixer));
+        let for_worker = std::sync::Arc::clone(&to_mixer);
         let (commands, orders) = std::sync::mpsc::channel::<Command>();
         let (answers, reports) = std::sync::mpsc::channel::<Report>();
         let force_relay = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let relay_for_worker = std::sync::Arc::clone(&force_relay);
         std::thread::Builder::new()
             .name("signalling".to_owned())
-            .spawn(move || run(&orders, &answers, &relay_for_worker))
+            .spawn(move || run(&orders, &answers, &for_worker, &relay_for_worker))
             // A client that cannot start a thread has bigger problems than the lobby
             // browser, and there is nowhere to report them from here: the link simply
             // stays idle.
             .ok();
-        Self {
+        let link = Self {
             commands,
+            to_mixer,
             force_relay,
             reports,
             state: State::Idle,
@@ -244,8 +281,31 @@ impl Link {
             vocal: std::collections::BTreeSet::new(),
             on_radio: std::collections::BTreeSet::new(),
             speaking: std::collections::BTreeMap::new(),
-            arrived: Vec::new(),
+        };
+        (link, packets)
+    }
+
+    /// Points the media path at a new mixer, and hands back its end.
+    ///
+    /// The audio pipeline is rebuilt when a capture setting changes that can only be
+    /// applied at the moment a device is opened. The old mixing thread goes with it, so the
+    /// worker has to be told where to deliver instead -- otherwise every packet after the
+    /// first rebuild would be sent to a receiver nobody is holding, and the client would go
+    /// deaf the first time somebody ticked a box.
+    pub(crate) fn rewire_audio(&self) -> Receiver<acl_core::peers::Incoming> {
+        let (sender, packets) = std::sync::mpsc::channel::<acl_core::peers::Incoming>();
+        if let Ok(mut held) = self.to_mixer.lock() {
+            *held = sender;
         }
+        packets
+    }
+
+    /// Where the microphone sends what it has encoded.
+    ///
+    /// Handed to the capture callback, which is the only thing that uses it. A packet goes
+    /// from the callback into the worker's own command channel without a paint in between.
+    pub(crate) fn audio_sink(&self) -> AudioSink {
+        AudioSink(self.commands.clone())
     }
 
     /// Whether to force every connection through a relay.
@@ -274,7 +334,6 @@ impl Link {
                         self.connected.clear();
                         self.sockets.clear();
                         self.speaking.clear();
-                        self.arrived.clear();
                         // A connection that has gone takes its lobbies with it. Leaving
                         // them on screen would offer a player a join that cannot be sent.
                         self.lobbies.clear();
@@ -282,12 +341,11 @@ impl Link {
                     self.state = state;
                 }
                 Report::Event(event) => self.absorb(*event),
-                Report::Audio { socket_id, packet } => {
+                Report::Speaking(socket_id) => {
                     // A moment rather than a level. The window redraws five times a second
                     // and audio arrives fifty times a second, so what it needs is "recently"
                     // -- and `pump` running is what makes this decay.
                     self.speaking.insert(socket_id, std::time::Instant::now());
-                    self.arrived.push(packet);
                 }
                 Report::Peer {
                     socket_id,
@@ -391,12 +449,6 @@ impl Link {
         self.answer.as_deref()
     }
 
-    /// The packets that have arrived, and forgets them.
-    #[must_use]
-    pub(crate) fn take_arrived(&mut self) -> Vec<acl_core::peers::Incoming> {
-        std::mem::take(&mut self.arrived)
-    }
-
     /// Which player is on the impostor radio, if any.
     ///
     /// The lowest client id when more than one has claimed it, which is arbitrary and
@@ -445,11 +497,6 @@ impl Link {
     /// traffic than the audio it is describing.
     pub(crate) fn say_speaking(&self, speaking: bool) {
         self.send(Command::VoiceActivity(speaking));
-    }
-
-    /// Sends one Opus packet to everybody in the lobby.
-    pub(crate) fn send_audio(&self, packet: Vec<u8>) {
-        self.send(Command::SendAudio(packet));
     }
 
     /// The socket a player is on, if the server has said.
@@ -650,6 +697,7 @@ fn carry_out(
 fn run(
     orders: &Receiver<Command>,
     answers: &Sender<Report>,
+    to_mixer: &std::sync::Mutex<Sender<acl_core::peers::Incoming>>,
     force_relay: &std::sync::atomic::AtomicBool,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -759,7 +807,13 @@ fn run(
             // candidates are gathered after the offer and there may be no event left to
             // hang the sending off.
             if let Some(current) = held.session.as_mut() {
-                runtime.block_on(drain(&mut held.mesh, &mut held.repairs, current, answers));
+                runtime.block_on(drain(
+                    &mut held.mesh,
+                    &mut held.repairs,
+                    current,
+                    to_mixer,
+                    answers,
+                ));
                 // Every round, because a repair is decided by elapsed time rather than by
                 // an event: a link that has been quiet for four seconds has to be noticed
                 // by something that looks, and a rebuild scheduled for two seconds hence
@@ -1259,6 +1313,7 @@ async fn drain(
     mesh: &mut Option<acl_core::peers::PeerSet>,
     repairs: &mut std::collections::BTreeMap<String, Repair>,
     session: &mut Session,
+    to_mixer: &std::sync::Mutex<Sender<acl_core::peers::Incoming>>,
     answers: &Sender<Report>,
 ) {
     let Some(mesh) = mesh.as_mut() else {
@@ -1289,18 +1344,21 @@ async fn drain(
             connected: state == webrtc::peer_connection::RTCPeerConnectionState::Connected,
         });
     }
-    // The packets themselves are not carried to the window -- it has nothing to do with
-    // them and a channel of audio frames into a paint loop is a queue that grows. What it
-    // is told is *that* a peer is speaking, which is the one question `roster::Voice` asks
-    // that nothing could answer: `audible`.
-    //
-    // Decoding, jitter buffering and mixing are `acl-audio`'s and are not wired yet. This
-    // is deliberately the smallest true thing: audio is arriving from this peer.
+    // Straight to the mixer. The window is told *that* a peer is speaking, which is the
+    // one question `roster::Voice` asks that nothing else could answer, and nothing more:
+    // a channel of audio frames into a paint loop is a queue that grows, and until
+    // 2026-08-29 that is exactly what this was.
+    // Locked once for the batch rather than once per packet: the only writer is a rebuild
+    // of the audio pipeline, which happens when somebody changes a device setting.
+    let Ok(to_mixer) = to_mixer.lock() else {
+        return;
+    };
     for packet in audio {
-        let _ = answers.send(Report::Audio {
-            socket_id: packet.peer.clone(),
-            packet,
-        });
+        let _ = answers.send(Report::Speaking(packet.peer.clone()));
+        // A failed send means this mixer has gone. Not fatal and not a reason to stop: a
+        // rebuild replaces the sender a moment later, and the packets lost in between are
+        // twenty milliseconds each.
+        let _ = to_mixer.send(packet);
     }
 }
 
@@ -1522,7 +1580,7 @@ mod tests {
 
     #[test]
     fn the_list_accumulates_rather_than_being_rebuilt() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::Lobbies(vec![lobby(1, "One"), lobby(2, "Two")]));
         link.absorb(Event::LobbyUpdated(Box::new(lobby(3, "Three"))));
         assert_eq!(link.lobbies().count(), 3);
@@ -1536,7 +1594,7 @@ mod tests {
     /// the server sends `update_lobby` whether or not the browser has seen the id.
     #[test]
     fn an_update_replaces_rather_than_duplicating() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::Lobbies(vec![lobby(1, "Before")]));
         link.absorb(Event::LobbyUpdated(Box::new(lobby(1, "After"))));
         let titles: Vec<&str> = link.lobbies().map(|lobby| lobby.title.as_str()).collect();
@@ -1547,7 +1605,7 @@ mod tests {
     /// whole truth at that moment, so merging it would keep lobbies that have since gone.
     #[test]
     fn a_fresh_list_replaces_the_old_one() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::Lobbies(vec![lobby(1, "Old")]));
         link.absorb(Event::Lobbies(vec![lobby(2, "New")]));
         let titles: Vec<&str> = link.lobbies().map(|lobby| lobby.title.as_str()).collect();
@@ -1558,7 +1616,7 @@ mod tests {
     /// offer a player a join that cannot be sent.
     #[test]
     fn losing_the_connection_empties_the_browser() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::Lobbies(vec![lobby(1, "One")]));
         assert_eq!(link.lobbies().count(), 1);
 
@@ -1573,7 +1631,7 @@ mod tests {
     /// to type into the game and a refusal is a reason.
     #[test]
     fn both_answers_to_a_join_are_shown() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         assert_eq!(link.answer(), None);
 
         link.absorb(Event::LobbyCode {
@@ -1594,7 +1652,7 @@ mod tests {
     /// on screen would sit there going stale.
     #[test]
     fn closing_the_browser_empties_it() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::Lobbies(vec![lobby(1, "One")]));
         link.watch_lobbies(false);
         assert_eq!(link.lobbies().count(), 0);
@@ -1604,7 +1662,7 @@ mod tests {
     /// yet, and a queue nobody reads is a leak with a long fuse.
     #[test]
     fn events_this_window_has_no_use_for_are_dropped() {
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.absorb(Event::HostChanged(7));
         link.absorb(Event::VoiceActivity {
             socket_id: "abc".to_owned(),
@@ -1760,7 +1818,7 @@ mod tests {
         let mut host = publishing(&runtime, &base).expect("the host publishes");
 
         // And now the link, from the other side, on its own thread with its own runtime.
-        let mut link = Link::start();
+        let (mut link, _packets) = Link::start();
         link.connect(&base);
         link.watch_lobbies(true);
 
@@ -1873,8 +1931,8 @@ mod tests {
         };
         let base = format!("http://127.0.0.1:{PORT}");
 
-        let mut first = Link::start();
-        let mut second = Link::start();
+        let (mut first, _first_packets) = Link::start();
+        let (mut second, _second_packets) = Link::start();
         first.connect(&base);
         second.connect(&base);
 
@@ -1932,8 +1990,9 @@ mod tests {
         };
         let base = format!("http://127.0.0.1:{PORT}");
 
-        let mut speaker = Link::start();
-        let mut listener = Link::start();
+        let (mut speaker, _speaker_packets) = Link::start();
+        let (mut listener, listener_packets) = Link::start();
+        let sink = speaker.audio_sink();
         speaker.connect(&base);
         listener.connect(&base);
         let both_up = wait(&mut [&mut speaker, &mut listener], |links| {
@@ -1967,12 +2026,18 @@ mod tests {
             }
             let mut packet = Vec::new();
             if opus.encode(&samples, &mut packet).is_ok() {
-                speaker.send_audio(packet);
+                // Through the sink, which is what the capture callback holds. There is no
+                // other way out any more: `send_audio` was removed with the paint-loop
+                // path, because a second door is a second way for media to find it again.
+                sink.send(packet);
             }
 
             speaker.pump();
             listener.pump();
-            for arrived in listener.take_arrived() {
+            // Straight off the media channel rather than out of the window. This is the
+            // receiver `Link::start` handed back, and it is the same one the mixing thread
+            // holds in a real client.
+            while let Ok(arrived) = listener_packets.try_recv() {
                 if let Ok(written) = decoder.decode(&arrived.payload, &mut frame) {
                     heard.extend_from_slice(&frame[..written]);
                 }
@@ -2043,8 +2108,8 @@ mod tests {
         };
         let base = format!("http://127.0.0.1:{PORT}");
 
-        let mut speaker = Link::start();
-        let mut listener = Link::start();
+        let (mut speaker, _speaker_packets) = Link::start();
+        let (mut listener, _listener_packets) = Link::start();
         speaker.connect(&base);
         listener.connect(&base);
         let both_up = wait(&mut [&mut speaker, &mut listener], |links| {
@@ -2105,8 +2170,8 @@ mod tests {
         };
         let base = format!("http://127.0.0.1:{PORT}");
 
-        let mut claiming = Link::start();
-        let mut listening = Link::start();
+        let (mut claiming, _claiming_packets) = Link::start();
+        let (mut listening, _listening_packets) = Link::start();
         claiming.connect(&base);
         listening.connect(&base);
         let both_up = wait(&mut [&mut claiming, &mut listening], |links| {

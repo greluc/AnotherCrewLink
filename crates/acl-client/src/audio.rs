@@ -344,10 +344,6 @@ const JITTER_DEPTH: usize = 3;
 
 /// The pipeline, as the window holds it.
 pub(crate) struct Audio {
-    /// Packets from the mesh, on their way to a decoder.
-    incoming: Sender<Incoming>,
-    /// Packets from the microphone, on their way to the mesh.
-    outgoing: Receiver<Vec<u8>>,
     /// Transitions from the voice detector on the capture thread. See
     /// [`Self::take_voice_activity`].
     activity: Receiver<bool>,
@@ -375,9 +371,19 @@ impl Audio {
     /// A failure is not fatal and not silent. A client with no microphone is a client that
     /// can still hear, and one with no speaker can still be heard; both are worth saying
     /// out loud and neither is worth refusing to start over.
-    pub(crate) fn start(capture: Capture) -> Self {
-        let (incoming, packets) = std::sync::mpsc::channel::<Incoming>();
-        let (encoded, outgoing) = std::sync::mpsc::channel::<Vec<u8>>();
+    ///
+    /// `packets` and `sink` are the two ends of the media path, and neither belongs to the
+    /// window. Arriving audio comes straight from the signalling worker; encoded frames go
+    /// straight back to it from the capture callback. Until 2026-08-29 both travelled
+    /// through `eframe`'s `update`, whose floor is two hundred milliseconds when the
+    /// pointer is not over the window -- fifty packets a second delivered ten at a time,
+    /// five times a second, in each direction. `receive` and `take_encoded` are gone rather
+    /// than merely unused: a method that exists is one something can start calling again.
+    pub(crate) fn start(
+        capture: Capture,
+        packets: Receiver<Incoming>,
+        sink: &crate::net::AudioSink,
+    ) -> Self {
         // Transitions only, which is what makes an unbounded channel safe here: somebody
         // talking produces two of these a sentence, not fifty a second.
         let (voice, activity) = std::sync::mpsc::channel::<bool>();
@@ -407,7 +413,7 @@ impl Audio {
 
         match Self::open(
             packets,
-            &encoded,
+            sink,
             &voice,
             &placements,
             capture,
@@ -419,8 +425,6 @@ impl Audio {
             // speaker is open and the microphone is not, so there is something to say and
             // something still to hear.
             Ok((streams, trouble)) => Self {
-                incoming,
-                outgoing,
                 activity,
                 placements,
                 tuning,
@@ -429,8 +433,6 @@ impl Audio {
                 _streams: streams,
             },
             Err(why) => Self {
-                incoming,
-                outgoing,
                 activity,
                 placements,
                 tuning,
@@ -463,12 +465,6 @@ impl Audio {
         self.tuning.set(gain, noise_floor);
     }
 
-    /// Hands one arrived packet to the decoder.
-    pub(crate) fn receive(&self, packet: Incoming) {
-        // A failed send means the mixing thread is gone, which is a client on its way out.
-        let _ = self.incoming.send(packet);
-    }
-
     /// Whether the detector changed its mind since the last call, and to what.
     ///
     /// `None` when nothing changed, which is almost every frame. Only the last transition
@@ -481,18 +477,6 @@ impl Audio {
             last = Some(speaking);
         }
         last
-    }
-
-    /// Takes whatever the microphone has produced since the last call.
-    ///
-    /// Drained rather than blocked on: this is called from the frame loop, which has a
-    /// window to draw.
-    pub(crate) fn take_encoded(&self) -> Vec<Vec<u8>> {
-        let mut packets = Vec::new();
-        while let Ok(packet) = self.outgoing.try_recv() {
-            packets.push(packet);
-        }
-        packets
     }
 
     /// Replaces what every peer sounds like.
@@ -602,7 +586,7 @@ impl Audio {
     )]
     fn open(
         packets: Receiver<Incoming>,
-        encoded: &Sender<Vec<u8>>,
+        sink: &crate::net::AudioSink,
         voice: &Sender<bool>,
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
         capture: Capture,
@@ -635,7 +619,7 @@ impl Audio {
         // missing, or at a rate `choose` could not use heard *nobody*, when 1.x leaves
         // them listening and merely unable to speak.
         let speaker = open_speaker(&host, &ready, tone, &played)?;
-        match open_microphone(&host, encoded, voice, &played, capture, tuning) {
+        match open_microphone(&host, sink, voice, &played, capture, tuning) {
             Ok(microphone) => Ok((vec![speaker, microphone], None)),
             Err(why) => {
                 acl_core::log_warn!("audio", "no microphone: {why}");
@@ -648,7 +632,7 @@ impl Audio {
     #[cfg(not(feature = "audio"))]
     fn open(
         _packets: Receiver<Incoming>,
-        _encoded: &Sender<Vec<u8>>,
+        _sink: &crate::net::AudioSink,
         _voice: &Sender<bool>,
         _placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
     ) -> Result<Opened, String> {
@@ -792,7 +776,7 @@ fn lay_out(queue: &mut std::collections::VecDeque<f32>, buffer: &mut [f32], chan
 )]
 fn open_microphone(
     host: &cpal::Host,
-    encoded: &Sender<Vec<u8>>,
+    sink: &crate::net::AudioSink,
     voice: &Sender<bool>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     capture: Capture,
@@ -861,7 +845,7 @@ fn open_microphone(
     let mut tuned_for = 0_u64;
     let detecting = capture.voice_detection;
     let voice = voice.clone();
-    let encoded = encoded.clone();
+    let sink = sink.clone();
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
     let mut converted: Vec<f32> = Vec::new();
     let mut packet = Vec::new();
@@ -967,7 +951,7 @@ fn open_microphone(
 
                     packet.clear();
                     if encode_frame(&mut opus, &frame, &mut packet).is_ok()
-                        && encoded.send(packet.clone()).is_err()
+                        && !sink.send(packet.clone())
                     {
                         // Nobody is listening any more, which is a client on its way out.
                         // Stop trying rather than filling a queue nothing drains.
@@ -1871,15 +1855,16 @@ mod tests {
     /// devices were real. What it should assert is the invariant rather than the outcome.
     #[test]
     fn a_client_starts_with_devices_or_without_and_says_which() {
-        let audio = Audio::start(super::Capture::default());
+        // The two ends of the media path belong to the signalling worker, not to `Audio`.
+        // A `Link` is not started here -- this is a unit test and there is nothing to
+        // signal to -- so the ends are made directly, which is what `Link::start` does.
+        let (link, packets) = crate::net::Link::start();
+        let audio = Audio::start(super::Capture::default(), packets, &link.audio_sink());
         // `None` means the devices opened, and nothing here plays anything -- that would
         // put a noise on the machine of whoever ran the tests.
         if let Some(why) = audio.trouble() {
             assert!(!why.is_empty(), "a reason with nothing in it");
         }
-        // Either way the channels work, so nothing above has to special-case silence.
-        audio.receive(packet(0, vec![1, 2, 3]));
-        let _ = audio.take_encoded();
         audio.place(
             [(
                 "somebody".to_owned(),
