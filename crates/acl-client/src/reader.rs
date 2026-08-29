@@ -44,6 +44,14 @@ pub(crate) enum Report {
     Frame(Box<AmongUsState>),
     /// Something worth putting in front of a person.
     Trouble(String),
+    /// The helper has gone, and the last frame it sent is no longer true.
+    ///
+    /// Separate from `State(Lost)` because the two do different things: one is what the
+    /// window shows, and this is what the audio reads. `Reader::latest` kept serving the
+    /// last frame after the helper died, so every player stayed placed where they stood at
+    /// that moment -- proximity frozen rather than absent, which is worse, because
+    /// somebody walking away stays audible.
+    Lost,
 }
 
 /// A handle on the reader thread.
@@ -51,6 +59,14 @@ pub(crate) struct Reader {
     commands: Sender<Command>,
     reports: Receiver<Report>,
     state: HelperState,
+    /// Whether the helper this is talking to is a different one from a moment ago.
+    ///
+    /// Read once and cleared. The overlay's visibility, its position and its contents all
+    /// live in the helper's process, so a replacement starts with none of them -- and
+    /// `Client::overlay_shown` is a latch that says "already told it", which meant the
+    /// overlay never came back after a helper was replaced. It stayed told, to a process
+    /// that had never heard.
+    replaced: bool,
     latest: Option<Box<AmongUsState>>,
     trouble: Option<String>,
 }
@@ -71,6 +87,7 @@ impl Reader {
             commands,
             reports: inbox,
             state: HelperState::NotRequested,
+            replaced: false,
             latest: None,
             trouble: None,
         })
@@ -79,6 +96,17 @@ impl Reader {
     /// Takes in everything the thread has said since the last look.
     ///
     /// Called once a frame, and never blocks.
+    /// Whether the helper has been replaced since this was last asked, and forgets it.
+    ///
+    /// Everything the overlay is told lives in the helper's process: whether it is shown,
+    /// where it is, and what is on it. A replacement knows none of it, so whoever composes
+    /// the overlay has to say all three again -- and `overlay_shown` is a latch meaning
+    /// "already told it", which is why the overlay never returned after a helper was
+    /// replaced.
+    pub(crate) fn take_replaced(&mut self) -> bool {
+        std::mem::take(&mut self.replaced)
+    }
+
     pub(crate) fn pump(&mut self) {
         loop {
             match self.reports.try_recv() {
@@ -89,12 +117,23 @@ impl Reader {
                     if self.state != state {
                         acl_core::log_info!("reader", "helper is now {state:?}");
                     }
+                    // A helper that has just started knows nothing about an overlay: it
+                    // has never been told to show one, never been given a position, and has
+                    // nothing on its canvas. Whoever is composing the overlay has to be
+                    // told to say all of that again.
+                    if self.state == HelperState::Running && state != HelperState::Running {
+                        self.replaced = true;
+                    }
                     self.state = state;
                     if state == HelperState::Running {
                         self.trouble = None;
                     }
                 }
                 Ok(Report::Frame(state)) => self.latest = Some(state),
+                // Cleared rather than left standing. A frame from a helper that has gone
+                // places everybody where they were when it went, and a player who walked
+                // away is then still audible from where they used to be.
+                Ok(Report::Lost) => self.latest = None,
                 Ok(Report::Trouble(what)) => {
                     // Everything the elevated half has to say arrives here. It cannot write
                     // to this file itself -- see the note at the top of `acl-helper` -- so
@@ -159,13 +198,41 @@ impl Reader {
 /// arrives at and costs a wake with nothing in it the rest of the time.
 const TICK: Duration = Duration::from_millis(50);
 
+/// How long to wait before starting a helper that has been lost.
+///
+/// The helper's own retry interval for finding the game, which is the matching number: one
+/// that died because the machine was busy starts on the next attempt, and one that dies
+/// every time costs one process every seven and a half seconds rather than hundreds.
+const RESTART_AFTER: Duration = Duration::from_millis(7_500);
+
 /// The reader thread.
 fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
     let mut link = Link::new();
+    // When to try again after the helper has gone.
+    //
+    // Nothing restarted it until 2026-08-29. `HelperState::Lost` was reported, the window
+    // showed it, and there it stayed: no game state for the rest of the session, and
+    // `Reader::latest` went on serving the last frame it had, so every player stayed placed
+    // where they stood when the helper died. `may_prompt` says a lost helper may be started
+    // again, and nothing ever asked.
+    //
+    // Restarted without a prompt, which is within §4.7 rather than around it: the prompt
+    // exists for *elevation*, which asks the user for something. Starting an unelevated
+    // helper they already asked for is resuming what they asked for.
+    let mut restart_due: Option<std::time::Instant> = None;
+    let mut wanted = false;
     loop {
         match orders.recv_timeout(TICK) {
-            Ok(Command::Start) => start(&mut link, reports),
+            Ok(Command::Start) => {
+                wanted = true;
+                restart_due = None;
+                start(&mut link, reports);
+            }
             Ok(Command::Stop) => {
+                // Asked for, so it stays down. The restart below is for a helper that went
+                // away on its own.
+                wanted = false;
+                restart_due = None;
                 link.stop();
                 let _ = reports.send(Report::State(link.state()));
             }
@@ -205,10 +272,28 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
                 Event::Stopped(reason) => {
                     let _ = reports.send(Report::Trouble(reason));
                     let _ = reports.send(Report::State(link.state()));
+                    // The frame the window is holding is now a lie, so it is cleared as
+                    // well as reported.
+                    let _ = reports.send(Report::Lost);
                 }
                 // One frame that would not decode is not worth interrupting somebody
                 // about, and the link has already decided it is not fatal.
                 Event::Undecodable(_) => {}
+            }
+        }
+
+        // And the restart. Checked every tick because the helper can go at any moment and
+        // there is no event on the command channel to hang it off.
+        #[cfg(windows)]
+        if wanted && link.state() == HelperState::Lost {
+            match restart_due {
+                None => restart_due = Some(std::time::Instant::now() + RESTART_AFTER),
+                Some(due) if std::time::Instant::now() >= due => {
+                    restart_due = None;
+                    acl_core::log_info!("reader", "the helper is gone; starting another");
+                    start(&mut link, reports);
+                }
+                Some(_) => {}
             }
         }
     }

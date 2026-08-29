@@ -457,6 +457,20 @@ impl GameWindow {
 
     /// Where the game is drawing, if it is.
     #[cfg(windows)]
+    /// Whether the game's window is the one in front.
+    ///
+    /// Asked because the overlay is a `WS_EX_TOPMOST` layered window and nothing hid it
+    /// when the game lost focus, so it floated over a browser, over the settings screen,
+    /// over anything -- for the rest of the round. `Overlay.tsx` is a child of the game's
+    /// own window in 1.x and cannot do that by construction; here it has to be asked.
+    ///
+    /// `false` when the game has not been found, which is also when there is nothing to
+    /// draw over.
+    #[cfg(windows)]
+    fn game_is_in_front(&self) -> bool {
+        self.known.is_some_and(acl_core::game_window::is_focused)
+    }
+
     fn bounds(&mut self) -> Option<acl_core::game_window::Bounds> {
         match self
             .looking
@@ -1253,6 +1267,41 @@ impl Client {
         }
     }
 
+    /// Whether an overlay drawn now would be seen, and be seen where it belongs.
+    ///
+    /// Two conditions, and both were missing until 2026-08-29.
+    ///
+    /// The game must be the window in front. The overlay is `WS_EX_TOPMOST` and nothing
+    /// hid it when focus went elsewhere, so it floated over a browser, over this client's
+    /// own settings screen, over anything at all -- for the rest of the round.
+    /// `Overlay.tsx` is a child of the game's own window in 1.x and cannot do that.
+    ///
+    /// And the display must still be composited. A Direct3D application holding it
+    /// exclusively means a layered window is not drawn at all: the overlay is composed,
+    /// sent, and invisible, which reads as a broken feature.
+    /// `fullscreen::display_state` was written for exactly this and had no caller, so
+    /// nothing said why.
+    ///
+    /// Both on the overlay's own cadence, which is where `fullscreen`'s own note says the
+    /// shell call belongs: this runs behind `OVERLAY_TICK`, not on the audio path and not
+    /// on a per-frame game tick.
+    #[cfg(windows)]
+    fn overlay_is_showable(&self) -> bool {
+        if !self.game_window.game_is_in_front() {
+            return false;
+        }
+        let composited = acl_core::fullscreen::display_state()
+            .overlay()
+            .is_available();
+        if !composited && self.overlay_shown {
+            acl_core::log_info!(
+                "overlay",
+                "the display is held exclusively, so a layered window would not appear"
+            );
+        }
+        composited
+    }
+
     /// Composes one overlay frame and sends it across.
     ///
     /// Every part of this is decided elsewhere: `game_window` says where the game is and
@@ -1265,6 +1314,9 @@ impl Client {
         // remembers the game's process id rather than looking it up again every time. See
         // [`GameWindow`].
         let found = self.game_window.bounds();
+        // Before the reader is borrowed, for the same reason the bounds are: this reads
+        // `self.game_window` and `self.overlay_shown`.
+        let showable = self.overlay_is_showable();
 
         let Some(reader) = self.reader.as_ref() else {
             return;
@@ -1281,10 +1333,26 @@ impl Client {
             acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
         let compact = settings.bool_at("compactOverlay") || position.forces_compact();
 
+        // Two more reasons to draw nothing, and both were missing until 2026-08-29.
+        //
+        // The game must be the window in front. The overlay is `WS_EX_TOPMOST` and nothing
+        // hid it when focus went elsewhere, so it floated over a browser, over this
+        // client's own settings screen, over anything at all -- for the rest of the round.
+        // `Overlay.tsx` is a child of the game's window in 1.x and cannot do that.
+        //
+        // And the display must still be composited. A Direct3D application holding it
+        // exclusively means a layered window is not drawn at all: the overlay is composed,
+        // sent, and invisible, which reads as a broken feature. `fullscreen::display_state`
+        // was written for exactly this and had no caller, so nothing said why.
+        //
+        // Both on the overlay's own cadence, which is where `fullscreen`'s own note says
+        // the shell call belongs: `compose_overlay` runs behind `OVERLAY_TICK`, not on the
+        // audio path and not on a per-frame game tick.
         let bounds = found.filter(|bounds| bounds.is_drawable());
-        let Some(bounds) = bounds.filter(|_| enabled) else {
-            // No game, nothing to draw over, or the overlay is switched off. Hidden rather
-            // than left showing the last frame over whatever the player switched to.
+        let Some(bounds) = bounds.filter(|_| enabled && showable) else {
+            // No game, nothing to draw over, the game is behind something else, the display
+            // is held exclusively, or the overlay is switched off. Hidden rather than left
+            // showing the last frame over whatever the player switched to.
             if self.overlay_shown {
                 self.overlay_shown = false;
                 reader.show_overlay(false);
@@ -3070,6 +3138,12 @@ impl eframe::App for Client {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(reader) = self.reader.as_mut() {
             reader.pump();
+            // A helper that has just replaced another has nothing on its canvas and has
+            // never been told to show it. The latch that says "already told it" has to go
+            // back, or the overlay stays absent for the rest of the session.
+            if reader.take_replaced() {
+                self.overlay_shown = false;
+            }
         }
         self.hats.pump();
         self.link.pump();
