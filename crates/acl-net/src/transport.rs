@@ -33,10 +33,22 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::client::{Action, Client};
 
-/// How often [`Connection::next`] wakes to run the client's timers when no frame arrives.
+/// How often [`Connection::next`] runs the client's timers when no frame arrives.
 ///
 /// The heartbeat deadline is tens of seconds, so this only has to be small enough that a
 /// missed heartbeat is noticed promptly rather than a whole interval late.
+///
+/// It is a *deadline*, not a sleep, and that is the whole of a fix made on 2026-08-29. It
+/// used to be `sleep(TICK)` inside the `select!`, which restarts from zero every time
+/// `next` is called -- and the client wraps every call in a fifty-millisecond timeout, so
+/// the sleep was cancelled at fifty milliseconds and began again, for ever. `on_tick` was
+/// never reached once in the life of a connection: acknowledgements never expired, and a
+/// socket that had stopped answering was indistinguishable from a quiet one. The whole
+/// heartbeat, which exists so that a dead connection is noticed, was dead itself.
+///
+/// Against an absolute instant the cancellation is harmless: each call sleeps for whatever
+/// is left of the interval, and when nothing is left the timer fires immediately. It now
+/// holds for any caller polling at any rate, which the sleep did not and could not.
 const TICK: Duration = Duration::from_secs(1);
 
 /// Why a connection ended or could not be made.
@@ -54,6 +66,8 @@ pub enum TransportError {
 pub struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     client: Client,
+    /// When the client's timers are next due. See [`TICK`].
+    next_tick: Instant,
 }
 
 impl Connection {
@@ -74,9 +88,11 @@ impl Connection {
             .into_client_request()
             .map_err(TransportError::WebSocket)?;
         let (socket, _) = tokio_tungstenite::connect_async(request).await?;
+        let now = Instant::now();
         Ok(Self {
             socket,
-            client: Client::new(Instant::now()),
+            client: Client::new(now),
+            next_tick: now + TICK,
         })
     }
 
@@ -106,7 +122,11 @@ impl Connection {
                 }
                 Some(Err(_)) => return Some(self.client.on_frame("1", Instant::now())),
             },
-            () = tokio::time::sleep(TICK) => self.client.on_tick(Instant::now()),
+            () = tokio::time::sleep_until(tokio::time::Instant::from_std(self.next_tick)) => {
+                let now = Instant::now();
+                self.next_tick = now + TICK;
+                self.client.on_tick(now)
+            }
         };
 
         // Anything the client wants sent goes out before the caller sees the rest, so a

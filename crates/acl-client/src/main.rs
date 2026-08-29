@@ -309,6 +309,30 @@ impl Portraits {
 /// `audio` should not have to know what a key is called. The three of them are
 /// `getUserMedia` constraints on the shipped client and are applied the same way: at open
 /// time, and again when the reload button reopens the audio.
+/// Whether it is time to try the signalling server again, and what to remember.
+///
+/// Returns the attempt number when a connection should be made now, and the schedule to
+/// hold until the next call. Pure, because the alternative is a reconnect policy that can
+/// only be checked by unplugging a network cable.
+///
+/// The doubling is `acl_net::reconnect`'s, which is the same schedule the peer connections
+/// use. `initiates_reconnect`'s asymmetry does not apply: there is no second end to
+/// collide with here, only a server, so the answering grace is not added.
+fn reconnect_due(
+    retry: Option<(std::time::Instant, u32)>,
+    now: std::time::Instant,
+) -> (Option<u32>, Option<(std::time::Instant, u32)>) {
+    let (due, attempt) = retry.unwrap_or((now + acl_net::reconnect::reconnect_delay(1, true), 1));
+    if now < due {
+        return (None, Some((due, attempt)));
+    }
+    let next = attempt.saturating_add(1);
+    (
+        Some(attempt),
+        Some((now + acl_net::reconnect::reconnect_delay(next, true), next)),
+    )
+}
+
 fn capture_settings(stored: &acl_ui::config::Config) -> audio::Capture {
     audio::Capture {
         echo_cancellation: stored.bool_at("echoCancellation"),
@@ -1090,6 +1114,19 @@ struct Client {
     /// A join sent every frame is a join the server rate-limits, and `within_limit` in the
     /// server's `on_join` is not a suggestion.
     joined: Option<String>,
+    /// When to try the signalling server again, and how many times it has been tried.
+    ///
+    /// A dropped socket used to be the end of voice for the life of the process:
+    /// `keep_connected` reconnected from `Idle` and treated `Failed` as terminal, so a
+    /// server restart, or three seconds of unplugged ethernet, left a client that still
+    /// painted its lobby list and could no longer hear anybody. Nothing told the player,
+    /// because from their side nothing had visibly changed.
+    ///
+    /// The schedule is `acl_net::reconnect`'s, which is the same one the peer connections
+    /// use and was written for exactly this shape of problem -- doubling from two seconds
+    /// to a thirty-second ceiling, so a server that is down costs one attempt every half
+    /// minute rather than a tight loop against a machine that is trying to come back up.
+    retry: Option<(std::time::Instant, u32)>,
     /// Which mod is installed beside the game, and the process it was found for.
     ///
     /// Remembered per process id, because detecting walks a directory: doing that on every
@@ -1183,6 +1220,7 @@ impl Client {
             audio: audio::Audio::start(capture),
             speaking: std::collections::BTreeSet::new(),
             joined: None,
+            retry: None,
             mods: None,
             page: Screen::Main,
             catalogue,
@@ -1865,16 +1903,50 @@ impl Client {
     fn keep_connected(&mut self) {
         match self.link.state() {
             net::State::Idle => {
-                // The server the settings name, which is 1.x's `serverURL` -- the same key
-                // in the same file, so a player who changed it keeps their change.
-                let url = self.settings.config().text_at("serverURL");
-                acl_core::log_info!("net", "connecting to {url}");
-                self.link.connect(&url);
+                self.retry = None;
+                self.connect_now();
             }
             // A subscription belongs to a socket. When the socket goes, so does it.
-            net::State::Connecting | net::State::Failed(_) => self.watching_lobbies = false,
-            net::State::Connected(_) => {}
+            //
+            // `retry` is deliberately *not* cleared here. An attempt that is in flight is
+            // still an attempt: clearing it would reset the backoff to two seconds on
+            // every try, and a server that is down would be hammered every two seconds for
+            // as long as it stayed down instead of every thirty.
+            net::State::Connecting => self.watching_lobbies = false,
+            net::State::Failed(_) => {
+                self.watching_lobbies = false;
+                let (now_or_wait, next) = reconnect_due(self.retry, std::time::Instant::now());
+                self.retry = next;
+                if let Some(attempt) = now_or_wait {
+                    acl_core::log_info!("net", "reconnecting, attempt {attempt}");
+                    // Here rather than when the failure was first seen, and the ordering
+                    // matters. The lobby went with the socket, so `follow_the_lobby` has
+                    // to re-emit the join -- otherwise the client reconnects to the
+                    // *server* and not to the lobby: the code has not changed, so the edge
+                    // that sends `join` never comes round again and the player sits in a
+                    // lobby the server does not know they are in.
+                    //
+                    // Cleared on the same frame as the connect, because `Command::Connect`
+                    // empties the worker's deferred queue. A join queued while the socket
+                    // was down would be thrown away by the connect that was meant to carry
+                    // it, and `joined` would already be set again so nothing would re-send
+                    // it. `logic` calls `follow_the_lobby` on the line after this one.
+                    self.joined = None;
+                    self.connect_now();
+                }
+            }
+            net::State::Connected(_) => self.retry = None,
         }
+    }
+
+    /// Opens a session to the server the settings name.
+    ///
+    /// `serverURL` is 1.x's key in 1.x's file, so a player who changed it keeps their
+    /// change.
+    fn connect_now(&mut self) {
+        let url = self.settings.config().text_at("serverURL");
+        acl_core::log_info!("net", "connecting to {url}");
+        self.link.connect(&url);
     }
 
     /// Joins and leaves the lobby the game is in.
@@ -3311,6 +3383,63 @@ mod tests {
     ///
     /// Driven with made-up instants rather than by sleeping, so it says something about the
     /// arithmetic rather than about how busy the machine was.
+    /// The signalling connection comes back, on a schedule that grows.
+    ///
+    /// Until 2026-08-29 a dropped socket was the end of voice for the life of the process:
+    /// `keep_connected` reconnected only from `Idle` and treated `Failed` as terminal. A
+    /// server restart, or three seconds of unplugged ethernet, left a client that still
+    /// painted its lobby list and could no longer hear anybody, with nothing on screen to
+    /// say so.
+    #[test]
+    fn a_dropped_socket_is_retried_on_a_growing_delay() {
+        use acl_net::reconnect::{BASE_DELAY, MAX_DELAY, reconnect_delay};
+
+        let start = std::time::Instant::now();
+
+        // The first sight of a failure schedules rather than connecting. Reconnecting the
+        // instant a server closes the socket races the restart that closed it.
+        // `reconnect_due` always hands a schedule back -- there is no state in which the
+        // client stops trying to reach its server -- so this unwrapping is the assertion.
+        let schedule = |held, now| match super::reconnect_due(held, now) {
+            (fired, Some(next)) => (fired, next),
+            (_, None) => panic!("reconnect_due must always leave a schedule behind"),
+        };
+
+        let (now, (due, attempt)) = schedule(None, start);
+        assert!(now.is_none(), "the first failure waits");
+        assert_eq!(attempt, 1);
+        assert_eq!(due - start, BASE_DELAY);
+
+        // Called again before the delay is up, it holds the schedule rather than replacing
+        // it. Every frame calls this, so a schedule that reset itself would never fire.
+        let (now, held) = schedule(Some((due, attempt)), start + BASE_DELAY / 2);
+        assert!(now.is_none());
+        assert_eq!(
+            held,
+            (due, attempt),
+            "the schedule survives being looked at"
+        );
+
+        // And at the deadline it fires and doubles.
+        let (now, (second_due, second)) = schedule(Some((due, attempt)), due);
+        assert_eq!(now, Some(1), "the first attempt");
+        assert_eq!(second, 2);
+        assert_eq!(second_due - due, reconnect_delay(2, true));
+
+        // Doubling to a ceiling, so a server that is down costs one attempt every thirty
+        // seconds rather than a tight loop against a machine trying to come back up.
+        let mut held = (second_due, second);
+        let mut when = second_due;
+        for _ in 0..12 {
+            let (fired, next) = schedule(Some(held), when);
+            assert!(fired.is_some());
+            held = next;
+            when = next.0;
+        }
+        let (_, far_out) = schedule(Some(held), when);
+        assert_eq!(far_out.0 - when, MAX_DELAY, "the delay is bounded");
+    }
+
     #[test]
     fn a_cadence_holds_everything_between_its_ticks() {
         use std::time::Duration;
