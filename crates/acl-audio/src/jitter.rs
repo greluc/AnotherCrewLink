@@ -86,7 +86,12 @@ pub enum FrameSource {
     Recovered,
     /// The packet was lost and there was no redundancy; the codec extrapolated.
     Concealed,
-    /// Nothing was available at all, and silence went out.
+    /// Nothing was available at all.
+    ///
+    /// The first few of these are concealed rather than silent -- see the branch that
+    /// produces them. The variant still says "nothing was there", which is what the
+    /// harness measures; what went out of the speaker is a different question from where
+    /// it came from.
     Silence,
     /// Inserted on purpose, to fall a frame further behind the network and regain depth.
     ///
@@ -313,11 +318,26 @@ impl JitterBuffer {
                 FrameSource::Concealed
             }
         } else if self.packets.is_empty() {
-            // Nothing at all. Concealment extrapolates from what came before, but with an
-            // empty buffer there is nothing to extrapolate towards and the stream has
-            // probably stopped.
+            // Nothing at all, and the question is whether that is a gap or an ending.
+            //
+            // For the first `STARVATION_FRAMES` it is treated as a gap, and concealed.
+            // That is the same window `push` uses to decide the sequence number is still
+            // meaningful, so the two agree on when a stream has stopped rather than
+            // stumbled. Until 2026-08-29 this branch emitted digital zeroes from the very
+            // first frame -- a hard edge to silence, which is a click, at exactly the
+            // moment somebody starts speaking after a pause and the buffer has run dry.
+            // The branch below conceals a hole in the middle of a stream and this one did
+            // not conceal the hole at its front.
+            //
+            // Past the window, silence, and it costs nothing: libopus's concealment decays
+            // to silence within a handful of frames of its own accord, so the frames after
+            // that are inaudible either way and there is no reason to spend a decode on
+            // each of them for a peer who has stopped sending.
             self.starved = self.starved.saturating_add(1);
             self.stats.silent += 1;
+            if self.starved <= STARVATION_FRAMES {
+                self.decoder.conceal(&mut samples)?;
+            }
             FrameSource::Silence
         } else {
             // Something later is waiting, so this really is a hole rather than the end.
@@ -480,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_buffer_produces_silence_rather_than_stopping() {
+    fn an_empty_buffer_conceals_the_gap_before_it_gives_up_on_it() {
         // A peer that has gone quiet under DTX, or one that has left. The output device
         // still asks for a frame every twenty milliseconds either way.
         let mut buffer = JitterBuffer::new(MIN_DEPTH).unwrap();
@@ -499,7 +519,29 @@ mod tests {
             }
         }
         assert_eq!(frame.source, FrameSource::Silence);
-        assert!(frame.samples.iter().all(|sample| *sample == 0.0));
+
+        // Not zeroes. Until 2026-08-29 this branch went straight to digital silence, which
+        // is a hard edge and therefore a click -- at exactly the moment a buffer runs dry
+        // under somebody who is about to speak. The branch that conceals a hole in the
+        // middle of a stream was right there; the hole at its *front* was not concealed.
+        assert!(
+            frame.samples.iter().any(|sample| *sample != 0.0),
+            "the first frame after the buffer empties should be concealed, not zeroed"
+        );
+
+        // And it does give up. Past `STARVATION_FRAMES` the stream has stopped rather than
+        // stumbled -- the same window `push` uses to decide the sequence number has stopped
+        // meaning anything -- so there is nothing to extrapolate towards and no reason to
+        // spend a decode per frame on a peer who is not sending.
+        let mut last = frame;
+        for _ in 0..u32::try_from(STARVATION_FRAMES).unwrap() + 2 {
+            last = buffer.pop().unwrap().unwrap();
+        }
+        assert_eq!(last.source, FrameSource::Silence);
+        assert!(
+            last.samples.iter().all(|sample| *sample == 0.0),
+            "a stream that has stopped should be silent rather than concealed for ever"
+        );
     }
 
     #[test]
