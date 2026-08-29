@@ -144,6 +144,20 @@ pub(crate) struct Tuning {
     /// than a full one — a meter that reads maximum when nothing is listening is worse than
     /// one that reads nothing.
     level: std::sync::atomic::AtomicU32,
+    /// Whether the microphone should be sending at all.
+    ///
+    /// Read inside the capture callback, one frame before the packet is made, and that is
+    /// the whole of a fix from 2026-08-29. The gate used to be applied in the window's
+    /// paint, over a batch of frames that had already been encoded and queued -- and the
+    /// paint runs at five hertz whenever the pointer is not over the window, which is the
+    /// whole time anybody is playing.
+    ///
+    /// So releasing push-to-talk cut up to two hundred milliseconds off the end of the
+    /// word, and pressing it sent up to two hundred milliseconds of whatever was in the
+    /// buffer *before* the press -- the room, the game, the sentence not meant for the
+    /// lobby. Twenty milliseconds is the smallest that error can be, and this makes it
+    /// that.
+    transmitting: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Tuning {
@@ -153,6 +167,10 @@ impl Default for Tuning {
             noise_floor: std::sync::atomic::AtomicU64::new((-1.0_f64).to_bits()),
             generation: std::sync::atomic::AtomicU64::new(0),
             level: std::sync::atomic::AtomicU32::new((-1.0_f32).to_bits()),
+            // Silent until something says otherwise. A client that transmitted while the
+            // switches were still being read would send the first frames of every session
+            // from a muted microphone.
+            transmitting: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -166,6 +184,20 @@ impl Tuning {
         if self.noise_floor.swap(wanted, Ordering::Relaxed) != wanted {
             self.generation.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Opens or closes the microphone.
+    ///
+    /// Called from whatever polls the keys, at whatever rate it polls them; read once per
+    /// twenty-millisecond frame by the capture callback.
+    pub(crate) fn transmit(&self, on: bool) {
+        self.transmitting
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether the capture callback should be handing frames over.
+    fn transmitting(&self) -> bool {
+        self.transmitting.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Records what the microphone just heard.
@@ -407,6 +439,14 @@ impl Audio {
                 _streams: Vec::new(),
             },
         }
+    }
+
+    /// The knobs the capture callback reads.
+    ///
+    /// Handed out so the switch watcher can write the microphone gate straight into the
+    /// callback rather than through the window's paint. See `Tuning::transmitting`.
+    pub(crate) fn tuning(&self) -> &Arc<Tuning> {
+        &self.tuning
     }
 
     /// The settings that can change while the microphone is open.
@@ -908,6 +948,21 @@ fn open_microphone(
                         if heard.changed && voice.send(heard.talking).is_err() {
                             return;
                         }
+                    }
+
+                    // The gate, on the frame it applies to. Everything above it still
+                    // runs while the microphone is closed -- the canceller keeps its
+                    // convergence, the detector keeps its floor, and the meter on the
+                    // settings page keeps moving so a muted player can still see that
+                    // their microphone works. What stops is the sending.
+                    //
+                    // It used to be applied in the window's paint, over a batch of frames
+                    // already encoded and queued, and the paint runs at five hertz when
+                    // the pointer is not over the window. So a push-to-talk release cut up
+                    // to two hundred milliseconds off the end of the word and a press sent
+                    // up to two hundred milliseconds of what came before it.
+                    if !tuning.transmitting() {
+                        continue;
                     }
 
                     packet.clear();

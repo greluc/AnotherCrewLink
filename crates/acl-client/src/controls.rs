@@ -109,6 +109,151 @@ impl State {
     }
 }
 
+/// How often the keys are looked at.
+///
+/// A key press lasts as long as a finger stays down, which is fifty to a hundred and fifty
+/// milliseconds for a deliberate tap. Thirty is comfortably inside the shortest of those,
+/// and it is a `GetAsyncKeyState` per bound key -- four of them, costing nothing.
+///
+/// **It has to be a clock of its own, and that is the fix of 2026-08-29.** The keys were
+/// polled from the window's paint, which drops to five hertz whenever the pointer is not
+/// over the window -- the whole time anybody is actually playing. Two hundred milliseconds
+/// between looks means an ordinary tap of mute or deafen is pressed and released between
+/// two of them and is never seen at all: the player presses the key, nothing happens, and
+/// there is nothing to tell them why.
+const POLL: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// The switches, watched on their own clock.
+///
+/// Owns a [`Controls`] on a thread of its own and publishes what it sees: the state for
+/// whoever is painting it, and the microphone gate straight into [`crate::audio::Tuning`],
+/// where the capture callback reads it one frame before the packet is made.
+pub(crate) struct Switchboard {
+    /// What the last poll saw. Read once a paint; written thirty-three times a second.
+    seen: std::sync::Arc<std::sync::Mutex<State>>,
+    /// What the settings say the switches should be. Written when somebody changes them.
+    wanted: std::sync::Arc<std::sync::Mutex<(Mode, [String; 4])>>,
+    /// The window's own mute and deafen buttons, waiting to be applied.
+    ///
+    /// The state belongs to the thread now, so a click cannot toggle it directly: it asks,
+    /// and the next poll answers. Thirty milliseconds later at the outside, which is faster
+    /// than the paint that produced the click.
+    asked: std::sync::Arc<Clicks>,
+}
+
+/// The two buttons the window can press itself.
+#[derive(Default)]
+struct Clicks {
+    mute: std::sync::atomic::AtomicBool,
+    deafen: std::sync::atomic::AtomicBool,
+}
+
+impl Switchboard {
+    /// Starts watching.
+    ///
+    /// The thread runs until the process ends. There is nothing to stop it for: it holds
+    /// no device, it polls four keys, and a client with no switches is not a voice client.
+    pub(crate) fn start(tuning: &std::sync::Arc<crate::audio::Tuning>) -> Self {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(State::default()));
+        let wanted = std::sync::Arc::new(std::sync::Mutex::new((
+            Mode::VoiceActivity,
+            [String::new(), String::new(), String::new(), String::new()],
+        )));
+
+        let asked = std::sync::Arc::new(Clicks::default());
+
+        let published = std::sync::Arc::clone(&seen);
+        let settings = std::sync::Arc::clone(&wanted);
+        let clicks = std::sync::Arc::clone(&asked);
+        let tuning = std::sync::Arc::clone(tuning);
+        let started = std::thread::Builder::new()
+            .name("switches".to_owned())
+            .spawn(move || {
+                let mut controls = Controls::new("", "", "", "");
+                loop {
+                    // Rebound first, because somebody may have just changed one on the
+                    // settings page and the next press should use it. `rebind` compares
+                    // before it rebuilds, so this costs four string comparisons.
+                    let mode = match settings.lock() {
+                        Ok(settings) => {
+                            let (mode, keys) = &*settings;
+                            controls.rebind(&keys[0], &keys[1], &keys[2], &keys[3]);
+                            *mode
+                        }
+                        // The window is gone.
+                        Err(_) => return,
+                    };
+                    // The window's buttons, before the keys, so a click and a key press in
+                    // the same thirty milliseconds cancel rather than race.
+                    if clicks
+                        .mute
+                        .swap(false, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        controls.toggle_mute();
+                    }
+                    if clicks
+                        .deafen
+                        .swap(false, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        controls.toggle_deafen();
+                    }
+                    let switches = controls.poll(&acl_core::keys::AsyncKeyState);
+                    // Into the capture callback, which reads it once per twenty-millisecond
+                    // frame. This is the whole reason the thread exists.
+                    tuning.transmit(switches.transmitting(mode));
+                    if let Ok(mut published) = published.lock() {
+                        *published = switches;
+                    } else {
+                        return;
+                    }
+                    std::thread::sleep(POLL);
+                }
+            });
+        if let Err(error) = started {
+            // Not fatal, and not silent. Without the thread the switches simply never
+            // change, which is a client that cannot be muted -- worth a line in the log
+            // rather than a window that will not open.
+            acl_core::log_warn!("audio", "the switches could not be watched: {error}");
+        }
+
+        Self {
+            seen,
+            wanted,
+            asked,
+        }
+    }
+
+    /// The window's mute button.
+    pub(crate) fn toggle_mute(&self) {
+        self.asked
+            .mute
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The window's deafen button.
+    pub(crate) fn toggle_deafen(&self) {
+        self.asked
+            .deafen
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tells the watcher what the settings now say.
+    ///
+    /// Called from the paint, at whatever rate the paint runs: it is four string
+    /// comparisons and a mode, and none of it is time-critical -- what is time-critical is
+    /// the polling, which is on the other side of this.
+    pub(crate) fn configure(&self, mode: Mode, bindings: [String; 4]) {
+        if let Ok(mut wanted) = self.wanted.lock() {
+            *wanted = (mode, bindings);
+        }
+    }
+
+    /// What the switches last said.
+    pub(crate) fn state(&self) -> State {
+        self.seen.lock().map(|seen| *seen).unwrap_or_default()
+    }
+}
+
 /// The three shortcuts, and what they have done.
 pub(crate) struct Controls {
     mute: Shortcut,
@@ -208,6 +353,7 @@ impl Controls {
 
     /// What the switches say, without reading the keyboard.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn state(&self) -> State {
         self.state
     }
@@ -230,7 +376,13 @@ mod tests {
 
     /// `F1`, `F2`, `F3` — three bindings the vendored table knows.
     fn controls() -> Controls {
-        Controls::new("F1", "F2", "F3", "F4")
+        let mut controls = Controls::new("F1", "F2", "F3", "F4");
+        // One poll with nothing held, which is what the thirty-millisecond watcher does
+        // before anybody touches a key. A shortcut's first look is an observation rather
+        // than a change -- see `acl_core::keys::Shortcut`, where starting from an assumed
+        // "not pressed" is what made binding mute mute you on the spot.
+        let _ = controls.poll(&Held(vec![]));
+        controls
     }
 
     const F1: u16 = 0x70;

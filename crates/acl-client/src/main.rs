@@ -1096,7 +1096,12 @@ struct Client {
     /// The game state the death map was last updated for.
     last_game_state: Option<acl_game::GameState>,
     /// Mute, deafen and push-to-talk. See [`controls`].
-    controls: controls::Controls,
+    ///
+    /// Watched on a thread of its own rather than polled from the paint. The paint runs at
+    /// five hertz whenever the pointer is not over the window, and an ordinary tap of a key
+    /// is pressed and released inside two hundred milliseconds -- so a mute that was polled
+    /// here was a mute that frequently did not happen.
+    controls: controls::Switchboard,
     /// The settings, and everything that happens to them.
     settings: settings_page::Page,
     /// The signalling session, on a thread of its own.
@@ -1197,6 +1202,9 @@ impl Client {
         if let Some(reader) = reader.as_ref() {
             reader.ask_to_start();
         }
+        // Before the switch watcher, which writes the microphone gate into the capture
+        // callback's `Tuning` and therefore needs one to write into.
+        let audio = audio::Audio::start(capture);
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
@@ -1206,18 +1214,10 @@ impl Client {
             announced: Announced::default(),
             dead: std::collections::BTreeMap::new(),
             last_game_state: None,
-            controls: {
-                let saved = settings.config();
-                controls::Controls::new(
-                    &saved.text_at("muteShortcut"),
-                    &saved.text_at("deafenShortcut"),
-                    &saved.text_at("pushToTalkShortcut"),
-                    &saved.text_at("impostorRadioShortcut"),
-                )
-            },
             settings,
             link: net::Link::start(),
-            audio: audio::Audio::start(capture),
+            controls: controls::Switchboard::start(audio.tuning()),
+            audio,
             speaking: std::collections::BTreeSet::new(),
             joined: None,
             retry: None,
@@ -1607,24 +1607,27 @@ impl Client {
         for packet in self.link.take_arrived() {
             self.audio.receive(packet);
         }
-        // The three switches, before anything is sent. Rebound first, because somebody
-        // may have just changed one on the settings page and the next press should use it.
-        let mode = {
+        // What the settings say, handed to the watcher rather than acted on here. It polls
+        // at thirty milliseconds and writes the microphone gate straight into the capture
+        // callback; this only has to keep it told.
+        //
+        // `pushToTalkMode` is what the settings screen writes. It used to read
+        // `pushToTalk` -- a boolean that nothing in this project has ever written, so it
+        // was always false and every client was in voice activity whatever the screen
+        // said. Push-to-mute did not exist at all.
+        {
             let saved = self.settings.config();
-            self.controls.rebind(
-                &saved.text_at("muteShortcut"),
-                &saved.text_at("deafenShortcut"),
-                &saved.text_at("pushToTalkShortcut"),
-                &saved.text_at("impostorRadioShortcut"),
+            self.controls.configure(
+                controls::Mode::from_setting(saved.number_at("pushToTalkMode")),
+                [
+                    saved.text_at("muteShortcut"),
+                    saved.text_at("deafenShortcut"),
+                    saved.text_at("pushToTalkShortcut"),
+                    saved.text_at("impostorRadioShortcut"),
+                ],
             );
-            // `pushToTalkMode`, which is what the settings screen writes. It used to read
-            // `pushToTalk` -- a boolean that nothing in this project has ever written, so it
-            // was always false and every client was in voice activity whatever the screen
-            // said. Push-to-mute did not exist at all.
-            controls::Mode::from_setting(saved.number_at("pushToTalkMode"))
-        };
-        let switches = self.controls.poll(&acl_core::keys::AsyncKeyState);
-        let transmitting = switches.transmitting(mode);
+        }
+        let switches = self.controls.state();
 
         // The impostor radio, on the transition. Three conditions this end has to check
         // before claiming it, and `Voice.tsx` checks the same three at line 902: an
@@ -1651,13 +1654,12 @@ impl Client {
             self.link.say_on_radio(wants_radio);
         }
 
+        // No gate here any more. It is applied in the capture callback, one frame before
+        // the packet exists, because applying it to a batch that has already been encoded
+        // and queued makes its precision the paint's -- two hundred milliseconds, which is
+        // most of a word.
         for packet in self.audio.take_encoded() {
-            // Drained either way. The encoder runs whatever the switches say, and a queue
-            // nobody empties while somebody is muted is a queue that plays their last
-            // minute at whoever is listening when they unmute.
-            if transmitting {
-                self.link.send_audio(packet);
-            }
+            self.link.send_audio(packet);
         }
 
         let Some(state) = self
@@ -2953,7 +2955,7 @@ impl Client {
     fn draw_you(
         ui: &mut egui::Ui,
         state: &acl_game::AmongUsState,
-        controls: &controls::Controls,
+        controls: &controls::Switchboard,
         connected: bool,
         local_talking: bool,
         dressed: &std::collections::BTreeMap<usize, egui::TextureId>,

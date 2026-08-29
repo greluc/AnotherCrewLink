@@ -62,27 +62,40 @@ pub enum Edge {
 #[derive(Clone, Debug)]
 pub struct Shortcut {
     binding: Binding,
-    down: bool,
+    /// What the last poll saw, or `None` before there has been one.
+    ///
+    /// Three states rather than two, and the third is a fix from 2026-08-29. It used to
+    /// start at "not pressed", which is a claim rather than an observation -- and it is
+    /// wrong in exactly the case that matters. A player binds mute by *pressing the key*,
+    /// so at the moment the new shortcut is built that key is held down. The next poll
+    /// then read false-to-true and called it a press: the player bound mute and was
+    /// instantly muted, bound deafen and was instantly deafened. `Voice.tsx` carries a
+    /// comment about this same bug.
+    ///
+    /// `None` means "look, and believe what you see, without calling it a change". The
+    /// release that follows is still seen -- it is a genuine true-to-false -- so nothing
+    /// is left owing an edge, which was the fear the old comment named and did not
+    /// actually avoid.
+    down: Option<bool>,
 }
 
 impl Shortcut {
-    /// A shortcut for a binding, starting from "not pressed".
-    ///
-    /// Starting from not-pressed rather than from the current state, and that is a choice:
-    /// a client that starts while the player is holding push-to-talk should see the next
-    /// press, not conclude the microphone is already open and then never see a release.
+    /// A shortcut for a binding, which has not been looked at yet.
     #[must_use]
     pub const fn new(binding: Binding) -> Self {
         Self {
             binding,
-            down: false,
+            down: None,
         }
     }
 
     /// Whether it was down at the last poll.
+    ///
+    /// `false` before the first one, which is what a level-triggered caller wants:
+    /// push-to-talk is closed until something has actually looked.
     #[must_use]
     pub const fn is_down(&self) -> bool {
-        self.down
+        matches!(self.down, Some(true))
     }
 
     /// What it is bound to.
@@ -91,25 +104,31 @@ impl Shortcut {
         &self.binding
     }
 
-    /// Rebinds it, and treats it as released.
+    /// Rebinds it, and forgets what the old key was doing.
     ///
-    /// Released rather than re-read: a shortcut rebound while it was held would otherwise
-    /// owe a release for a key nobody is going to let go of, and a push-to-talk stuck open
-    /// is the failure that matters here.
+    /// Forgets rather than assumes released: a shortcut is rebound at the moment somebody
+    /// finishes pressing the new key, so "released" is the one thing it reliably is not.
+    /// The next poll adopts whatever the new key is actually doing, without calling it a
+    /// change.
     pub fn rebind(&mut self, binding: Binding) {
         self.binding = binding;
-        self.down = false;
+        self.down = None;
     }
 
     /// Looks once, and says what changed.
     pub fn poll(&mut self, keys: &impl KeyState) -> Edge {
         let down = self.currently_down(keys);
-        let edge = match (self.down, down) {
-            (false, true) => Edge::Pressed,
-            (true, false) => Edge::Released,
-            _ => Edge::Unchanged,
+        let edge = match self.down {
+            // The first look. Whatever it finds is the starting position, not a change:
+            // a key that is already held was not just pressed.
+            None => Edge::Unchanged,
+            Some(was) => match (was, down) {
+                (false, true) => Edge::Pressed,
+                (true, false) => Edge::Released,
+                _ => Edge::Unchanged,
+            },
         };
-        self.down = down;
+        self.down = Some(down);
         edge
     }
 
@@ -231,6 +250,10 @@ mod tests {
         for code in both {
             let keyboard = Fake::default();
             let mut shortcut = Shortcut::new(binding_for("Shift"));
+            // One poll to establish that nothing is held. A shortcut's first look is an
+            // observation rather than a change -- see
+            // `a_key_already_held_is_adopted_rather_than_read_as_a_press`.
+            assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
             keyboard.press(code);
             assert_eq!(shortcut.poll(&keyboard), Edge::Pressed);
         }
@@ -271,6 +294,8 @@ mod tests {
         let held = codes(&first)[0];
         let mut shortcut = Shortcut::new(first);
 
+        // Established first, as the thirty-millisecond poll does in practice.
+        assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
         keyboard.press(held);
         assert_eq!(shortcut.poll(&keyboard), Edge::Pressed);
 
@@ -278,26 +303,66 @@ mod tests {
         assert!(!shortcut.is_down());
         // The old key is still held and the new one is not, so nothing happens at all.
         assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
+        // And once more, because the first poll after a rebind is now the establishing
+        // one: the press below has to be a press against a known starting position.
+        assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
 
         let now = codes(shortcut.binding())[0];
         keyboard.press(now);
         assert_eq!(shortcut.poll(&keyboard), Edge::Pressed);
     }
 
-    /// A client that starts while the key is already held sees the next press, not a
-    /// microphone that is already open with no release coming.
+    /// A key that was already held when the shortcut was made was not just pressed.
+    ///
+    /// This asserted the opposite until 2026-08-29, and the opposite muted people. A
+    /// shortcut is bound by *pressing the key*, so at the instant the new `Shortcut` is
+    /// built that key is down; reading the first poll as a press meant binding mute muted
+    /// you and binding deafen deafened you, on the spot, every time. `Voice.tsx` carries a
+    /// comment about the same bug.
     #[test]
-    fn a_shortcut_starts_up_even_if_the_key_is_down() {
+    fn a_key_already_held_is_adopted_rather_than_read_as_a_press() {
         let keyboard = Fake::default();
         let binding = binding_for("V");
         let code = codes(&binding)[0];
         keyboard.press(code);
 
         let mut shortcut = Shortcut::new(binding);
-        assert!(!shortcut.is_down());
-        // It is down now, so the first poll is a press — an honest one, with a release to
-        // follow when the player lets go.
+        assert!(!shortcut.is_down(), "nothing has looked yet");
+
+        // The first look adopts. It is a starting position, not a change.
+        assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
+        assert!(shortcut.is_down(), "and it is honest about what it found");
+
+        // Nothing is left owing an edge: the release is a genuine true-to-false, and the
+        // press after it is a genuine press.
+        keyboard.release(code);
+        assert_eq!(shortcut.poll(&keyboard), Edge::Released);
+        keyboard.press(code);
         assert_eq!(shortcut.poll(&keyboard), Edge::Pressed);
+    }
+
+    /// The same rule after a rebind, which is where it actually bites.
+    #[test]
+    fn rebinding_onto_a_held_key_does_not_fire_it() {
+        let keyboard = Fake::default();
+        let mut shortcut = Shortcut::new(binding_for("V"));
+
+        // The player opens the settings and presses `B` to bind it. `B` is held at the
+        // moment the rebind happens, because pressing it is how it was chosen.
+        let held = binding_for("B");
+        let code = codes(&held)[0];
+        keyboard.press(code);
+        shortcut.rebind(held);
+
+        assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
+        keyboard.release(code);
+        assert_eq!(shortcut.poll(&keyboard), Edge::Released);
+        keyboard.press(code);
+        assert_eq!(
+            shortcut.poll(&keyboard),
+            Edge::Pressed,
+            "the first deliberate press after the rebind is the first press"
+        );
     }
 
     /// The mouse buttons go through the same poll as the keys, so there is no second path
@@ -312,6 +377,9 @@ mod tests {
 
         let keyboard = Fake::default();
         let mut shortcut = Shortcut::new(binding_for("MouseButton4"));
+        // One poll to establish that it is up, which is what a shortcut bound while its
+        // button is *not* held sees.
+        assert_eq!(shortcut.poll(&keyboard), Edge::Unchanged);
         keyboard.press(code);
         assert_eq!(shortcut.poll(&keyboard), Edge::Pressed);
         keyboard.release(code);
