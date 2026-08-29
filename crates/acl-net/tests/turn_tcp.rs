@@ -29,6 +29,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use acl_net::ice::{IceServer, RtcConfig};
@@ -806,4 +807,172 @@ fn futures_block_on(server: &TurnServer) -> Vec<Over> {
         .try_lock()
         .map(|seen| seen.clone())
         .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------------------
+// What the transport says about its own send queues
+// ---------------------------------------------------------------------------------------
+
+/// One message of the bulk transfer below.
+const CHUNK: usize = 16 * 1024;
+
+/// How many of them. Three hundred and eighty-four kibibytes: several times the queue's
+/// message bound, and enough that a real transfer has to survive a burst larger than it.
+///
+/// Not enough to *catch* a hard message bound, and deliberately so. It takes a mebibyte
+/// before the congestion window grows far enough for that, which turns this file from seven
+/// seconds into forty-seven; what pins the bound is `a_burst_of_control_traffic_is_not_a_stall`
+/// in the transport's own unit tests, which pushes twelve hundred undroppable messages in
+/// microseconds and asserts every one of them queues. This is the end-to-end half: a real
+/// bulk transfer over a real relay, arriving whole with nothing shed and no writer giving up.
+const CHUNKS: usize = 24;
+
+/// Long, and deliberately not the timeout the other tests use: this much through a relay on
+/// loopback takes seconds alone and rather more when the rest of this file runs beside it.
+const TRANSFER: Duration = Duration::from_secs(180);
+
+/// How many times a send queue said it could neither drain nor shed.
+static COULD_NOT_SHED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times a writer task gave up on its socket.
+static WRITER_FAILED: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts the two things the transport only says out loud.
+///
+/// Neither is reachable through an API — a shed packet and a failed writer are internal to
+/// `vendor/webrtc` — so the log is the only place they surface. Matching on the message
+/// text is a coupling, and a deliberate one: these two sentences are the transport's
+/// report that it has given up, and a test that silently stopped noticing them would be
+/// worse than one that has to be updated when they are reworded.
+struct Watchtower;
+
+impl log::Log for Watchtower {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let message = record.args().to_string();
+        if message.contains("cannot be dropped") {
+            COULD_NOT_SHED.fetch_add(1, Ordering::SeqCst);
+        }
+        if message.contains("its writer failed") {
+            WRITER_FAILED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static WATCHTOWER: Watchtower = Watchtower;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bulk_transfer_through_a_tcp_relay_is_not_mistaken_for_a_stall() {
+    // The send queue's bound cannot be a bound on messages, and this is why. Nothing yields
+    // between the pushes -- `write` is synchronous, and the driver's drain loops have no
+    // await point in them -- so the writer task does not get to run until a whole pass is
+    // over. One SCTP congestion window is hundreds of packets of data channel, all of it
+    // undroppable, and a queue that failed the stream at sixty-four of them would tear down
+    // a socket that is draining perfectly well.
+    //
+    // Measured by putting the hard bound back: at a mebibyte this test then reports "could
+    // not shed" and the file takes three minutes instead of seven seconds. It is kept
+    // smaller than that here for the reason given at the payload below.
+    log::set_logger(&WATCHTOWER).expect("nothing else installs a logger in this binary");
+    log::set_max_level(log::LevelFilter::Trace);
+
+    let server = TurnServer::start().await;
+    let (offerer, mut from_offerer) = build(&server.tcp_only_url()).await;
+    let (answerer, mut from_answerer) = build(&server.tcp_only_url()).await;
+
+    let channel = offerer
+        .create_data_channel("bulk", None)
+        .await
+        .expect("a data channel");
+
+    let (offerer_candidates, answerer_candidates) =
+        negotiate(&offerer, &answerer, &mut from_offerer, &mut from_answerer).await;
+    assert!(
+        !offerer_candidates.is_empty() && !answerer_candidates.is_empty(),
+        "both sides must gather a relay candidate over TCP"
+    );
+
+    let connected = tokio::time::timeout(PATIENCE, async {
+        loop {
+            while let Ok(Event::State(state)) = from_offerer.try_recv() {
+                if state == RTCPeerConnectionState::Connected {
+                    return true;
+                }
+                if state == RTCPeerConnectionState::Failed {
+                    return false;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the connection settled within the timeout");
+    assert!(
+        connected,
+        "the peer connection failed rather than connecting"
+    );
+
+    let remote = tokio::time::timeout(PATIENCE, async {
+        loop {
+            while let Ok(event) = from_answerer.try_recv() {
+                if let Event::Channel(channel) = event {
+                    return channel;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the answerer saw the data channel");
+
+    let payload = "x".repeat(CHUNK);
+
+    let received = tokio::spawn(async move {
+        let mut total = 0_usize;
+        while let Some(event) = remote.poll().await {
+            if let DataChannelEvent::OnMessage(message) = event {
+                total += message.data.len();
+                if total >= CHUNK * CHUNKS {
+                    break;
+                }
+            }
+        }
+        total
+    });
+
+    for _ in 0..CHUNKS {
+        channel.send_text(&payload).await.expect("a send");
+    }
+
+    // The counters below are the real assertion -- they fire whatever the timing -- so they
+    // are checked before the delivery, and a regression then reports what actually went
+    // wrong rather than merely that it was slow.
+    let delivered = tokio::time::timeout(TRANSFER, received).await;
+
+    assert_eq!(
+        COULD_NOT_SHED.load(Ordering::SeqCst),
+        0,
+        "a send queue reported that it could neither drain nor shed, on a socket that was \
+         draining the whole time"
+    );
+    assert_eq!(
+        WRITER_FAILED.load(Ordering::SeqCst),
+        0,
+        "a writer gave up on a healthy socket"
+    );
+    assert_eq!(
+        delivered
+            .expect("the transfer finished inside the timeout")
+            .expect("the receiving task did not panic"),
+        CHUNK * CHUNKS,
+        "every byte arrived"
+    );
+
+    offerer.close().await.expect("a clean close");
+    answerer.close().await.expect("a clean close");
 }

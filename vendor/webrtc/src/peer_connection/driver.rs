@@ -437,11 +437,16 @@ where
             self.ice_gather_policy,
             Arc::clone(&runtime),
         );
+        // The counter carries across the replacement, or a connect spawned for the relayer
+        // being replaced would arrive at the new one looking current. (Added by
+        // AnotherCrewLink; see `RTCTurnRelayer::new`.)
+        let generation = self.turn_relayer.generation().wrapping_add(1);
         self.turn_relayer = RTCTurnRelayer::new(
             local_addrs,
             self.ice_servers.clone(),
             self.ice_gather_policy,
             runtime,
+            generation,
         );
 
         Ok(())
@@ -479,6 +484,7 @@ where
                 ice_servers.clone(),
                 ice_gather_policy,
                 Arc::clone(&runtime),
+                0,
             ),
             mdns_socket: None,
             udp_sockets: HashMap::new(),

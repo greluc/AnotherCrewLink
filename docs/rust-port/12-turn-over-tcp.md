@@ -216,8 +216,18 @@ unrecoverable — there is no marker to resynchronise on.
 ### What a real-time queue must decide
 
 A queue that only grows is a worse answer than a stall: it turns a wedged socket into a
-memory leak, and audio that arrives a second late is not audio. So the queue is bounded at
-64 messages — a little over a second at a 20 ms frame — and sheds.
+memory leak, and audio that arrives a second late is not audio. So the queue sheds at 64
+messages — a little over a second at a 20 ms frame.
+
+That is a *soft* bound, and the distinction is load-bearing. Nothing yields between the
+pushes: `write` is synchronous, `handle_write`'s TCP branch awaits nothing, and the
+driver's drain loops have no other await point, so the writer task does not get to run
+until a whole pass is over. One SCTP congestion window is hundreds of packets, and a data
+channel sending in bulk produces exactly that in one pass, all of it undroppable. A hard
+bound of 64 would tear down a socket that is draining perfectly well — measured: with one,
+a 1 MiB transfer through a relay reports "could not shed" and takes three minutes instead
+of seven seconds. What decides that a socket is actually dead is a ceiling of four
+mebibytes, which is not a burst by any reading.
 
 *What* it sheds is the whole design. Both framings carry more than media:
 
@@ -234,13 +244,33 @@ The byte is read after the framing header, which is two bytes for RFC 4571 and f
 length, and a 128-byte record would look exactly like RTP. There is a test for precisely
 that mistake.
 
+There is a fourth thing on a TURN stream, and missing it was the review's most useful
+finding. `rtc-turn` relays media inside a **Send indication** — a STUN message — until a
+channel has been bound for that peer, and a `ChannelBind` takes a round trip to the relay.
+Worse, a server that refuses `ChannelBind` leaves the client on that path *forever*: every
+media packet is then a STUN message, and treating all STUN on the stream as control would
+make an entire media stream undroppable. So a Send indication is opened: the `DATA`
+attribute is found by walking the attributes — they are padded to four bytes and the
+length does not count the padding — and RFC 7983 is applied to what is inside it. The
+audio in a Send indication is as droppable as the audio in a `ChannelData`, and the
+handshake record travelling beside it is as undroppable.
+
 The oldest media goes first, not the newest: what is at the front has waited longest and is
 least worth playing by the time it would arrive.
 
-And if nothing in the queue can be dropped — 64 control messages waiting on a socket that
-is not moving — the write fails instead. That stream is broken, and saying so lets the
-repair layer rebuild the peer; the alternatives are an unbounded queue on a dead socket or
-a silently corrupted handshake.
+And past the ceiling, the write fails. What that means then differs by stream, and the
+existing wiring already gets it right for each. On a TURN stream the relayer's drain loop
+turns the error into a `SocketWriteFailure`, which removes the client and closes the
+socket — and a TURN allocation can be made again. On an ICE-TCP stream nothing consumes
+it, and that is also correct: `RTCTcpTransport::connect` is reachable only from a remote
+passive candidate, so a stream removed there is never rebuilt, and tearing one down would
+turn a stall into a dead path. Left alone, the queue drains when the remote resumes, and
+if it does not, ICE's own consent freshness fails the pair — the checks travel on that
+same stream.
+
+An earlier draft of this reported the failure for both. A reviewer showed that it made
+ICE-TCP strictly worse, which is why it does not. The line is logged once per stall rather
+than once per packet, so a wedged socket does not flood the log either.
 
 ### The failure that now arrives late
 
@@ -250,6 +280,20 @@ drops the stream and hands `SocketWriteFailure` to the relayer, which removes th
 lets gathering finish. Without that report the Allocate would merely time out — the relayer
 does recover, eight seconds later, by way of `TurnEvent::TransactionTimeout` — so the event
 is what keeps the old timing rather than what prevents a hang.
+
+### The read has to let go of the socket too
+
+`AsyncTcpStream` has no `close`: a socket closes when its last `Arc` drops, and an armed
+read future parked in `read()` holds one. `read_futures` is a `FuturesUnordered` with no
+way to remove an entry, so a stream removed from every map stayed open until the far end
+sent something or hung up — for a TURN relay, until the allocation lapses, minutes later.
+That is upstream's, not the fork's, but the collision retry below makes it fire four times
+where it used to fire once.
+
+The read is now raced against a channel whose sending half lives beside the writer, so
+dropping the stream's entry ends the read as well. Both re-arm sites go through one place
+that takes the stream and the signal together, because taking them from different maps is
+how a read gets armed for a stream that has already gone.
 
 ### Dropping a writer has to stop it
 
@@ -263,7 +307,7 @@ design and that leak.
 ## Where it lives
 
 - `vendor/webrtc/` — the fork. Six files differ from upstream.
-- `patches/webrtc-0.20.3-turn-tcp.patch` — the diff, 1,407 lines.
+- `patches/webrtc-0.20.3-turn-tcp.patch` — the diff.
 - `crates/acl-turn-framing/` — the stream splitter, no dependencies, nine tests.
 - `crates/acl-net/tests/turn_tcp.rs` — the proof.
 - `Cargo.toml` — `[patch.crates-io] webrtc = { path = "vendor/webrtc", version = "=0.20.3" }`.
@@ -319,11 +363,16 @@ is not a valid combination upstream: the runtime features are mutually exclusive
   asserts that both Allocates asked for a *UDP* relayed leg, which is the distinction the
   whole fork turns on.
 - **The send queue's policy, in the fork's own unit tests**: that RTP is droppable and DTLS
-  and STUN are not, on both framings; that the classifying byte is read after the framing
-  header and not at offset zero; that a full queue loses the oldest media first, never
-  displaces control traffic, and reports a stream it cannot shed for rather than growing;
-  that a batch keeps its order; and that a TURN message goes out with nothing in front of
-  it. CI runs these — they open no sockets.
+  and STUN are not, on both framings; that a Send indication is judged by what it is
+  relaying and a truncated one is never droppable; that the classifying byte is read after
+  the framing header and not at offset zero; that a full queue loses the oldest media
+  first and never displaces control traffic; that a burst of twelve hundred undroppable
+  messages queues rather than failing the stream, and that the byte ceiling still catches a
+  dead socket and reports it once; that a batch keeps its order; and that a TURN message
+  goes out with nothing in front of it. CI runs these — they open no sockets.
+- **`a_bulk_transfer_through_a_tcp_relay_is_not_mistaken_for_a_stall`.** The end-to-end
+  half: 384 KiB over a data channel through the TCP relay, arriving whole with nothing shed
+  and no writer giving up.
 - The whole workspace suite (1,138 tests), `cargo fmt --check`, `cargo clippy --workspace
   --all-targets --features acl-updater/ceremony -- -D warnings`, `cargo deny check bans
   licenses`, and `cargo vet`.

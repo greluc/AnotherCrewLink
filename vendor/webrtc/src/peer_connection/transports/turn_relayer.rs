@@ -157,11 +157,21 @@ pub(crate) struct RTCTurnRelayer {
 }
 
 impl RTCTurnRelayer {
+    /// `generation` is where this relayer's counter starts, and it must not restart at
+    /// zero when one relayer replaces another.
+    ///
+    /// **Added by AnotherCrewLink.** `bind_transports` builds a replacement rather than
+    /// reconfiguring, so a connect spawned for the relayer being replaced arrives at the
+    /// new one — and if both started at zero it would be indistinguishable from a fresh
+    /// one, register a stream into the transport that replaced its own, and allocate a
+    /// second time on a relay the new `gather()` is already connecting to. The counter is
+    /// carried across instead; see [`Self::generation`].
     pub(crate) fn new(
         local_addrs: Vec<SocketAddr>,
         ice_servers: Vec<RTCIceServer>,
         ice_gather_policy: RTCIceTransportPolicy,
         runtime: Arc<dyn Runtime>,
+        generation: u64,
     ) -> Self {
         Self {
             local_addrs,
@@ -178,8 +188,13 @@ impl RTCTurnRelayer {
             routs: VecDeque::new(),
             events: VecDeque::new(),
             pending_connects: 0,
-            generation: 0,
+            generation,
         }
+    }
+
+    /// What the next relayer to replace this one should start counting from.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub(crate) fn state(&self) -> RTCIceGatheringState {
@@ -1087,6 +1102,7 @@ mod tests {
                 }],
                 RTCIceTransportPolicy::Relay,
                 crate::runtime::default_runtime().expect("test requires a runtime feature"),
+                0,
             );
 
             relayer.gather().await.expect("TURN gather should start");

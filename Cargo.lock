@@ -126,6 +126,7 @@ dependencies = [
  "acl-turn-framing",
  "async-trait",
  "futures-util",
+ "log",
  "rtc",
  "serde",
  "serde_json",

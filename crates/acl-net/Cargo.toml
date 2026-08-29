@@ -32,6 +32,10 @@ rtc = "=0.20.3"
 # transport reads the other -- a length prefix written by either end fails the test rather
 # than being quietly tolerated.
 acl-turn-framing.workspace = true
+# A `log` implementation for the bulk-transfer test. A shed packet and a failed writer are
+# internal to `vendor/webrtc` and reach no API, so the log line is the only place either
+# surfaces -- and both are the transport reporting that it has given up.
+log.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "process"] }
 

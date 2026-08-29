@@ -25,19 +25,49 @@ use std::time::Instant;
 
 const TCP_READ_BUF_LEN: usize = 4096;
 
-/// How many messages may wait for one stream before the queue starts shedding.
+/// How many messages may wait for one stream before the queue starts shedding media.
 ///
 /// **Added by AnotherCrewLink**, with the rest of the writer below. Sixty-four packets is
-/// a little over a second of audio at a 20 ms frame, which is far longer than a
-/// real-time stream can usefully buffer and short enough that a wedged socket cannot hold
-/// much memory.
-const SEND_QUEUE_DEPTH: usize = 64;
+/// a little over a second of audio at a 20 ms frame, which is far longer than a real-time
+/// stream can usefully buffer.
+///
+/// It is a *soft* bound: see [`SEND_QUEUE_MAX_BYTES`] for why a hard one would fail a
+/// healthy stream.
+const SEND_QUEUE_SOFT: usize = 64;
+
+/// How many bytes may wait for one stream before it is declared broken.
+///
+/// **Added by AnotherCrewLink.** The soft bound above cannot be the hard one, because
+/// nothing yields between the pushes: `write` is synchronous, `handle_write`'s TCP branch
+/// awaits nothing, and the driver's drain loops have no other await point — so the writer
+/// task does not get to run until the whole pass is over. One SCTP congestion window is
+/// hundreds of packets, and a data channel sending in bulk produces exactly that in one
+/// pass, all of it undroppable. Failing the stream there would tear down a socket that is
+/// draining perfectly well.
+///
+/// So a queue that cannot shed is allowed past the soft bound, and it is the byte count
+/// that decides. Four mebibytes unsent is not a burst by any reading; it is a socket that
+/// stopped moving a long time ago.
+const SEND_QUEUE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// The two bytes RFC 4571 puts in front of a packet on a stream.
 const RFC4571_HEADER: usize = 2;
 
 /// The four bytes RFC 8656 §12.4 puts in front of relayed data.
 const CHANNEL_DATA_HEADER: usize = 4;
+
+/// The fixed part of a STUN message: type, length, cookie and transaction id.
+const STUN_HEADER: usize = 20;
+
+/// The type and length in front of every STUN attribute.
+const STUN_ATTRIBUTE_HEADER: usize = 4;
+
+/// `Send`, as an indication: RFC 5766 §10.1, the message that relays a payload to a peer
+/// before a channel has been bound for it.
+const SEND_INDICATION: [u8; 2] = [0x00, 0x16];
+
+/// `DATA`, the attribute a Send indication carries its payload in.
+const ATTR_DATA: u16 = 0x0013;
 
 /// How the messages on one TCP stream are delimited.
 ///
@@ -57,15 +87,50 @@ pub(crate) enum Framing {
     Turn,
 }
 
+/// The payload a Send indication is relaying, if this is one.
+///
+/// **Added by AnotherCrewLink.** `rtc-turn` sends media inside a Send indication until a
+/// channel has been bound for the peer — `Relay::send` takes that path for every
+/// `BindingState` but `Ready` — and a `ChannelBind` takes a round trip to the relay. So
+/// the window in which a relay is most likely to be slow is precisely the window in which
+/// none of the traffic is `ChannelData`, and treating every STUN message on the stream as
+/// control would make all of it undroppable at once.
+///
+/// Reading through to the payload is what keeps that from being a choice between dropping
+/// a DTLS handshake record and dropping nothing: the audio inside a Send indication is as
+/// droppable as the audio inside a `ChannelData`, and the handshake inside one is as
+/// undroppable.
+fn relayed_payload(message: &[u8]) -> Option<&[u8]> {
+    if message.get(..2) != Some(&SEND_INDICATION[..]) {
+        return None;
+    }
+    let mut at = STUN_HEADER;
+    while let (Some(kind), Some(length)) = (
+        message.get(at..at + 2),
+        message.get(at + 2..at + STUN_ATTRIBUTE_HEADER),
+    ) {
+        let kind = u16::from_be_bytes([*kind.first()?, *kind.get(1)?]);
+        let length = usize::from(u16::from_be_bytes([*length.first()?, *length.get(1)?]));
+        let value = at + STUN_ATTRIBUTE_HEADER;
+        if kind == ATTR_DATA {
+            return message.get(value..value.checked_add(length)?);
+        }
+        // RFC 5389 §15: a value is padded to a multiple of four and the length does not
+        // count the padding, so stepping by the length alone walks into the middle of the
+        // next attribute.
+        at = value.checked_add(length.div_ceil(4).checked_mul(4)?)?;
+    }
+    None
+}
+
 /// Whether losing this message costs a frame of audio or breaks the connection.
 ///
 /// **Added by AnotherCrewLink.** The bytes are already framed, so the payload does not
 /// start at zero: RFC 4571 puts a sixteen-bit length in front of it and a `ChannelData`
 /// header is four bytes. Both are stepped over before the demultiplexing byte is read.
 ///
-/// A STUN message on a TURN stream is an Allocate, a Refresh, a `CreatePermission` or a
-/// `ChannelBind` — control, rare, and the allocation dies without it — so only what a
-/// channel carries is considered, and only by what is inside it.
+/// What a TURN stream carries is decided by what is inside it: a `ChannelData`'s payload,
+/// or a Send indication's — see [`relayed_payload`]. Everything else there is control.
 fn droppable(framing: Framing, framed: &[u8]) -> bool {
     let payload = match framing {
         Framing::Rfc4571 => framed.get(RFC4571_HEADER..),
@@ -73,7 +138,11 @@ fn droppable(framing: Framing, framed: &[u8]) -> bool {
             // A channel number is 0x4000–0x7FFF, so the top two bits of a `ChannelData`
             // message are 01 and those of a STUN message are 00.
             Some(first) if first >> 6 == 0b01 => framed.get(CHANNEL_DATA_HEADER..),
-            _ => None,
+            // A Send indication is relaying something, so what it is relaying decides.
+            // Every other STUN message here is an Allocate, a Refresh, a
+            // `CreatePermission` or a `ChannelBind` — control, rare, and the allocation
+            // dies without it.
+            _ => relayed_payload(framed),
         },
     };
     // RFC 7983 §7: 128–191 is RTP and RTCP. Everything else that travels on these streams
@@ -114,9 +183,11 @@ enum Shed {
     Displaced,
     /// There was not, nothing older could be dropped, and this could.
     Dropped,
-    /// There was not, and nothing here can be dropped at all. A stream that is neither
-    /// draining nor sheddable is a stream to fail rather than to corrupt.
-    Stuck,
+    /// There was not, and nothing here can be dropped at all.
+    ///
+    /// `first` is true only for the message that discovered it, so a socket that stops
+    /// draining writes one line to the log and not one per packet.
+    Stuck { first: bool },
 }
 
 /// The bytes waiting for one stream, and the rule for what goes when they stop moving.
@@ -129,25 +200,48 @@ enum Shed {
 #[derive(Default)]
 struct SendQueue {
     waiting: VecDeque<Queued>,
+    /// How much is waiting, so the ceiling does not have to walk the queue to find out.
+    bytes: usize,
+    /// Whether the ceiling has already been reported. Cleared the moment anything fits
+    /// again, so a stream that recovers and stalls again says so twice.
+    stuck: bool,
 }
 
 impl SendQueue {
     fn push(&mut self, bytes: Vec<u8>, droppable: bool) -> Shed {
-        if self.waiting.len() < SEND_QUEUE_DEPTH {
-            self.waiting.push_back(Queued { bytes, droppable });
+        if self.waiting.len() < SEND_QUEUE_SOFT {
+            self.enqueue(bytes, droppable);
             return Shed::Queued;
         }
         // The oldest media, not the newest: what is at the front has been waiting longest
         // and is the least worth playing by the time it would arrive.
         if let Some(oldest) = self.waiting.iter().position(|queued| queued.droppable) {
-            let _ = self.waiting.remove(oldest);
-            self.waiting.push_back(Queued { bytes, droppable });
+            if let Some(gone) = self.waiting.remove(oldest) {
+                self.bytes = self.bytes.saturating_sub(gone.bytes.len());
+            }
+            self.enqueue(bytes, droppable);
             return Shed::Displaced;
         }
         if droppable {
             return Shed::Dropped;
         }
-        Shed::Stuck
+        // Nothing here can go and neither can this, so the soft bound is not the answer:
+        // see `SEND_QUEUE_MAX_BYTES`. A congestion window's worth of data channel arrives
+        // in one pass with nothing yielding in between, and that is a busy stream and not
+        // a dead one.
+        if self.bytes.saturating_add(bytes.len()) > SEND_QUEUE_MAX_BYTES {
+            let first = !self.stuck;
+            self.stuck = true;
+            return Shed::Stuck { first };
+        }
+        self.enqueue(bytes, droppable);
+        Shed::Queued
+    }
+
+    fn enqueue(&mut self, bytes: Vec<u8>, droppable: bool) {
+        self.bytes = self.bytes.saturating_add(bytes.len());
+        self.waiting.push_back(Queued { bytes, droppable });
+        self.stuck = false;
     }
 
     /// Everything waiting, as one buffer.
@@ -156,11 +250,12 @@ impl SendQueue {
     /// self-delimiting, so the receiver cannot tell the difference, and one write of a
     /// batch is one segment instead of a dozen.
     fn drain(&mut self) -> Vec<u8> {
-        let total = self.waiting.iter().map(|queued| queued.bytes.len()).sum();
-        let mut batch = Vec::with_capacity(total);
+        let mut batch = Vec::with_capacity(self.bytes);
         for queued in self.waiting.drain(..) {
             batch.extend_from_slice(&queued.bytes);
         }
+        self.bytes = 0;
+        self.stuck = false;
         batch
     }
 }
@@ -185,6 +280,13 @@ struct Outbound {
     /// The task doing the writing, so that dropping this ends it rather than leaving it
     /// parked in a write to a socket nobody is reading.
     writer: Box<dyn JoinHandle>,
+    /// Held, never sent on. Dropping it is what tells the armed read to give up its
+    /// reference to the socket; see [`RTCTcpTransport::arm_read`].
+    removed: Sender<()>,
+    /// The other end, cloned for each new read. `async_channel`'s receiver is a
+    /// multi-consumer handle, so a clone stays live after the previous read consumed its
+    /// own.
+    reader: Receiver<()>,
 }
 
 impl Drop for Outbound {
@@ -335,11 +437,22 @@ impl RTCTcpTransport {
                 trace!("Send queue for {:?} full; dropped this packet", four_tuple);
                 return Ok(0);
             }
-            Shed::Stuck => {
-                error!(
-                    "Send queue for {:?} is full of traffic that cannot be dropped",
-                    four_tuple
-                );
+            Shed::Stuck { first } => {
+                if first {
+                    error!(
+                        "Send queue for {:?} is full of traffic that cannot be dropped",
+                        four_tuple
+                    );
+                }
+                // The error goes back to the caller and no further, deliberately. On a TURN
+                // stream the relayer's drain loop turns it into a `SocketWriteFailure`,
+                // which removes the client and closes the socket — and a TURN allocation
+                // can be made again. On an ICE-TCP stream nothing consumes it, and that is
+                // the right answer too: `RTCTcpTransport::connect` is reachable only from a
+                // remote passive candidate, so a stream removed here is never rebuilt, and
+                // tearing one down would turn a stall into a dead path. Left alone, the
+                // queue drains when the remote resumes; if it does not, ICE's own consent
+                // freshness fails the pair, because the checks travel on this same stream.
                 return Err(Error::Other(format!(
                     "TCP stream {four_tuple:?} is not draining and cannot shed"
                 )));
@@ -403,21 +516,76 @@ impl RTCTcpTransport {
         }
     }
 
-    fn arm_read(&mut self, four_tuple: FourTuple, stream: Arc<dyn AsyncTcpStream>) {
+    /// Arms the next read on a stream, racing it against the stream being removed.
+    ///
+    /// **The race is added by AnotherCrewLink**, and it is what actually closes a socket.
+    /// `AsyncTcpStream` has no `close`: a socket is closed when its last `Arc` drops, and
+    /// a read future parked in `read()` holds one. `read_futures` is a `FuturesUnordered`
+    /// with no way to remove an entry, so before this a stream that had been removed from
+    /// every map stayed open until the far end sent something or hung up — which for a
+    /// TURN relay means until the allocation lapses, minutes later. Every collision retry
+    /// and every reconfiguration left one behind.
+    ///
+    /// The signal is the far end of a channel `Outbound` holds, so dropping the writing
+    /// half is what ends the read. That makes `remove_stream` and dropping the whole
+    /// transport both sufficient.
+    fn arm_read(
+        &mut self,
+        four_tuple: FourTuple,
+        stream: Arc<dyn AsyncTcpStream>,
+        mut removed: Receiver<()>,
+    ) {
         self.read_futures.push(
             async move {
                 let mut buf = vec![0u8; TCP_READ_BUF_LEN];
-                match stream.read(&mut buf).await {
-                    Ok(n) => TcpReadResult::Packet { four_tuple, n, buf },
-                    Err(err) => TcpReadResult::Error {
+                // The race is resolved in its own scope so the borrow of `buf` ends before
+                // `buf` is moved into the result.
+                let outcome = {
+                    let read = stream.read(&mut buf).fuse();
+                    futures::pin_mut!(read);
+                    futures::select! {
+                        result = read => Some(result),
+                        // The channel is never sent on; what ends the wait is its sender
+                        // being dropped, so `recv` resolves to `None`.
+                        _ = removed.recv().fuse() => None,
+                    }
+                };
+                match outcome {
+                    Some(Ok(n)) => TcpReadResult::Packet { four_tuple, n, buf },
+                    Some(Err(err)) => TcpReadResult::Error {
                         four_tuple,
                         err,
+                        buf,
+                    },
+                    // Reported as a zero-length read because that is already the
+                    // end-of-stream path, and by the time this can happen the stream is
+                    // gone from every map anyway.
+                    None => TcpReadResult::Packet {
+                        four_tuple,
+                        n: 0,
                         buf,
                     },
                 }
             }
             .boxed(),
         );
+    }
+
+    /// Arms the next read on a stream that is still registered, and does nothing for one
+    /// that is not.
+    ///
+    /// **Added by AnotherCrewLink** so the two re-arm sites cannot take the stream from one
+    /// map and the removal signal from another: a stream with no writer has been removed,
+    /// and arming a read for it would put a reference to the socket back into
+    /// `read_futures` with nothing left to end it.
+    fn rearm(&mut self, four_tuple: FourTuple) {
+        let Some(stream) = self.streams.get(&four_tuple).cloned() else {
+            return;
+        };
+        let Some(reader) = self.writers.get(&four_tuple).map(|out| out.reader.clone()) else {
+            return;
+        };
+        self.arm_read(four_tuple, stream, reader);
     }
 
     pub(crate) fn register_stream(
@@ -452,6 +620,7 @@ impl RTCTcpTransport {
         }
         let queue = Arc::new(Mutex::new(SendQueue::default()));
         let (doorbell, ring) = channel(1);
+        let (removed, reader) = channel(1);
         let writer = self.spawn_writer(four_tuple, stream.clone(), Arc::clone(&queue), ring);
         self.writers.insert(
             four_tuple,
@@ -460,9 +629,11 @@ impl RTCTcpTransport {
                 doorbell,
                 framing,
                 writer,
+                removed,
+                reader: reader.clone(),
             },
         );
-        self.arm_read(four_tuple, stream);
+        self.arm_read(four_tuple, stream, reader);
     }
 
     pub(crate) fn on_accept(
@@ -531,8 +702,8 @@ impl RTCTcpTransport {
                     }
                     if lost_the_boundary {
                         self.remove_stream(&four_tuple);
-                    } else if let Some(stream) = self.streams.get(&four_tuple).cloned() {
-                        self.arm_read(four_tuple, stream);
+                    } else {
+                        self.rearm(four_tuple);
                     }
                 }
             }
@@ -543,9 +714,7 @@ impl RTCTcpTransport {
             } => {
                 if is_retryable_socket_recv_error(&err) {
                     trace!("Transient TCP read error on {:?}: {}", four_tuple, err);
-                    if let Some(stream) = self.streams.get(&four_tuple).cloned() {
-                        self.arm_read(four_tuple, stream);
-                    }
+                    self.rearm(four_tuple);
                 } else {
                     error!("TCP read error on {:?}: {}", four_tuple, err);
                     self.remove_stream(&four_tuple);
@@ -708,43 +877,112 @@ mod tests {
         assert!(!droppable(Framing::Turn, &[0x40, 0x00, 0x00, 0x04]));
     }
 
+    /// A Send indication relaying `payload`, with the attributes `rtc-turn` puts in one.
+    fn send_indication(payload: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x00, 0x16, 0x00, 0x00];
+        out.extend_from_slice(&[0x21, 0x12, 0xa4, 0x42]);
+        out.extend_from_slice(&[0; 12]);
+        // XOR-PEER-ADDRESS first, so the walk has to step over an attribute to find DATA.
+        out.extend_from_slice(&[0x00, 0x12, 0x00, 0x08]);
+        out.extend_from_slice(&[0x00, 0x01, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x70]);
+        out.extend_from_slice(&ATTR_DATA.to_be_bytes());
+        #[expect(clippy::cast_possible_truncation, reason = "test payloads are tiny")]
+        out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        out.extend_from_slice(payload);
+        out.resize(out.len().div_ceil(4) * 4, 0);
+        out
+    }
+
+    #[test]
+    fn what_a_send_indication_relays_decides_whether_it_may_go() {
+        // `rtc-turn` relays media inside a Send indication until a channel is bound, so
+        // this is every packet for one round trip to the relay -- and it is the window in
+        // which a relay is most likely to be slow. Calling all of it control would make a
+        // stalled stream unsheddable exactly when it matters, and calling all of it media
+        // would drop the DTLS handshake travelling beside it.
+        assert!(droppable(
+            Framing::Turn,
+            &send_indication(&[0x80, 0x6f, 0, 1, 0, 0, 0, 0])
+        ));
+        assert!(!droppable(
+            Framing::Turn,
+            &send_indication(&[23, 0xfe, 0xfd, 0, 0])
+        ));
+        assert!(!droppable(Framing::Turn, &send_indication(&[0x00, 0x01])));
+    }
+
+    #[test]
+    fn a_send_indication_with_no_payload_is_not_droppable() {
+        // A malformed or truncated one must not be read as media just because the walk
+        // fell off the end.
+        let mut truncated = send_indication(&[0x80, 0x6f, 0, 1]);
+        truncated.truncate(STUN_HEADER + 6);
+        assert!(!droppable(Framing::Turn, &truncated));
+        assert!(relayed_payload(&allocate_over_turn()).is_none());
+        assert!(relayed_payload(&[]).is_none());
+    }
+
+    #[test]
+    fn a_burst_of_control_traffic_is_not_a_stall() {
+        // The driver writes a whole congestion window in one pass and never yields, so the
+        // writer cannot drain in between. A hard bound of `SEND_QUEUE_SOFT` would fail a
+        // socket that is draining perfectly well; only the byte ceiling decides.
+        let mut queue = SendQueue::default();
+        for _ in 0..(SEND_QUEUE_SOFT * 20) {
+            assert_eq!(queue.push(vec![0; 1200], false), Shed::Queued);
+        }
+        assert_eq!(queue.waiting.len(), SEND_QUEUE_SOFT * 20);
+    }
+
+    #[test]
+    fn a_queue_past_the_ceiling_is_a_dead_socket() {
+        let mut queue = SendQueue::default();
+        let chunk = 64 * 1024;
+        while queue.bytes + chunk <= SEND_QUEUE_MAX_BYTES {
+            assert_eq!(queue.push(vec![0; chunk], false), Shed::Queued);
+        }
+        assert_eq!(
+            queue.push(vec![0; chunk], false),
+            Shed::Stuck { first: true }
+        );
+        // And only the first one says so, or a wedged socket writes a line per packet for
+        // as long as it stays wedged.
+        assert_eq!(
+            queue.push(vec![0; chunk], false),
+            Shed::Stuck { first: false }
+        );
+        // Draining makes room again, so a slow reader recovers rather than being condemned
+        // by one bad moment -- and the next stall is reported afresh.
+        let batch = queue.drain();
+        assert!(batch.len() <= SEND_QUEUE_MAX_BYTES);
+        assert_eq!(queue.bytes, 0);
+        assert_eq!(queue.push(vec![0; chunk], false), Shed::Queued);
+    }
+
     #[test]
     fn a_full_queue_loses_the_oldest_media_first() {
         let mut queue = SendQueue::default();
-        for _ in 0..SEND_QUEUE_DEPTH {
+        for _ in 0..SEND_QUEUE_SOFT {
             assert_eq!(queue.push(vec![1], true), Shed::Queued);
         }
         assert_eq!(queue.push(vec![2], true), Shed::Displaced);
-        assert_eq!(queue.waiting.len(), SEND_QUEUE_DEPTH);
+        assert_eq!(queue.waiting.len(), SEND_QUEUE_SOFT);
         // The one that went is the one that had waited longest, so what is left is the
         // freshest audio rather than the stalest.
         let batch = queue.drain();
-        assert_eq!(batch.len(), SEND_QUEUE_DEPTH);
+        assert_eq!(batch.len(), SEND_QUEUE_SOFT);
         assert_eq!(batch.last(), Some(&2));
     }
 
     #[test]
     fn control_traffic_is_never_displaced_by_media() {
         let mut queue = SendQueue::default();
-        for _ in 0..SEND_QUEUE_DEPTH {
+        for _ in 0..SEND_QUEUE_SOFT {
             let _ = queue.push(vec![1], false);
         }
         // Nothing waiting can go, so the new packet of media goes instead of a handshake.
         assert_eq!(queue.push(vec![2], true), Shed::Dropped);
-        assert_eq!(queue.waiting.len(), SEND_QUEUE_DEPTH);
-    }
-
-    #[test]
-    fn a_queue_that_cannot_shed_says_so_rather_than_growing() {
-        let mut queue = SendQueue::default();
-        for _ in 0..SEND_QUEUE_DEPTH {
-            let _ = queue.push(vec![1], false);
-        }
-        // A stream carrying nothing but control traffic and not draining is broken. The
-        // alternatives are an unbounded queue on a dead socket or dropping a handshake
-        // record silently, and both are worse than saying so.
-        assert_eq!(queue.push(vec![2], false), Shed::Stuck);
-        assert_eq!(queue.waiting.len(), SEND_QUEUE_DEPTH);
+        assert_eq!(queue.waiting.len(), SEND_QUEUE_SOFT);
     }
 
     #[test]
