@@ -23,7 +23,13 @@ use crate::fft::convolve;
 /// They are not derived from anything in the signal; they are the values Chromium picked
 /// so a normalised response is at a comfortable level, and they are part of the contract
 /// rather than a tuning choice this port gets to make.
-const GAIN_CALIBRATION: f64 = 0.001_25;
+/// Written the way Chromium writes it rather than as the rounded decimal it prints as.
+/// `blink::Reverb::CalculateNormalizationScale` computes `10^(-58/20)`, which is
+/// `0.001_258_925`…; the literal `0.001_25` that stood here is 0.7 per cent low. The golden
+/// gate cannot see that -- its threshold is an absolute -80 dBFS against a vector at about
+/// -54 dBFS, so a 0.7 per cent error is comfortably inside it -- which is exactly why the
+/// derivation belongs in the code rather than its result.
+const GAIN_CALIBRATION: f64 = 0.001_258_925_411_794_167;
 
 /// The rate the calibration above was chosen at. A response at another rate is scaled by
 /// the ratio, which is the specification's own compensation.

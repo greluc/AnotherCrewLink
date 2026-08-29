@@ -802,8 +802,23 @@ fn open_microphone(
     let mut rates = if config.sample_rate == acl_audio::stream::WANTED_RATE {
         None
     } else {
+        // Twenty milliseconds *at the device's rate*, not 960 frames regardless of it.
+        // `FRAME_SAMPLES` is twenty milliseconds at 48 kHz and is a different duration at
+        // any other: at 16 kHz it is sixty milliseconds, so one chunk in produced three
+        // frames out and the loop below emitted all three in a single burst. Only the
+        // first got a far-end reference, because the reference queue is drained once per
+        // frame -- so the echo canceller ran blind for two frames out of three, and the
+        // other end heard their own voice come back.
+        //
+        // `stream::Chosen::buffer_frames` computes the same figure for the device buffer,
+        // and the two agreeing is what makes one callback one frame.
+        let chunk = usize::try_from(
+            u64::from(config.sample_rate) * u64::from(acl_audio::codec::FRAME_MS) / 1000,
+        )
+        .unwrap_or(FRAME_SAMPLES)
+        .max(1);
         Some(
-            acl_audio::resample::Resampler::new(config.sample_rate, FRAME_SAMPLES)
+            acl_audio::resample::Resampler::new(config.sample_rate, chunk)
                 .map_err(|error| format!("no resampler for this device: {error}"))?,
         )
     };
@@ -848,6 +863,8 @@ fn open_microphone(
     let sink = sink.clone();
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 2);
     let mut converted: Vec<f32> = Vec::new();
+    // Reused, so draining the reference queue allocates nothing after the first frame.
+    let mut reference_frames: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
     let mut packet = Vec::new();
 
     let stream = input
@@ -867,18 +884,6 @@ fn open_microphone(
                     mono.push(sum / channels as f32);
                 }
 
-                // `microphoneGain`, which is a `GainNode` on the shipped client and sits in
-                // the same place: after the source and before everything that reads it, so
-                // the canceller, the detector and the encoder all see one signal. Clamped,
-                // because the setting goes to 300 per cent and three times a loud sample is
-                // not a sample.
-                let gain = tuning.gain();
-                if (gain - 1.0).abs() > f32::EPSILON {
-                    for sample in &mut mono {
-                        *sample = (*sample * gain).clamp(-1.0, 1.0);
-                    }
-                }
-
                 match rates.as_mut() {
                     Some(rates) => {
                         converted.clear();
@@ -895,11 +900,21 @@ fn open_microphone(
                     // What the speakers played, before what the microphone heard. The other
                     // order asks the canceller to remove an echo of something it has not
                     // been told about yet.
+                    //
+                    // Drained under the lock and rendered outside it, which is a fix of
+                    // 2026-08-29. The lock used to be held across `apm.render` -- a
+                    // multi-millisecond adaptive filter -- and the *output* callback only
+                    // ever `try_lock`s it, so every buffer the speaker produced while the
+                    // canceller was working was thrown away rather than waited for. The
+                    // canceller was starved of exactly the reference it was busy using.
+                    // A lock is held for a copy here and for nothing else.
+                    reference_frames.clear();
                     if let Ok(mut played) = reference.try_lock() {
-                        while played.len() >= FRAME_SAMPLES {
-                            let render: Vec<f32> = played.drain(..FRAME_SAMPLES).collect();
-                            let _ = apm.render(&render);
-                        }
+                        let whole = (played.len() / FRAME_SAMPLES) * FRAME_SAMPLES;
+                        reference_frames.extend(played.drain(..whole));
+                    }
+                    for render in reference_frames.as_chunks::<FRAME_SAMPLES>().0 {
+                        let _ = apm.render(render);
                     }
                     let _ = apm.capture(&mut frame);
 
@@ -931,6 +946,31 @@ fn open_microphone(
                         tuning.heard(heard.level as f32);
                         if heard.changed && voice.send(heard.talking).is_err() {
                             return;
+                        }
+                    }
+
+                    // `microphoneGain`, which is a `GainNode` on the shipped client --
+                    // and it sits *here*, not further up. `Voice.tsx:1070` builds the
+                    // detector on `source`, while `source.connect(microphoneGain)` at
+                    // :1061 sends the gained copy on to the destination: the detector
+                    // reads the microphone before the gain and the encoder reads it after.
+                    //
+                    // This applied it before both until 2026-08-29, which quietly coupled
+                    // two settings that have nothing to do with each other. The detector
+                    // learns the room's noise floor from what it hears, so turning the
+                    // input gain up raised the floor with it and the threshold moved out
+                    // from under the player -- a microphone that opened at a whisper
+                    // before the change needing a raised voice after it, for a setting
+                    // whose label says nothing about sensitivity.
+                    //
+                    // Clamped, because the setting goes to 300 per cent and three times a
+                    // loud sample is not a sample. After the canceller too, which is the
+                    // better place for it either way: an adaptive filter has an easier job
+                    // on the signal its microphone actually produced.
+                    let gain = tuning.gain();
+                    if (gain - 1.0).abs() > f32::EPSILON {
+                        for sample in &mut frame {
+                            *sample = (*sample * gain).clamp(-1.0, 1.0);
                         }
                     }
 

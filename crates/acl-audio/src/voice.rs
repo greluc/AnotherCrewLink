@@ -375,7 +375,22 @@ pub fn voice_params(
         skip_distance_check,
         collided,
     ) {
-        Reach::Silent => return VoiceParams::silent(),
+        Reach::Silent => {
+            // The reverb survives, and only the reverb. `main.rs` reads it as
+            // `params.reverb.then_some(0.0)` -- a haunting ghost out of earshot is placed
+            // at zero gain rather than dropped from the map, because in the Electron client
+            // the convolver stays connected while the gain falls to zero and its
+            // three-second tail rings out.
+            //
+            // Returning a plain `silent()` here threw the flag away, so the guard written
+            // for exactly this could never fire: the peer left the map, the mixer dropped
+            // their delay line, and the tail was cut dead the instant the ghost stepped
+            // out of range. Which is the moment it is most wanted.
+            return VoiceParams {
+                reverb,
+                ..VoiceParams::silent()
+            };
+        }
         Reach::Direct => on_camera = false,
         Reach::ThroughCamera(from) => pan = from,
     }
@@ -1584,6 +1599,42 @@ mod tests {
     }
 
     // ---------------------------------------------------------------- interactions
+
+    #[test]
+    fn a_haunting_ghost_keeps_their_reverb_out_of_earshot() {
+        // The convolver's tail is three seconds long, and `main.rs` keeps a haunted peer in
+        // the placement map at zero gain so that it rings out -- which is what the Electron
+        // client does, because there the convolver stays connected while the gain falls.
+        //
+        // The guard reads `params.reverb`, and the distance cutoff used to return a plain
+        // `silent()` with `reverb: false`. So the flag was thrown away at exactly the
+        // moment it mattered: the ghost walked out of range, the peer left the map, the
+        // mixer dropped their delay line, and the tail stopped dead.
+        let lobby = LobbySettings {
+            haunting: true,
+            ..lobby()
+        };
+        let impostor = Player {
+            is_impostor: true,
+            ..me()
+        };
+        let ghost = Player {
+            is_dead: true,
+            position: Vector2 { x: 500.0, y: 500.0 },
+            ..other()
+        };
+        let params = voice_params(
+            &State::default(),
+            &ClientSettings::default(),
+            &lobby,
+            &impostor,
+            &ghost,
+            RANGE,
+            None,
+        );
+        assert_eq!(params.gain, 0.0, "far too far away to be heard directly");
+        assert!(params.reverb, "and still haunting, so the tail rings out");
+    }
 
     #[test]
     fn a_vented_impostor_on_the_radio_hears_the_vent_and_not_the_radio() {

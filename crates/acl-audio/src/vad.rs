@@ -11,9 +11,18 @@
 //!
 //! # The noise floor is learned, not configured
 //!
-//! For the first second the detector records levels and decides nothing. What it settles
-//! on is the *minimum* it saw, times a margin — not the mean, which one cough during
-//! calibration would drag up far enough to make the microphone useless for the session.
+//! For the first second the detector records levels and refines what it settles on. What
+//! it settles on is the *minimum* it saw, times a margin — not the mean, which one cough
+//! during calibration would drag up far enough to make the microphone useless for the
+//! session.
+//!
+//! It decides from the first frame, though, and that is a fix of 2026-08-29. It used to
+//! answer "not talking" until the second was up, so a player who opened the client and
+//! started speaking was inaudible until they stopped and started again -- and the second
+//! restarts every time the sensitivity slider moves. `Voice.tsx:1084` passes
+//! `noiseCaptureDuration: 0`: the shipped client does not measure the room at all and has
+//! a working detector immediately. Starting from its floor and refining afterwards is both
+//! of those at once.
 
 use crate::analyser::Analyser;
 
@@ -99,10 +108,16 @@ pub struct VadFrame {
 pub struct Vad {
     settings: VadSettings,
     sample_rate: f64,
-    /// Levels seen while calibrating, before the floor is decided.
+    /// Levels seen while calibrating, before the measured floor replaces the starting one.
     calibration: Vec<f64>,
-    /// The learned floor, once calibration has finished.
-    base_level: Option<f64>,
+    /// Whether the measurement is still running.
+    ///
+    /// Separate from `base_level` because there is now always a floor: the detector starts
+    /// on the one `Voice.tsx` runs on and refines it. This says whether the refinement is
+    /// still to come.
+    calibrating: bool,
+    /// The floor the decision is made against.
+    base_level: f64,
     /// What is left of the range above the floor, for the meter.
     voice_scale: f64,
     counter: i32,
@@ -117,8 +132,9 @@ impl Vad {
             settings,
             sample_rate,
             calibration: Vec::new(),
-            base_level: None,
-            voice_scale: 1.0,
+            calibrating: true,
+            base_level: Self::starting_floor(settings),
+            voice_scale: 1.0 - Self::starting_floor(settings),
             counter: 0,
             talking: false,
         }
@@ -136,21 +152,27 @@ impl Vad {
     pub fn retune(&mut self, settings: VadSettings) {
         self.settings = settings;
         self.calibration.clear();
-        self.base_level = None;
-        self.voice_scale = 1.0;
+        self.calibrating = true;
+        // Back to the shipped client's floor rather than to nothing, so a player who moves
+        // the sensitivity slider is not deaf to the lobby for the second afterwards.
+        self.base_level = Self::starting_floor(settings);
+        self.voice_scale = 1.0 - self.base_level;
         self.counter = 0;
         self.talking = false;
     }
 
-    /// Whether the floor has been decided yet.
+    /// Whether the room has been measured yet.
+    ///
+    /// There is a floor either way -- see [`Self::base_level`]. This says whether it is the
+    /// measured one.
     #[must_use]
-    pub fn calibrated(&self) -> bool {
-        self.base_level.is_some()
+    pub const fn calibrated(&self) -> bool {
+        !self.calibrating
     }
 
-    /// The learned floor, once there is one.
+    /// The floor decisions are made against.
     #[must_use]
-    pub fn base_level(&self) -> Option<f64> {
+    pub const fn base_level(&self) -> f64 {
         self.base_level
     }
 
@@ -188,16 +210,31 @@ impl Vad {
         let base = (measured * self.settings.avg_noise_multiplier)
             .max(self.settings.min_noise_level)
             .min(self.settings.max_noise_level);
-        self.base_level = Some(base);
+        self.base_level = base;
         self.voice_scale = 1.0 - base;
         self.calibration.clear();
+        self.calibrating = false;
+    }
+
+    /// The floor a detector starts from, before it has measured anything.
+    ///
+    /// `vad.ts:113` with `noiseCaptureDuration` zero: an empty `envFreqRange` falls back to
+    /// `options.minNoiseLevel`, which is then multiplied by the margin and bounded. That is
+    /// the floor every shipped client actually runs on, because `Voice.tsx:1084` passes
+    /// zero.
+    fn starting_floor(settings: VadSettings) -> f64 {
+        (settings.min_noise_level * settings.avg_noise_multiplier)
+            .max(settings.min_noise_level)
+            .min(settings.max_noise_level)
     }
 
     /// Takes one frame from the analyser and decides.
     ///
-    /// Before calibration has finished, the level is recorded and the answer is always
-    /// "not talking" — which is what the client does, and is why the microphone is quiet
-    /// for the first second.
+    /// It decides from the first frame. Until the calibration finishes it decides against
+    /// the floor `Voice.tsx` uses -- `minNoiseLevel * avgNoiseMultiplier`, which is what
+    /// `vad.ts:113` settles on when `noiseCaptureDuration` is zero, and it is zero in
+    /// every shipped client -- and the levels are recorded meanwhile so that the measured
+    /// floor can replace it.
     pub fn push(&mut self, analyser: &Analyser) -> VadFrame {
         self.push_bins(&analyser.byte_frequency_data())
     }
@@ -215,14 +252,12 @@ impl Vad {
             self.settings.max_capture_hz,
         );
 
-        let Some(base) = self.base_level else {
+        // Recorded whether or not it has settled: the measurement is what replaces the
+        // starting floor, and it has to keep going while the detector answers from it.
+        if self.calibrating {
             self.calibration.push(level);
-            return VadFrame {
-                talking: false,
-                changed: false,
-                level: 0.0,
-            };
-        };
+        }
+        let base = self.base_level;
 
         // The counter fills while the level is above the floor and drains while it is
         // below, and the answer is whether it is past the threshold. Several frames each
@@ -362,13 +397,32 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_decided_before_the_floor_is_learned() {
-        // The first second is quiet by design, and a detector that answered during it
-        // would answer from a floor of zero — which calls everything speech.
+    fn it_decides_from_the_first_frame_and_measures_while_it_does() {
+        // This asserted the opposite until 2026-08-29, and the opposite was a client that
+        // could not be heard for the first second after it opened -- or after the
+        // sensitivity slider moved, which restarts the measurement. `Voice.tsx:1084`
+        // passes `noiseCaptureDuration: 0`, so the shipped client never measures the room
+        // at all and decides immediately; this starts from the floor that produces and
+        // refines it afterwards, which is both.
         let mut vad = Vad::new(RATE, VadSettings::default());
+        assert!(!vad.calibrated(), "the measurement has not finished");
+        assert!(
+            (vad.base_level() - MIN_NOISE_LEVEL * AVG_NOISE_MULTIPLIER).abs() < f64::EPSILON,
+            "and until it does, the floor is the one 1.x runs on"
+        );
+
+        // Loud from the first frame is speech from the first frame, not silence.
         let frame = run(&mut vad, 255, 60);
-        assert!(!frame.talking);
+        assert!(frame.talking);
         assert!(!vad.calibrated());
+
+        // A quiet room measured underneath it still lowers the floor when it settles: the
+        // measurement is a refinement, not a gate.
+        let mut quiet = Vad::new(RATE, VadSettings::default());
+        let _ = run(&mut quiet, 20, 50);
+        quiet.finish_calibration();
+        assert!(quiet.calibrated());
+        assert!(quiet.base_level() <= MIN_NOISE_LEVEL * AVG_NOISE_MULTIPLIER);
     }
 
     #[test]
@@ -379,7 +433,7 @@ mod tests {
         run(&mut vad, 20, 30); // quiet room
         run(&mut vad, 250, 5); // a cough
         vad.finish_calibration();
-        let base = vad.base_level().unwrap();
+        let base = vad.base_level();
         // 20/255 is about 0.078; times the 1.2 margin it is still under the floor's own
         // minimum, so the minimum wins.
         assert_eq!(base, MIN_NOISE_LEVEL);
@@ -390,14 +444,14 @@ mod tests {
         let mut quiet = Vad::new(RATE, VadSettings::default());
         run(&mut quiet, 1, 10);
         quiet.finish_calibration();
-        assert_eq!(quiet.base_level().unwrap(), MIN_NOISE_LEVEL);
+        assert_eq!(quiet.base_level(), MIN_NOISE_LEVEL);
 
         let mut loud = Vad::new(RATE, VadSettings::default());
         run(&mut loud, 255, 10);
         loud.finish_calibration();
         // 1.0 * 1.2 is above the ceiling, so the ceiling wins — a room that was loud
         // throughout calibration does not get a floor nothing can cross.
-        assert_eq!(loud.base_level().unwrap(), MAX_NOISE_LEVEL);
+        assert_eq!(loud.base_level(), MAX_NOISE_LEVEL);
     }
 
     #[test]
@@ -426,7 +480,7 @@ mod tests {
         vad.finish_calibration();
         // The ceiling wins, which is what `vad.ts`'s two sequential bounds do with the
         // same pair.
-        assert_eq!(vad.base_level().unwrap(), MAX_NOISE_LEVEL);
+        assert_eq!(vad.base_level(), MAX_NOISE_LEVEL);
     }
 
     #[test]
@@ -435,7 +489,7 @@ mod tests {
         let mut vad = Vad::new(RATE, VadSettings::default());
         run(&mut vad, 0, 30);
         vad.finish_calibration();
-        assert!(vad.base_level().unwrap() >= MIN_NOISE_LEVEL);
+        assert!(vad.base_level() >= MIN_NOISE_LEVEL);
     }
 
     #[test]
