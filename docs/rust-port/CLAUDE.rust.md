@@ -191,6 +191,14 @@ branch HEADs of three native modules and that is what the vendoring ended.
 Every new dependency is justified in its pull request: what it replaces, why not
 the standard library, and its maintenance status.
 
+One dependency is forked: `vendor/webrtc`, because `webrtc =0.20.3` cannot
+allocate through a relay over TCP and a player on a UDP-blocked network could
+therefore reach nobody. **Do not edit `vendor/webrtc` and stop there.** The tree
+is the pinned crates.io tarball plus `patches/webrtc-0.20.3-turn-tcp.patch`, and
+CI re-derives it and fails on any difference, so a change there means
+regenerating the patch in the same commit. `docs/rust-port/12-turn-over-tcp.md`
+says how, and why the fork exists at all.
+
 ## Style
 
 - British spelling in prose, as in the existing changelog and documentation.

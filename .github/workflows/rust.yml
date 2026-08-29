@@ -314,6 +314,70 @@ jobs:
           test ! -f installed/anothercrewlink.exe
           test ! -d installed/static
 
+  fork:
+    # `vendor/webrtc` is a fork, and this is what keeps it honest.
+    #
+    # A vendored dependency is a place where an unreviewed change can be made to
+    # somebody else's code and never noticed again, because nothing rebuilds it from a
+    # known source. So this job re-derives the whole directory from the crates.io tarball
+    # that the lock file pinned before the fork, plus `patches/webrtc-0.20.3-turn-tcp.patch`,
+    # and fails on any difference. What is in the tree is then provably upstream plus
+    # exactly that diff, and the diff is 762 lines a reviewer can read.
+    #
+    # The fork's own test suite is not run here. It was run by hand at fork time against
+    # both trees and gave identical results — 123 passed, 2 failed, the two failing the
+    # same way on the *unpatched* copy because they need a routable LAN address the
+    # runner does not have. Gating on them would gate on the runner's networking. What
+    # covers the patch's behaviour instead is `crates/acl-net/tests/turn_tcp.rs`, in the
+    # workspace suite: two peers, a real TURN server, TCP only, no other path.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The checksum is the one `Cargo.lock` recorded for `webrtc 0.20.3` before the
+      # `[patch.crates-io]` entry replaced the registry source, so it is the published
+      # artefact and not merely the one this download happened to get.
+      - name: Fetch the pinned upstream release
+        run: |
+          curl --fail --location --silent --show-error \
+            --output webrtc.crate \
+            https://static.crates.io/crates/webrtc/webrtc-0.20.3.crate
+          echo "7330857e1e10fcbfa5f358f152cc01f22a05bb523875c0547677db0f24538dcd  webrtc.crate" \
+            | sha256sum --check --strict
+
+      - name: Rebuild the fork from it
+        run: |
+          mkdir upstream
+          tar -xzf webrtc.crate -C upstream
+          patch -p1 --directory=upstream/webrtc-0.20.3 < patches/webrtc-0.20.3-turn-tcp.patch
+
+      # `Cargo.lock` and `target/` are excluded because the repository does not carry
+      # them: the fork is its own workspace root so that it can be built on its own, which
+      # gives it a lock file and a build directory that are outputs rather than sources.
+      # Everything else, `.vscode/` included, is compared.
+      - name: It matches what is committed
+        run: |
+          diff --recursive --exclude=Cargo.lock --exclude=target \
+            upstream/webrtc-0.20.3 vendor/webrtc
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      # Three runtimes, because the patch touches two of them and a `cfg` that compiles
+      # under tokio is not a `cfg` that compiles under smol. `--all-features` is not a
+      # valid combination upstream — the runtime features are mutually exclusive and
+      # `default_runtime` has no branch for two at once — so each is checked on its own.
+      # No `--locked`: the fork's own lock file is an output and is not committed, so there
+      # is nothing here to be locked against. The versions that matter are the ones the
+      # workspace resolves, and those are checked by every other job.
+      - name: The fork builds under every runtime
+        working-directory: vendor/webrtc
+        run: |
+          cargo check
+          cargo check --no-default-features --features runtime-smol
+          cargo check --no-default-features --features runtime-mock
+
   deny:
     # Advisories, licences, duplicate versions and crate sources — the policy is in
     # deny.toml. Split out so a supply-chain failure is legible at a glance and does not

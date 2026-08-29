@@ -147,6 +147,15 @@ Reject `axoupdater`: its `lib.rs` downloads `{app}-installer.ps1` from the relea
 
 Record str0m's genuine advantages as known gaps rather than pretending the chosen option dominates: str0m's default `dimpl` backend advertises DTLS 1.2/1.3 while webrtc-rs's DTLS version support is unconfirmed; str0m ships a GCC-style bandwidth estimator and pacer while `rtc` ships TWCC feedback but no estimator on top of it. Also record: `rtc-dtls` pulls `rkyv ^0.8.17`, used only in `state.rs` marshal/unmarshal for DTLS session resumption — an API this app will never call, so not reachable, but rkyv's 2026 advisories (including RUSTSEC-2026-0233, use-after-free on crafted archives) will appear in every `cargo audit` run and need a documented `deny.toml` note plus a confirmation the port never calls those two functions.
 
+> **Update 2026-08-29.** The argument held and then cost something. `webrtc-rs` does ship
+> `rtc-turn`, and that is still why it was chosen over str0m — but its relayer discarded
+> every `?transport=tcp` and every `turns:` URL before allocating, so the TURN support that
+> decided the choice did not cover the players who need TURN most. It is forked now:
+> `vendor/webrtc`, six files, 762 lines, re-derived from the pinned tarball by CI. See
+> `docs/rust-port/12-turn-over-tcp.md`. The lesson for a future comparison is that "ships a
+> TURN client" is not the question; "allocates over the transports our users actually have"
+> is.
+
 **Buys:** security — TURN is on the critical path because the app forces relay, and a WebRTC stack without a TURN client is not a candidate. Reviewability — a stated reason that survives a reader checking it. *(Confidence: verified; "str0m's tree is a third the size" was **unverifiable** and should be dropped or measured with `cloc`.)*
 
 ---

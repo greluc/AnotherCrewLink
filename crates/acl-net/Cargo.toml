@@ -24,6 +24,14 @@ webrtc.workspace = true
 # The `webrtc` event handler trait is declared with `#[async_trait]`, so the loopback
 # test's handler needs the same macro.
 async-trait = "0.1"
+# STUN and TURN message building, for the TURN-over-TCP test's server. Already in the tree
+# underneath `webrtc` at this exact version, so it costs no new crate and no new licence;
+# naming it here is what lets a test speak the other half of the protocol.
+rtc = "=0.20.3"
+# The stream splitter, so the test server reads its side of the connection the same way the
+# transport reads the other -- a length prefix written by either end fails the test rather
+# than being quietly tolerated.
+acl-turn-framing.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "process"] }
 

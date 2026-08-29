@@ -71,29 +71,31 @@ pub fn is_relay_server(server: &IceServer) -> bool {
 
 /// Whether this transport can actually allocate through a URL.
 ///
-/// **`webrtc =0.20.3` cannot use a relay over TCP or TLS**, and says so only to a logger:
-/// `peer_connection/transports/turn_relayer.rs:250` skips every `turns:` URL for being
-/// secure and every `?transport=tcp` one for not being UDP, before it allocates anything.
-/// The connections are also built with `with_udp_addrs` and nothing else, so there are no
-/// ICE-TCP host candidates either -- this client is UDP-only on every candidate type there
-/// is.
+/// `turn:` over either UDP or TCP, and not `turns:`.
 ///
-/// That is a limitation of the transport rather than a decision of this project's, and it
-/// is the reason [`usable_relay`] exists beside [`is_relay_server`]. `with_tcp_relays`
-/// still adds the TCP forms: they cost one entry each, they are what a future transport
-/// will use, and a URL the relayer skips gathers nothing rather than failing. What must
-/// not happen is this client *believing* it has a fallback it cannot reach.
+/// **The TCP half was the whole reason this function exists.** `webrtc =0.20.3` skipped
+/// every `?transport=tcp` URL before allocating anything, so a player behind a firewall
+/// that blocks outbound UDP -- a corporate network, a school, a hotel, some mobile
+/// carriers -- gathered no relay candidate and could reach nobody, which is precisely the
+/// case a relay is deployed for. `vendor/webrtc` carries the patch that removes the skip;
+/// see `docs/rust-port/12-turn-over-tcp.md`.
+///
+/// `turns:` is still refused. The relayer skips a secure URL for being secure, and it
+/// would be worse to connect to one in plaintext than not to connect at all: a `turns:`
+/// URL is an operator saying the relay traffic must be inside TLS. Adding it is a separate
+/// piece of work, and until it is done this must keep answering no -- a client believing
+/// in a fallback it cannot reach is how relay rule three gets broken.
 #[must_use]
 pub fn transport_can_use(url: &str) -> bool {
-    // `turns:` is TLS, which the relayer refuses outright.
+    // `turns:` is TLS, which the relayer still refuses outright.
     if !url.starts_with("turn:") {
         return false;
     }
-    // A transport it names has to be UDP. No transport means UDP, which is the default in
-    // RFC 7065 and what the relayer's own parser produces.
+    // A named transport has to be one of the two that are implemented. No transport means
+    // UDP, which is the default in RFC 7065 and what the relayer's own parser produces.
     match url.split_once("transport=") {
         None => true,
-        Some((_, rest)) => rest.split(['&', '#']).next() == Some("udp"),
+        Some((_, rest)) => matches!(rest.split(['&', '#']).next(), Some("udp" | "tcp")),
     }
 }
 
@@ -319,15 +321,31 @@ mod tests {
     }
 
     #[test]
+    fn a_relay_over_tcp_counts_as_a_relay() {
+        // It did not until 2026-08-29, because the transport threw the URL away before
+        // allocating. `with_tcp_relays` had been adding the TCP form since the beginning
+        // and every one of them gathered nothing, so a player whose network blocks
+        // outbound UDP -- the one player a relay is deployed for -- had no way through at
+        // all. See `docs/rust-port/12-turn-over-tcp.md`.
+        assert!(transport_can_use("turn:relay.example:3478?transport=tcp"));
+
+        let udp_blocked = [relay("turn:relay.example:3478?transport=tcp")];
+        assert!(usable_relay(&udp_blocked));
+        assert_eq!(
+            RtcConfig::new(&udp_blocked, true).ice_transport_policy,
+            IceTransportPolicy::Relay,
+            "relay-only is honoured now, because there is a relay it can reach"
+        );
+    }
+
+    #[test]
     fn a_relay_this_transport_cannot_reach_does_not_count_as_one() {
-        // `webrtc =0.20.3` skips every `turns:` URL and every `?transport=tcp` one before
-        // it allocates, so a deployment offering only those has, as far as this client is
-        // concerned, no relay at all. Forcing relay mode onto it would gather nothing --
-        // which is relay rule three, and the rule cannot be applied by a check that
-        // believes the advertisement.
+        // A deployment offering only `turns:` has, as far as this client is concerned, no
+        // relay at all. Forcing relay mode onto it would gather nothing -- which is relay
+        // rule three, and the rule cannot be applied by a check that believes the
+        // advertisement.
         assert!(transport_can_use("turn:relay.example:3478"));
         assert!(transport_can_use("turn:relay.example:3478?transport=udp"));
-        assert!(!transport_can_use("turn:relay.example:3478?transport=tcp"));
         assert!(!transport_can_use("turns:relay.example:5349"));
         assert!(!transport_can_use("stun:stun.example:3478"));
 

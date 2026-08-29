@@ -1,0 +1,767 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -8,6 +8,12 @@
+ # If you are reading this file be aware that the original Cargo.toml
+ # will likely look very different (and much more reasonable).
+ # See Cargo.toml.orig for the original contents.
++
++# Its own workspace root, added by AnotherCrewLink. Without it cargo refuses to build this
++# directory on its own, because the repository above it has a workspace manifest -- and the
++# fork has to be buildable and testable on its own, so that CI can prove its own suite still
++# passes with the TURN-over-TCP patch applied.
++[workspace]
+ 
+ [package]
+ edition = "2024"
+@@ -376,6 +382,17 @@
+ name = "wildcard_bind_expands_interfaces"
+ path = "tests/wildcard_bind_expands_interfaces.rs"
+ 
++# Added by AnotherCrewLink: the TURN stream splitter, so that a relay allocation can be
++# made over TCP. A workspace member of that project rather than a module here, so the one
++# place that parses bytes off a hostile network stays inside every gate its CI runs.
++# The version has to be spelled out: `deny.toml` sets `allow-wildcard-paths = false`, so an
++# unversioned path dependency fails the bans check -- which is the setting working, not the
++# setting getting in the way. It must match `workspace.package.version` in the manifest two
++# directories up, and a version bump therefore touches this line and the patch file with it.
++[dependencies.acl-turn-framing]
++path = "../../crates/acl-turn-framing"
++version = "=2.0.0-alpha.5"
++
+ [dependencies.async-broadcast]
+ version = "0.7.2"
+ 
+--- a/src/peer_connection/driver.rs
++++ b/src/peer_connection/driver.rs
+@@ -11,7 +11,7 @@
+ use crate::media_stream::track_remote::static_rtp::TrackRemoteStaticRTP;
+ use crate::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
+ use crate::peer_connection::PeerConnectionRef;
+-use crate::peer_connection::transports::tcp_transport::RTCTcpTransport;
++use crate::peer_connection::transports::tcp_transport::{Framing, RTCTcpTransport};
+ use crate::peer_connection::transports::{
+     MAX_GSO_BATCH_BYTES, MAX_GSO_SEGMENTS, MIN_GSO_RUN, SocketRecvResult, UDP_RECV_BUF_LEN,
+     gro_recv_buf_len, is_retryable_socket_recv_error,
+@@ -250,6 +250,35 @@
+     ReceiverRtcp(RTCRtpReceiverId, Vec<Box<dyn rtcp::Packet>>),
+     RemoteIceTcpPassiveCandidate(Candidate),
+     IncomingTcpStream(FourTuple, Arc<dyn AsyncTcpStream>),
++    /// A TCP connection to a TURN server is up.
++    ///
++    /// **Added by AnotherCrewLink.** Separate from `IncomingTcpStream` because the two
++    /// framings on a TCP stream are not interchangeable and because only this one carries
++    /// the credentials the allocation needs.
++    TurnTcpStream {
++        /// The relayer generation the connect was spawned in.
++        generation: u64,
++        /// The TURN URL it was for.
++        url: String,
++        /// The address pair the socket got.
++        four_tuple: FourTuple,
++        /// The socket.
++        stream: Arc<dyn AsyncTcpStream>,
++        /// The credentials for the allocation.
++        username: String,
++        /// The credential.
++        password: String,
++    },
++    /// A TCP connection to a TURN server could not be made.
++    ///
++    /// **Added by AnotherCrewLink.** Gathering counts this connection, so its failure has
++    /// to be reported as surely as its success.
++    TurnTcpFailed {
++        /// The relayer generation the connect was spawned in.
++        generation: u64,
++        /// The TURN URL it was for.
++        url: String,
++    },
+     WriteNotify,
+     UpdateIceConfiguration {
+         ice_servers: Vec<RTCIceServer>,
+@@ -963,6 +992,49 @@
+                 self.turn_gathering_complete = true;
+                 self.finish_gathering_if_ready().await;
+             }
++            RTCTurnRelayEventOut::ConnectTurnTcp {
++                generation,
++                url,
++                peer_addr,
++                username,
++                password,
++            } => {
++                // Added by AnotherCrewLink. The relayer owns no sockets, so the connection
++                // is made here and handed back; see `RTCTurnRelayEventOut::ConnectTurnTcp`.
++                let runtime = self.inner.runtime.clone();
++                let tx = self.inner.driver_event_tx.clone();
++                let spawner = runtime.clone();
++                spawner.spawn(Box::pin(async move {
++                    let event = match runtime.connect_tcp(peer_addr).await {
++                        Ok(stream) => {
++                            let local_addr = stream
++                                .local_addr()
++                                .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
++                            let stream_peer = stream.peer_addr().unwrap_or(peer_addr);
++                            PeerConnectionDriverEvent::TurnTcpStream {
++                                generation,
++                                url,
++                                four_tuple: FourTuple {
++                                    local_addr,
++                                    peer_addr: stream_peer,
++                                },
++                                stream,
++                                username,
++                                password,
++                            }
++                        }
++                        Err(err) => {
++                            error!("Failed to connect to TURN server {}: {}", peer_addr, err);
++                            PeerConnectionDriverEvent::TurnTcpFailed { generation, url }
++                        }
++                    };
++                    let _ = tx.send(event).await;
++                }));
++            }
++            RTCTurnRelayEventOut::CloseTurnTcp(four_tuple) => {
++                trace!("Closing TURN TCP stream {:?}", four_tuple);
++                self.tcp_transport.remove_stream(&four_tuple);
++            }
+         }
+     }
+ 
+@@ -1392,6 +1464,41 @@
+                 trace!("TCP stream connection established: {:?}", four_tuple);
+                 self.tcp_transport.register_stream(four_tuple, stream);
+             }
++            PeerConnectionDriverEvent::TurnTcpStream {
++                generation,
++                url,
++                four_tuple,
++                stream,
++                username,
++                password,
++            } => {
++                // Registered before the relayer is told, so that the first write the
++                // allocation produces has a stream to go out on. `Framing::Turn` is what
++                // keeps RFC 4571's length prefix off a TURN server's socket.
++                trace!("TURN TCP stream established to {}: {:?}", url, four_tuple);
++                self.tcp_transport
++                    .register_stream_with(four_tuple, stream, Framing::Turn);
++                if let Err(err) =
++                    self.turn_relayer
++                        .handle_event(RTCTurnRelayEventIn::TurnTcpConnected {
++                            generation,
++                            url,
++                            four_tuple,
++                            username,
++                            password,
++                        })
++                {
++                    error!("Failed to start a TURN allocation over TCP: {}", err);
++                }
++            }
++            PeerConnectionDriverEvent::TurnTcpFailed { generation, url } => {
++                if let Err(err) = self
++                    .turn_relayer
++                    .handle_event(RTCTurnRelayEventIn::TurnTcpFailed { generation, url })
++                {
++                    error!("Failed to record a failed TURN TCP connection: {}", err);
++                }
++            }
+             PeerConnectionDriverEvent::Close => {
+                 if let Err(err) = self.turn_relayer.close() {
+                     error!("Failed to close turn_relayer: {}", err);
+--- a/src/peer_connection/transports/tcp_transport.rs
++++ b/src/peer_connection/transports/tcp_transport.rs
+@@ -24,6 +24,24 @@
+ 
+ const TCP_READ_BUF_LEN: usize = 4096;
+ 
++/// How the messages on one TCP stream are delimited.
++///
++/// Two kinds of stream arrive here and they are framed differently, which is why this
++/// cannot be a property of the transport.
++///
++/// **Added by AnotherCrewLink.** Upstream has only the first: ICE-TCP. See
++/// `docs/rust-port/12-turn-over-tcp.md` in that repository for why.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum Framing {
++    /// RFC 4571: a sixteen-bit length in front of every packet. What ICE-TCP uses, and
++    /// what every stream here used before TURN arrived.
++    Rfc4571,
++    /// RFC 8656 §3.1: STUN and `ChannelData` messages back to back, each delimited by its
++    /// own header. A TURN server speaks this and knows nothing of RFC 4571 — a length
++    /// prefix in front of an Allocate is not a longer Allocate, it is not STUN at all.
++    Turn,
++}
++
+ pub(crate) type TcpAcceptResult = (
+     SocketAddr,
+     io::Result<(Arc<dyn AsyncTcpStream>, SocketAddr)>,
+@@ -33,6 +51,9 @@
+     listeners: HashMap<SocketAddr, Arc<dyn AsyncTcpListener>>,
+     streams: HashMap<FourTuple, Arc<dyn AsyncTcpStream>>,
+     decoders: HashMap<FourTuple, TcpFrameDecoder>,
++    /// The TURN streams, with their own reader. Keyed the same way as `streams`; a key is
++    /// in exactly one of this and `decoders`.
++    turn_decoders: HashMap<FourTuple, acl_turn_framing::Frames>,
+     pub(crate) accept_futures: FuturesUnordered<BoxFuture<'static, TcpAcceptResult>>,
+     pub(crate) read_futures: FuturesUnordered<BoxFuture<'static, TcpReadResult>>,
+ }
+@@ -58,6 +79,7 @@
+             listeners: tcp_listeners,
+             streams: HashMap::new(),
+             decoders: HashMap::new(),
++            turn_decoders: HashMap::new(),
+             accept_futures,
+             read_futures: FuturesUnordered::new(),
+         }
+@@ -76,21 +98,29 @@
+     }
+ 
+     fn find_stream(&self, four_tuple: &FourTuple) -> Option<Arc<dyn AsyncTcpStream>> {
+-        self.streams.get(four_tuple).cloned().or_else(|| {
+-            self.streams
+-                .values()
+-                .find(|stream| {
+-                    stream
+-                        .peer_addr()
+-                        .is_ok_and(|peer| peer == four_tuple.peer_addr)
+-                })
+-                .cloned()
+-        })
+-    }
+-
+-    fn remove_stream(&mut self, four_tuple: &FourTuple) {
++        if let Some(stream) = self.streams.get(four_tuple) {
++            return Some(stream.clone());
++        }
++        // The fallback matches on the peer address alone, which is a different stream to
++        // the one asked for. It must not cross the two framings: an ICE-TCP write landing
++        // on a TURN stream would send a length-prefixed packet to a TURN server, and a
++        // TURN write landing on an ICE-TCP stream would send an Allocate to a peer. Both
++        // would be accepted by the socket and understood by nobody.
++        self.streams
++            .iter()
++            .filter(|(key, _)| !self.turn_decoders.contains_key(*key))
++            .find(|(_, stream)| {
++                stream
++                    .peer_addr()
++                    .is_ok_and(|peer| peer == four_tuple.peer_addr)
++            })
++            .map(|(_, stream)| stream.clone())
++    }
++
++    pub(crate) fn remove_stream(&mut self, four_tuple: &FourTuple) {
+         self.streams.remove(four_tuple);
+         self.decoders.remove(four_tuple);
++        self.turn_decoders.remove(four_tuple);
+     }
+ 
+     pub(crate) fn write<'a>(
+@@ -103,7 +133,15 @@
+             return Box::pin(async { Ok(0) });
+         };
+ 
+-        let framed = frame_packet(&msg.message);
++        // A TURN message is already framed for a stream when it leaves the client:
++        // `rtc-turn`'s `ChannelData::encode` pads to four bytes, and a STUN message
++        // carries its own length and is aligned by construction. So the write is a copy.
++        // RFC 4571's length prefix belongs to ICE-TCP and to nothing else.
++        let framed = if self.turn_decoders.contains_key(&four_tuple) {
++            msg.message.to_vec()
++        } else {
++            frame_packet(&msg.message)
++        };
+         let len = msg.message.len();
+         Box::pin(async move {
+             stream.write_all(&framed).await?;
+@@ -147,8 +185,31 @@
+         four_tuple: FourTuple,
+         stream: Arc<dyn AsyncTcpStream>,
+     ) {
++        self.register_stream_with(four_tuple, stream, Framing::Rfc4571);
++    }
++
++    /// Registers a stream that carries something other than ICE-TCP.
++    ///
++    /// **Added by AnotherCrewLink**, so that a TURN allocation can be made over TCP. The
++    /// framing is a property of what is on the stream, not of the transport, and getting
++    /// it wrong is silent: RFC 4571's two-byte prefix in front of an Allocate does not
++    /// produce an error, it produces bytes whose first two bits mean something else.
++    pub(crate) fn register_stream_with(
++        &mut self,
++        four_tuple: FourTuple,
++        stream: Arc<dyn AsyncTcpStream>,
++        framing: Framing,
++    ) {
+         self.streams.insert(four_tuple, stream.clone());
+-        self.decoders.insert(four_tuple, TcpFrameDecoder::new());
++        match framing {
++            Framing::Rfc4571 => {
++                self.decoders.insert(four_tuple, TcpFrameDecoder::new());
++            }
++            Framing::Turn => {
++                self.turn_decoders
++                    .insert(four_tuple, acl_turn_framing::Frames::new());
++            }
++        }
+         self.arm_read(four_tuple, stream);
+     }
+ 
+@@ -190,22 +251,35 @@
+                     trace!("TCP connection EOF for {:?}", four_tuple);
+                     self.remove_stream(&four_tuple);
+                 } else {
++                    let mut lost_the_boundary = false;
+                     if let Some(decoder) = self.decoders.get_mut(&four_tuple) {
+                         decoder.extend_from_slice(&buf[..n]);
+                         while let Some(packet) = decoder.next_packet() {
+-                            out.push(TaggedBytesMut {
+-                                now: Instant::now(),
+-                                transport: TransportContext {
+-                                    local_addr: four_tuple.local_addr,
+-                                    peer_addr: four_tuple.peer_addr,
+-                                    ecn: None,
+-                                    transport_protocol: TransportProtocol::TCP,
+-                                },
+-                                message: BytesMut::from(&packet[..]),
+-                            });
++                            out.push(Self::tagged(four_tuple, &packet));
+                         }
+-                    }
+-                    if let Some(stream) = self.streams.get(&four_tuple).cloned() {
++                    } else if let Some(frames) = self.turn_decoders.get_mut(&four_tuple) {
++                        // The TURN reader, added by AnotherCrewLink. It can fail, and
++                        // failing is terminal: there is no marker in this framing to
++                        // resynchronise on -- nothing that cannot also occur inside a
++                        // payload -- so a stream whose boundary is lost is a stream to
++                        // close. Reading on would hand the TURN client bytes that parse
++                        // into the wrong thing.
++                        frames.feed(&buf[..n]);
++                        loop {
++                            match frames.next_message() {
++                                Ok(Some(message)) => out.push(Self::tagged(four_tuple, &message)),
++                                Ok(None) => break,
++                                Err(why) => {
++                                    error!("TURN stream {:?} is unreadable: {}", four_tuple, why);
++                                    lost_the_boundary = true;
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                    if lost_the_boundary {
++                        self.remove_stream(&four_tuple);
++                    } else if let Some(stream) = self.streams.get(&four_tuple).cloned() {
+                         self.arm_read(four_tuple, stream);
+                     }
+                 }
+@@ -227,6 +301,20 @@
+             }
+         }
+         out
++    }
++
++    /// One message, tagged with the stream it came off.
++    fn tagged(four_tuple: FourTuple, message: &[u8]) -> TaggedBytesMut {
++        TaggedBytesMut {
++            now: Instant::now(),
++            transport: TransportContext {
++                local_addr: four_tuple.local_addr,
++                peer_addr: four_tuple.peer_addr,
++                ecn: None,
++                transport_protocol: TransportProtocol::TCP,
++            },
++            message: BytesMut::from(message),
++        }
+     }
+ 
+     pub(crate) fn gather_candidates(&self) -> Vec<RTCIceCandidateInit> {
+--- a/src/peer_connection/transports/turn_relayer.rs
++++ b/src/peer_connection/transports/turn_relayer.rs
+@@ -26,12 +26,64 @@
+ #[derive(Debug)]
+ pub(crate) enum RTCTurnRelayEventIn {
+     SocketWriteFailure(FourTuple),
++    /// A TCP connection to a TURN server is up and its stream is registered.
++    ///
++    /// **Added by AnotherCrewLink.** Carries the four-tuple the driver registered it
++    /// under, which is what every later write and read is keyed on.
++    TurnTcpConnected {
++        /// The generation the connect was asked for in.
++        generation: u64,
++        /// The URL it was for.
++        url: String,
++        /// What the driver registered the stream as.
++        four_tuple: FourTuple,
++        /// The credentials for the allocation.
++        username: String,
++        /// The credential.
++        password: String,
++    },
++    /// A TCP connection to a TURN server could not be made.
++    ///
++    /// **Added by AnotherCrewLink.** Gathering has to stop waiting for it, or the
++    /// end-of-candidates signal never arrives and the connection sits in `Gathering`.
++    TurnTcpFailed {
++        /// The generation the connect was asked for in.
++        generation: u64,
++        /// The URL it was for, for the log line.
++        url: String,
++    },
+ }
+ 
+ #[derive(Debug)]
+ pub(crate) enum RTCTurnRelayEventOut {
+     LocalIceCandidate(RTCIceCandidateInit),
+     TurnGatheringComplete,
++    /// Open a TCP connection to a TURN server, and say when it lands.
++    ///
++    /// **Added by AnotherCrewLink.** This relayer is sans-IO -- it owns no sockets, which
++    /// is the crate's whole design -- so a TURN server reached over TCP needs the driver
++    /// to make the connection and register the stream. The allocation cannot be started
++    /// until it has, because the client's local address must be the one the socket
++    /// actually got.
++    ConnectTurnTcp {
++        /// Which attempt this is. A connect spawned before the transports were rebound
++        /// must be discarded rather than registered into the new ones.
++        generation: u64,
++        /// The URL, carried back so the candidate can name it.
++        url: String,
++        /// Where the server is.
++        peer_addr: SocketAddr,
++        /// The credentials for the allocation.
++        username: String,
++        /// The credential.
++        password: String,
++    },
++    /// Close a TCP connection to a TURN server; this relayer is done with it.
++    ///
++    /// **Added by AnotherCrewLink.** The relayer does not own the socket, so a client it
++    /// drops leaves a stream registered in the TCP transport, still armed for reads,
++    /// forever.
++    CloseTurnTcp(FourTuple),
+ }
+ 
+ #[derive(Debug)]
+@@ -47,6 +99,15 @@
+     local_addr: SocketAddr,
+     relay_addr: Option<SocketAddr>,
+     gather_finished: bool,
++    /// Whether this client reaches its server over TCP.
++    ///
++    /// **Added by AnotherCrewLink.** The client itself does not know: its
++    /// `transport_protocol` is left at UDP on purpose, because `rtc-turn` uses that field
++    /// for the STUN `REQUESTED-TRANSPORT` attribute as well -- and per RFC 5766 that names
++    /// the protocol of the *relayed* leg, which for ordinary media must be UDP. Asking a
++    /// server for a TCP allocation is RFC 6062, a different feature, which coturn refuses
++    /// by default. So the transport is applied here instead, on the way out.
++    over_tcp: bool,
+ }
+ 
+ pub(crate) struct RTCTurnRelayer {
+@@ -64,6 +125,19 @@
+     wouts: VecDeque<TaggedBytesMut>,
+     routs: VecDeque<TaggedBytesMut>,
+     events: VecDeque<RTCTurnRelayEventOut>,
++    /// How many TCP connections are still being made.
++    ///
++    /// **Added by AnotherCrewLink.** Gathering is complete when every client has finished
++    /// *and* nothing is still on its way to becoming one. Without this the relayer emits
++    /// end-of-candidates inside `gather()` itself, before any connect can land, and the
++    /// relay candidate arrives after the connection has given up waiting for it.
++    pending_connects: usize,
++    /// Which round of transports the current connects belong to.
++    ///
++    /// **Added by AnotherCrewLink.** `bind_transports` replaces the relayer wholesale; a
++    /// connect spawned before that must not register a stream into the transport that
++    /// replaced it.
++    generation: u64,
+ }
+ 
+ impl RTCTurnRelayer {
+@@ -87,6 +161,8 @@
+             wouts: VecDeque::new(),
+             routs: VecDeque::new(),
+             events: VecDeque::new(),
++            pending_connects: 0,
++            generation: 0,
+         }
+     }
+ 
+@@ -117,6 +193,16 @@
+             return;
+         }
+ 
++        // Which sockets have to be handed back. Collected before the teardown because
++        // `remove_client` reports them through `events`, and `events` is cleared below.
++        // (Added by AnotherCrewLink along with the rest of TURN over TCP.)
++        let over_tcp: Vec<FourTuple> = self
++            .clients
++            .iter()
++            .filter(|(_, managed)| managed.over_tcp)
++            .map(|(four_tuple, _)| *four_tuple)
++            .collect();
++
+         let keys: Vec<FourTuple> = self.clients.keys().copied().collect();
+         for key in keys {
+             self.remove_client(key);
+@@ -128,6 +214,17 @@
+         self.wouts.clear();
+         self.routs.clear();
+         self.events.clear();
++
++        // A connect spawned for the old configuration must not become a client of the new
++        // one: it carries the old server's credentials, and the count it was added to is
++        // gone. Raising the generation is what makes it arrive stale.
++        self.generation = self.generation.wrapping_add(1);
++        self.pending_connects = 0;
++        for four_tuple in over_tcp {
++            self.events
++                .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
++        }
++
+         self.ice_servers = ice_servers;
+         self.ice_gather_policy = ice_gather_policy;
+         self.state = RTCIceGatheringState::New;
+@@ -257,10 +354,12 @@
+                     continue;
+                 }
+ 
+-                if url.proto.to_string() != "udp" {
+-                    warn!("Skipping unsupported non-UDP TURN url {}", url);
+-                    continue;
+-                }
++                // The non-UDP skip that used to stand here is gone. It is why a player
++                // on a network blocking outbound UDP gathered no relay candidate and could
++                // reach nobody -- the case a relay exists for. `turns:` is still skipped
++                // above: a TLS URL that connects in plaintext would be worse than one that
++                // does not connect.
++                let over_tcp = url.proto.to_string() != "udp";
+ 
+                 let turn_server_addr = format!("{}:{}", url.host, url.port);
+                 let resolved_addrs = match runtime.resolve_host(&turn_server_addr).await {
+@@ -274,6 +373,26 @@
+                     }
+                 };
+ 
++                if over_tcp {
++                    // One connection per server, not one per local address: a TCP socket
++                    // picks its own source and the four-tuple comes back from the driver
++                    // once it has. Asking per interface would open one allocation per
++                    // interface, and a relay's port range is finite.
++                    let Some(peer_addr) = resolved_addrs.first().copied() else {
++                        continue;
++                    };
++                    self.pending_connects += 1;
++                    debug!("TURN over TCP: connecting to {} for {}", peer_addr, url);
++                    self.events.push_back(RTCTurnRelayEventOut::ConnectTurnTcp {
++                        generation: self.generation,
++                        url: url.to_string(),
++                        peer_addr,
++                        username: url.username.clone(),
++                        password: url.password.clone(),
++                    });
++                    continue;
++                }
++
+                 for local_addr in &self.local_addrs {
+                     let Some(peer_addr) = resolved_addrs
+                         .iter()
+@@ -318,13 +437,17 @@
+                             local_addr: *local_addr,
+                             relay_addr: None,
+                             gather_finished: false,
++                            over_tcp: false,
+                         },
+                     );
+                 }
+             }
+         }
+ 
+-        if self.clients.is_empty() {
++        // `pending_connects` as well as `clients`, added by AnotherCrewLink: a relayer
++        // with no clients *yet* because every relay it was given is reached over TCP is not
++        // a relayer that has finished.
++        if self.clients.is_empty() && self.pending_connects == 0 {
+             self.state = RTCIceGatheringState::Complete;
+             self.events
+                 .push_back(RTCTurnRelayEventOut::TurnGatheringComplete);
+@@ -376,6 +499,7 @@
+ 
+     fn maybe_emit_gathering_complete(&mut self) {
+         if self.state == RTCIceGatheringState::Gathering
++            && self.pending_connects == 0
+             && self.clients.values().all(|client| client.gather_finished)
+         {
+             self.state = RTCIceGatheringState::Complete;
+@@ -447,6 +571,58 @@
+         } else {
+             None
+         }
++    }
++
++    /// Starts an allocation on a TURN server already connected to over TCP.
++    ///
++    /// **Added by AnotherCrewLink.** Everything about it matches the UDP path in
++    /// [`gather`](Self::gather) except where the addresses come from: the local one is the
++    /// address the connected socket actually got, not one of `local_addrs`, which are the
++    /// UDP sockets shared with the host candidates.
++    fn allocate_over_tcp(
++        &mut self,
++        four_tuple: FourTuple,
++        url: String,
++        username: String,
++        password: String,
++    ) -> Result<()> {
++        if self.clients.contains_key(&four_tuple) {
++            return Ok(());
++        }
++
++        let mut client = TurnClient::new(TurnClientConfig {
++            stun_serv_addr: four_tuple.peer_addr.to_string(),
++            turn_serv_addr: four_tuple.peer_addr.to_string(),
++            local_addr: four_tuple.local_addr,
++            // UDP, on a TCP connection, on purpose: this field is also the STUN
++            // `REQUESTED-TRANSPORT` attribute, which names the relayed leg. See `over_tcp`.
++            transport_protocol: TransportProtocol::UDP,
++            username,
++            password,
++            realm: String::new(),
++            software: String::new(),
++            rto_in_ms: 0,
++        })?;
++
++        let allocate_tid = client.allocate()?;
++        debug!(
++            "TURN allocation started over TCP from {} to {} via {}",
++            four_tuple.local_addr, four_tuple.peer_addr, url
++        );
++
++        self.clients.insert(
++            four_tuple,
++            ManagedTurnClient {
++                client,
++                url,
++                allocate_tid,
++                local_addr: four_tuple.local_addr,
++                relay_addr: None,
++                gather_finished: false,
++                over_tcp: true,
++            },
++        );
++        Ok(())
+     }
+ 
+     fn remove_client(&mut self, four_tuple: FourTuple) {
+@@ -461,6 +637,10 @@
+                     .retain(|(addr, _), _| *addr != relay_addr);
+             }
+             let _ = managed_client.client.close();
++            if managed_client.over_tcp {
++                self.events
++                    .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
++            }
+         }
+     }
+ 
+@@ -588,7 +768,24 @@
+ 
+     fn poll_write(&mut self) -> Option<Self::Wout> {
+         for managed_client in self.clients.values_mut() {
+-            while let Some(msg) = managed_client.client.poll_write() {
++            while let Some(mut msg) = managed_client.client.poll_write() {
++                // **This is the whole of TURN over TCP, added by AnotherCrewLink.**
++                //
++                // The client is built with `transport_protocol: UDP` and stays that way,
++                // because `rtc-turn` uses that one field for two different things: the
++                // transport its bytes leave on, and the STUN `REQUESTED-TRANSPORT`
++                // attribute -- which per RFC 5766 §6.1 names the protocol of the *relayed*
++                // leg and must be UDP for ordinary media. Setting it to TCP would send over
++                // TCP and also ask for an RFC 6062 TCP allocation, which is a different
++                // feature and which coturn refuses by default.
++                //
++                // Re-tagging here separates them. `PeerConnectionDriver::handle_write`
++                // tests `transport_protocol == TCP` before anything else and hands the
++                // message to the TCP transport; the reply comes back keyed by a
++                // `FourTuple`, which drops the protocol, so it reaches this same client.
++                if managed_client.over_tcp {
++                    msg.transport.transport_protocol = TransportProtocol::TCP;
++                }
+                 self.wouts.push_back(msg);
+             }
+         }
+@@ -599,6 +796,43 @@
+         match evt {
+             RTCTurnRelayEventIn::SocketWriteFailure(four_tuple) => {
+                 self.remove_client(four_tuple);
++                self.maybe_emit_gathering_complete();
++            }
++            RTCTurnRelayEventIn::TurnTcpConnected {
++                generation,
++                url,
++                four_tuple,
++                username,
++                password,
++            } => {
++                if generation != self.generation {
++                    // The configuration changed while this was being connected. Its place in
++                    // the count went with the generation it belonged to, so only the socket
++                    // is left to give back.
++                    debug!(
++                        "Discarding a TURN TCP connection to {} from a past configuration",
++                        url
++                    );
++                    self.events
++                        .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
++                    return Ok(());
++                }
++                self.pending_connects = self.pending_connects.saturating_sub(1);
++                if let Err(err) = self.allocate_over_tcp(four_tuple, url, username, password) {
++                    error!("Failed to start a TURN allocation over TCP: {}", err);
++                    self.events
++                        .push_back(RTCTurnRelayEventOut::CloseTurnTcp(four_tuple));
++                }
++                self.maybe_emit_gathering_complete();
++            }
++            RTCTurnRelayEventIn::TurnTcpFailed { generation, url } => {
++                if generation != self.generation {
++                    return Ok(());
++                }
++                self.pending_connects = self.pending_connects.saturating_sub(1);
++                warn!("TURN over TCP: could not connect to {}", url);
++                // Without this, a relay that cannot be reached leaves gathering unfinished
++                // and the connection waits for candidates that will never come.
+                 self.maybe_emit_gathering_complete();
+             }
+         }
+--- a/src/runtime/smol.rs
++++ b/src/runtime/smol.rs
+@@ -158,6 +158,12 @@
+         Box::pin(async move {
+             let std_stream = std::net::TcpStream::connect(remote_addr)?;
+             std_stream.set_nonblocking(true)?;
++            // Nagle off, added by AnotherCrewLink. Every stream this opens carries
++            // real-time media or the signalling for it, in packets far below the MSS.
++            // Nagle holds such a write until the previous segment is acknowledged, which
++            // on a relay one round trip away is up to a frame of added latency on every
++            // packet, and jitter of the same size.
++            std_stream.set_nodelay(true)?;
+             let std_stream2 = std_stream.try_clone()?;
+             let read_io = ::smol::Async::new(std_stream)?;
+             let write_io = ::smol::Async::new(std_stream2)?;
+--- a/src/runtime/tokio.rs
++++ b/src/runtime/tokio.rs
+@@ -171,6 +171,12 @@
+     ) -> Pin<Box<dyn Future<Output = io::Result<Arc<dyn AsyncTcpStream>>> + Send + 'a>> {
+         Box::pin(async move {
+             let stream = ::tokio::net::TcpStream::connect(remote_addr).await?;
++            // Nagle off, added by AnotherCrewLink. Every stream this opens carries
++            // real-time media or the signalling for it, in packets far below the MSS.
++            // Nagle holds such a write until the previous segment is acknowledged, which
++            // on a relay one round trip away is up to a frame of added latency on every
++            // packet, and jitter of the same size.
++            stream.set_nodelay(true)?;
+             let local_addr = stream.local_addr()?;
+             let peer_addr = stream.peer_addr()?;
+             let (read_half, write_half) = stream.into_split();

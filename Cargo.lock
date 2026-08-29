@@ -123,8 +123,10 @@ dependencies = [
 name = "acl-net"
 version = "2.0.0-alpha.5"
 dependencies = [
+ "acl-turn-framing",
  "async-trait",
  "futures-util",
+ "rtc",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -132,6 +134,10 @@ dependencies = [
  "tokio-tungstenite",
  "webrtc",
 ]
+
+[[package]]
+name = "acl-turn-framing"
+version = "2.0.0-alpha.5"
 
 [[package]]
 name = "acl-types"
@@ -5342,9 +5348,8 @@ dependencies = [
 [[package]]
 name = "webrtc"
 version = "0.20.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7330857e1e10fcbfa5f358f152cc01f22a05bb523875c0547677db0f24538dcd"
 dependencies = [
+ "acl-turn-framing",
  "async-broadcast",
  "async-channel",
  "async-trait",

@@ -604,6 +604,25 @@ the commit that adds it, and §7.7 records it as not usable even briefly.
    build time passes it. That is a gap to close in rule 6, not a technicality to
    argue about later. The offsets fetch violates the spirit of this rule today
    and must not be waived for itself.
+
+   > **One exception, added 2026-08-29: `vendor/webrtc`.** The transport is
+   > forked, through a `[patch.crates-io]` entry pointing at a path outside the
+   > workspace, because `webrtc =0.20.3` cannot allocate through a relay over
+   > TCP and a player whose network blocks outbound UDP could therefore reach
+   > nobody. What this rule is actually about is a dependency whose *contents
+   > are not known* — an unpinned branch HEAD that moves under you. That is
+   > exactly what the arrangement here prevents: the tree is the pinned
+   > crates.io tarball plus `patches/webrtc-0.20.3-turn-tcp.patch`, the tarball
+   > is checked against the sha256 the lock file recorded before the fork, and
+   > the `fork` job in CI re-derives the whole directory on every run and fails
+   > on any difference. The version is spelled out in the patch entry, so
+   > `deny.toml`'s `allow-wildcard-paths = false` still applies to it.
+   >
+   > A future fork may take the same shape, and must bring the same three
+   > things: a pinned upstream artefact with its checksum, a patch file, and a
+   > CI job that re-derives and diffs. A vendored directory without them is the
+   > thing this rule forbids, whatever its source field says.
+   > `docs/rust-port/12-turn-over-tcp.md` is the decision record.
 5. Every new dependency is justified in the pull request that adds it: what it
    replaces, why not standard library, and its maintenance status.
 6. Build scripts and proc macros are the actual code-execution vector in a Cargo
