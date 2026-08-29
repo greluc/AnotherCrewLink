@@ -1368,7 +1368,15 @@ fn mix(
         // reverb off is also the rule that sets the gain to zero -- so what differs is three
         // seconds of decay after a switch is flicked, and modelling it would mean carrying a
         // "still connected" flag that no longer answers to any rule.
-        reverbs.retain(|peer, _| placed.get(peer).is_some_and(|p| p.reverb));
+        // Keyed by `<peer>#<side>` since the pan moved in front of the convolution, so the
+        // socket has to be recovered before the placement can be looked up. Dropping the
+        // suffix rather than keying on a pair keeps this a `BTreeMap<String, _>`, which is
+        // what the entry API above wants.
+        reverbs.retain(|key, _| {
+            key.rsplit_once('#')
+                .and_then(|(peer, _)| placed.get(peer))
+                .is_some_and(|placement| placement.reverb)
+        });
 
         // How far behind the speaker is, in frames. Everything below runs that many times
         // rather than once: the decision above is the same for all of them -- it is
@@ -1634,28 +1642,52 @@ fn haunt(
         return false;
     };
 
-    let convolver = match reverbs.entry(peer.to_owned()) {
-        std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
-        std::collections::btree_map::Entry::Vacant(empty) => {
-            empty.insert(acl_audio::reverb::Reverb::new(response))
-        }
-    };
-    convolver.process(mono, into);
-
-    // The convolver sits after the panner in the Electron graph, so what it returns is
-    // already placed. Panning a mono source is one scalar per side, so applying the two
-    // afterwards is the same signal -- and it has to be afterwards here, because the
-    // convolver's two sides came through different halves of the response and are no longer
-    // the same signal to pan.
+    // Panned *before* the convolver, which is the order `Voice.tsx` builds:
+    // `source.connect(pan)` at :1227 and `pan.connect(gain)` at :1228, with `applyEffect`
+    // inserting the reverb between the gain and the destination. So the convolver receives
+    // a signal that has already been placed -- a stereo one, because a `PannerNode` with a
+    // mono input produces stereo -- and a `ConvolverNode` fed stereo convolves each side
+    // against its own half of the response.
+    //
+    // This applied the two pan gains to the convolver's *output* until 2026-08-29, which is
+    // not the same thing at all: the pan is a property of where the ghost is *now*, and the
+    // tail is three seconds of where they were. Applying it afterwards drags the whole tail
+    // to wherever they have walked to, every frame. Reverb that follows its source around
+    // is the one thing a tail must not do.
+    //
+    // Two convolvers per haunting peer, because each side is now a different signal and a
+    // convolver's delay line holds the input it was given. They share the response, which
+    // is the expensive part -- three hundred transforms, cut once and held in an `Arc`.
     let (left, right) = placement.panner.gains(source);
     #[expect(
         clippy::cast_possible_truncation,
         reason = "narrowing a pair of gains back to the sample format"
     )]
     let (left, right) = (left as f32, right as f32);
-    for [on_the_left, on_the_right] in into.as_chunks_mut::<2>().0 {
-        *on_the_left *= left;
-        *on_the_right *= right;
+
+    let mut placed = [0.0_f32; acl_audio::codec::FRAME_SAMPLES];
+    let mut half = vec![0.0_f32; acl_audio::codec::FRAME_SAMPLES * 2];
+    for (side, gain) in [(0_usize, left), (1_usize, right)] {
+        for (target, sample) in placed.iter_mut().zip(mono.iter()) {
+            *target = *sample * gain;
+        }
+        let convolver = match reverbs.entry(format!("{peer}#{side}")) {
+            std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
+            std::collections::btree_map::Entry::Vacant(empty) => {
+                empty.insert(acl_audio::reverb::Reverb::new(Arc::clone(&response)))
+            }
+        };
+        // `process` computes both sides of the response from one input; this side wants
+        // one of them. Taking the other half of the answer rather than adding a
+        // single-channel entry point keeps the convolution that the golden vectors pin
+        // exactly as it is, and the cost is one extra transform per haunting ghost -- a
+        // fraction of a frame, measured, against the twenty milliseconds a frame has.
+        convolver.process(&placed, &mut half);
+        for (frame, pair) in half.as_chunks::<2>().0.iter().enumerate() {
+            if let (Some(target), Some(value)) = (into.get_mut(frame * 2 + side), pair.get(side)) {
+                *target = *value;
+            }
+        }
     }
     true
 }
