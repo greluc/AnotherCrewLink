@@ -680,6 +680,18 @@ struct Announced {
     host: bool,
     /// The lobby has been told this player is on the impostor radio.
     radio: bool,
+    /// The identity the lobby was last told, or `None` before the join.
+    ///
+    /// `join` carries an identity snapshotted at the moment the lobby code appeared, and
+    /// the code appears *before* the local player's record does -- `InnerNetClient`'s
+    /// `GameState` flips first, and the reader falls back to `-1` for a player it cannot
+    /// see yet. A player who crossed that edge early was announced to the whole lobby as
+    /// client `-1`, which matches nobody: `socket_of` found no socket for them, so they
+    /// were placed nowhere and heard by no one, for the rest of the lobby.
+    ///
+    /// The `id` event exists in the protocol to correct exactly that and this client never
+    /// sent it. `Voice.tsx` sends it whenever its own ids change.
+    identity: Option<(i64, i64)>,
 }
 
 /// The three cosmetic ids a player is wearing.
@@ -2092,7 +2104,30 @@ impl Client {
             (!code.is_empty() && code != "MENU").then(|| code.to_owned())
         });
 
+        // Who the reader says this player is, which is not always who the join said. See
+        // `Announced::identity`.
+        let me = state
+            .as_ref()
+            .and_then(|state| state.players.iter().find(|player| player.is_local));
+        let identity =
+            me.map(|player| (i64::from(player.id), player.client_id.map_or(-1, i64::from)));
+
         if wanted == self.joined {
+            // The identity first, because everything else in the lobby is addressed by it.
+            // Only while in a lobby, and only on a change: `id` is a broadcast to everyone
+            // and the ids move twice in a session.
+            if wanted.is_some()
+                && let Some((player_id, client_id)) = identity
+                && client_id >= 0
+                && self.announced.identity != identity
+            {
+                acl_core::log_info!(
+                    "lobby",
+                    "correcting our identity to player {player_id}, client {client_id}"
+                );
+                self.link.say_identity(player_id, client_id);
+                self.announced.identity = identity;
+            }
             // Still in the same lobby, so nothing to join -- but the host can change under
             // us. Among Us promotes somebody when the host leaves, and the server goes on
             // routing host-dependent decisions to a socket that is gone until it is told.
@@ -2114,12 +2149,12 @@ impl Client {
             return;
         }
         if let Some(code) = &wanted {
-            let me = state
-                .as_ref()
-                .and_then(|state| state.players.iter().find(|player| player.is_local));
-            let player_id = me.map_or(-1, |player| i64::from(player.id));
-            let client_id = me.and_then(|player| player.client_id).map_or(-1, i64::from);
+            let (player_id, client_id) = identity.unwrap_or((-1, -1));
             let is_host = state.as_ref().is_some_and(|state| state.is_host);
+            // Remembered only when it is real. A join that carried `-1` has said nothing
+            // useful, so the correction above must still fire when the player's record
+            // appears -- which is the whole case this is for.
+            self.announced.identity = (client_id >= 0).then_some((player_id, client_id));
             acl_core::log_info!(
                 "lobby",
                 "joining {code} as player {player_id}, client {client_id}, host {is_host}"
@@ -2133,6 +2168,7 @@ impl Client {
             // `keep_listed` compares against what was last sent, and a value left behind
             // across a lobby change is a comparison against a lobby that no longer exists.
             self.listed = None;
+            self.announced.identity = None;
             self.link.leave();
         }
         self.joined = wanted;

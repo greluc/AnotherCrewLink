@@ -735,6 +735,30 @@ impl Session {
             .map(drop)
     }
 
+    /// Corrects this client's in-game identity after the join.
+    ///
+    /// `id` is one of the eleven events the server registers a handler for, and this client
+    /// never sent it. It exists because `join` carries an identity snapshotted at the
+    /// moment the lobby code appeared -- and the code appears *before* the local player's
+    /// record does: `InnerNetClient`'s `GameState` flips first, and the reader falls back
+    /// to `-1` for a player it cannot see yet.
+    ///
+    /// A player who crossed that edge early was therefore announced to the whole lobby as
+    /// client `-1`, which matches nobody, so `socket_of` found no socket for them and they
+    /// were placed nowhere and heard by no one. For the rest of the lobby. `Voice.tsx`
+    /// sends `id` whenever its own ids change, which is what makes the join's snapshot
+    /// survivable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] if the socket fails.
+    pub async fn identify(&mut self, player_id: i64, client_id: i64) -> Result<(), TransportError> {
+        self.connection
+            .emit("id", vec![json!(player_id), json!(client_id)], false)
+            .await
+            .map(drop)
+    }
+
     /// Claims the game host's role for this client.
     ///
     /// Sent when this player *becomes* the host, which is not the same moment as joining.

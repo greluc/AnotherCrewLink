@@ -83,6 +83,13 @@ pub(crate) enum Command {
     /// Say whether this player is speaking, for everybody else's indicator.
     VoiceActivity(bool),
     /// Claim the game host's role, after having become it.
+    /// Correct this client's in-game identity.
+    Identify {
+        /// This player's in-game id.
+        player_id: i64,
+        /// This player's client id.
+        client_id: i64,
+    },
     SetHost(i64),
     /// Claim or release the impostor radio.
     ImpostorRadio(bool),
@@ -480,6 +487,18 @@ impl Link {
         self.sockets
             .get(&client_id)
             .is_some_and(|socket| self.vocal.contains(socket))
+    }
+
+    /// Corrects this client's in-game identity.
+    ///
+    /// Sent on a change rather than every frame: `id` is a broadcast to the whole lobby,
+    /// and the ids move twice in a session. See `Session::identify` for why the join's own
+    /// copy is not enough.
+    pub(crate) fn say_identity(&self, player_id: i64, client_id: i64) {
+        self.send(Command::Identify {
+            player_id,
+            client_id,
+        });
     }
 
     /// Claims the game host's role.
@@ -1425,6 +1444,14 @@ fn obey(
         Command::VoiceActivity(speaking) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.voice_activity(speaking));
+            }
+        }
+        Command::Identify {
+            player_id,
+            client_id,
+        } => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.identify(player_id, client_id));
             }
         }
         Command::SetHost(client_id) => {
