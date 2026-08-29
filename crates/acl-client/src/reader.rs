@@ -77,12 +77,12 @@ impl Reader {
     /// # Errors
     ///
     /// Whatever spawning the thread said.
-    pub(crate) fn start() -> std::io::Result<Self> {
+    pub(crate) fn start(cache: std::path::PathBuf) -> std::io::Result<Self> {
         let (commands, orders) = channel();
         let (reports, inbox) = channel();
         std::thread::Builder::new()
             .name("game-reader".to_owned())
-            .spawn(move || run(&orders, &reports))?;
+            .spawn(move || run(&orders, &reports, &cache))?;
         Ok(Self {
             commands,
             reports: inbox,
@@ -206,7 +206,7 @@ const TICK: Duration = Duration::from_millis(50);
 const RESTART_AFTER: Duration = Duration::from_millis(7_500);
 
 /// The reader thread.
-fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
+fn run(orders: &Receiver<Command>, reports: &Sender<Report>, cache: &std::path::Path) {
     let mut link = Link::new();
     // When to try again after the helper has gone.
     //
@@ -226,7 +226,7 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
             Ok(Command::Start) => {
                 wanted = true;
                 restart_due = None;
-                start(&mut link, reports);
+                start(&mut link, reports, cache);
             }
             Ok(Command::Stop) => {
                 // Asked for, so it stays down. The restart below is for a helper that went
@@ -291,7 +291,7 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
                 Some(due) if std::time::Instant::now() >= due => {
                     restart_due = None;
                     acl_core::log_info!("reader", "the helper is gone; starting another");
-                    start(&mut link, reports);
+                    start(&mut link, reports, cache);
                 }
                 Some(_) => {}
             }
@@ -306,7 +306,7 @@ fn run(orders: &Receiver<Command>, reports: &Sender<Report>) {
 /// is not here yet — nothing has asked the helper to read a game it could not — so this
 /// tries the first and reports what happened.
 #[cfg(windows)]
-fn start(link: &mut Link, reports: &Sender<Report>) {
+fn start(link: &mut Link, reports: &Sender<Report>, cache: &std::path::Path) {
     let _ = reports.send(Report::State(HelperState::Starting));
     let executable = match acl_core::launch::helper_beside_this_one() {
         Ok(path) => path,
@@ -327,7 +327,15 @@ fn start(link: &mut Link, reports: &Sender<Report>) {
         return;
     }
 
-    match link.start(&executable, Elevation::AsIs, OFFSETS) {
+    // Fetched here rather than held in a constant, and on this thread: it is two HTTP
+    // requests with a timeout, and the thread it blocks is the reader's own, which has
+    // nothing else to do until the helper is up.
+    let (for_32bit, for_64bit) = offsets_for_the_helper(reports, cache);
+    let offsets = acl_core::link::Offsets {
+        for_32bit: &for_32bit,
+        for_64bit: &for_64bit,
+    };
+    match link.start(&executable, Elevation::AsIs, offsets) {
         Ok(()) => {}
         Err(error) => {
             let _ = reports.send(Report::Trouble(error.to_string()));
@@ -337,21 +345,106 @@ fn start(link: &mut Link, reports: &Sender<Report>) {
 }
 
 #[cfg(not(windows))]
-fn start(_link: &mut Link, reports: &Sender<Report>) {
+fn start(_link: &mut Link, reports: &Sender<Report>, _cache: &std::path::Path) {
     let _ = reports.send(Report::Trouble(
         "the game reader is a Windows binary and there is no other implementation".to_owned(),
     ));
 }
 
-/// The offsets the helper is given, both architectures of them.
+/// The compiled-in floor, both architectures of it.
 ///
 /// Both, because which applies depends on the process the helper finds and only the helper
-/// can see that. The compiled-in floor, and only that for now: fetching a newer bundle is
-/// `acl_game::store`'s business and it is HTTP, which belongs on this side of the pipe —
-/// §6 keeps every HTTP client out of the elevated process — but wiring the store in is a
-/// change with its own failure modes, and a shell that opens a window does not need it.
+/// can see that. Used when the mirror cannot be reached and nothing has been cached, which
+/// is what a floor is for.
 #[cfg(windows)]
-const OFFSETS: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
+const FLOOR: acl_core::link::Offsets<'static> = acl_core::link::Offsets {
     for_32bit: include_bytes!("../../acl-game/assets/offsets-x86.json"),
     for_64bit: include_bytes!("../../acl-game/assets/offsets-x64.json"),
 };
+
+/// The offsets to give the helper: the mirror's, the cache's, or the floor's.
+///
+/// **Nothing asked the store until 2026-08-29.** `acl_game::store` -- the lookup, the two
+/// mirrors, the cache, the validation on every load, the rollback check -- had no
+/// production caller at all, so the client ran on the compiled-in floor and nothing else.
+/// That is not a degradation, it is the whole point of the store gone: Among Us moves its
+/// fields on almost every update, and `offsetStore.ts` exists so a player gets working
+/// proximity the day the mirror publishes rather than the day a new client ships.
+///
+/// HTTP on this side of the pipe, which is §6: no HTTP client in the elevated process.
+///
+/// # What this does not do yet
+///
+/// The lookup is keyed by the build hash the game broadcasts, and only the helper can read
+/// that -- it is in the game's memory. Asking it would need a round trip the pipe protocol
+/// does not have: offsets are sent once, at start, before the helper has attached to
+/// anything. So this takes the lookup's `default` entry, which is what the mirror says the
+/// current build is.
+///
+/// That is right for the case the store exists for -- the game updated, the mirror
+/// published, this client did not change -- and no worse than the floor for anybody else,
+/// because the floor is one specific build too. Reading the broadcast hash needs a
+/// `GetBuild` message and a second `SetOffsets`, and is a protocol change rather than a
+/// wiring one.
+#[cfg(windows)]
+fn offsets_for_the_helper(reports: &Sender<Report>, cache: &std::path::Path) -> (Vec<u8>, Vec<u8>) {
+    use acl_game::store::{HttpFetcher, OffsetStore};
+
+    let floor = || (FLOOR.for_32bit.to_vec(), FLOOR.for_64bit.to_vec());
+    let store = OffsetStore::new(cache, env!("CARGO_PKG_VERSION"));
+    let fetcher = HttpFetcher;
+
+    let lookup = match store.load_lookup(&fetcher) {
+        Ok(loaded) => {
+            if let Some(why) = loaded.reason.as_deref() {
+                acl_core::log_warn!(
+                    "reader",
+                    "the offsets lookup came from the {:?}: {why}",
+                    loaded.source
+                );
+            }
+            loaded.value
+        }
+        // The floor itself did not validate, which means this build shipped broken. There
+        // is nothing left to fall back to, so the bytes go across unexamined and the helper
+        // will say what it makes of them.
+        Err(error) => {
+            let _ = reports.send(Report::Trouble(format!(
+                "the offsets lookup could not be read: {error}"
+            )));
+            return floor();
+        }
+    };
+
+    let Some(entry) = lookup.entry_for("default") else {
+        let _ = reports.send(Report::Trouble(
+            "the offsets lookup names no default build; using the compiled-in offsets".to_owned(),
+        ));
+        return floor();
+    };
+    acl_core::log_info!(
+        "reader",
+        "offsets for {} from {}",
+        entry.version,
+        entry.file
+    );
+
+    // Both architectures, because the helper decides which it needs. One of the two
+    // failing is not a reason to refuse the other: a 64-bit player is not helped by
+    // withholding their offsets because the 32-bit file is missing.
+    let one = |is_64bit: bool, fallback: &[u8]| -> Vec<u8> {
+        match store.load_offsets(&fetcher, is_64bit, &entry.file) {
+            Ok(loaded) => serde_json::to_vec(&loaded.value).unwrap_or_else(|_| fallback.to_vec()),
+            Err(error) => {
+                acl_core::log_warn!(
+                    "reader",
+                    "no {} offsets for {}: {error}; using the compiled-in ones",
+                    if is_64bit { "x64" } else { "x86" },
+                    entry.file
+                );
+                fallback.to_vec()
+            }
+        }
+    };
+    (one(false, FLOOR.for_32bit), one(true, FLOOR.for_64bit))
+}

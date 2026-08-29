@@ -1216,7 +1216,9 @@ impl Client {
         // that does not work.
         // Before `settings` is moved into the struct below.
         let capture = capture_settings(settings.config());
-        let reader = reader::Reader::start().ok();
+        // The offsets cache lives beside the settings, which is where `Paths` already
+        // puts `lookup.json`.
+        let reader = reader::Reader::start(paths.user_data().to_path_buf()).ok();
         if let Some(reader) = reader.as_ref() {
             reader.ask_to_start();
         }
