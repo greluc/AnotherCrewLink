@@ -265,6 +265,66 @@ pub mod system {
         }
     }
 
+    impl Cpal {
+        /// The `cpal` device a stored setting names, by id and then by name.
+        ///
+        /// [`reacquire`]'s rule, applied to the handles rather than to the descriptions,
+        /// because a handle is what a stream is opened from. It had no production caller
+        /// until 2026-08-29: the client stored a chosen microphone and speaker, showed
+        /// them in a picker, and opened the system default regardless. A player on a USB
+        /// headset picked it, saw it selected, and talked into their laptop.
+        ///
+        /// `None` for an empty or unmatched setting, which the caller reads as "the system
+        /// default". A device that has been unplugged is a device somebody will plug back
+        /// in, and refusing to open any audio until they do is worse than opening the one
+        /// Windows would have chosen anyway.
+        #[must_use]
+        pub fn find(&self, direction: Direction, id: &str, name: &str) -> Option<cpal::Device> {
+            if id.is_empty() || id == "Default" {
+                return None;
+            }
+            let listed = match direction {
+                Direction::Input => self.host.input_devices().ok()?,
+                Direction::Output => self.host.output_devices().ok()?,
+            };
+            // Both passes over one enumeration: asking WASAPI twice costs eleven
+            // milliseconds a time and the list cannot change between them anyway.
+            let handles: Vec<(String, String, cpal::Device)> = listed
+                .filter_map(|device| {
+                    let description = device.description().ok()?;
+                    let shown = description.name().to_owned();
+                    Some((Self::identify(&device, &shown), shown, device))
+                })
+                .collect();
+
+            if let Some((_, _, device)) = handles.iter().find(|(known, _, _)| known == id) {
+                return Some(device.clone());
+            }
+            if name.is_empty() {
+                acl_core_log(&format!("no audio device called {id}; using the default"));
+                return None;
+            }
+            // The recovery `Voice.tsx` performs and this client did not. Windows changes a
+            // device's id when the same headset moves to a different port; the name it
+            // shows survives that, which is the whole reason both are stored.
+            if let Some((_, _, device)) = handles.iter().find(|(_, shown, _)| shown == name) {
+                return Some(device.clone());
+            }
+            acl_core_log(&format!(
+                "neither {id} nor {name} is present; using the default audio device"
+            ));
+            None
+        }
+    }
+
+    /// A line in the log, without `acl-audio` taking a dependency to write it.
+    ///
+    /// This crate is deliberately free of the client's logging; two call sites do not
+    /// justify reversing that, and a device that cannot be found is worth saying out loud.
+    fn acl_core_log(message: &str) {
+        eprintln!("[audio/warn] {message}");
+    }
+
     impl Default for Cpal {
         fn default() -> Self {
             Self::new()

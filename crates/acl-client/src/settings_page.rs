@@ -99,14 +99,14 @@ impl Page {
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, context: &Context<'_>) -> Vec<Effect> {
         let mut effects = Vec::new();
         for change in draw(ui, &self.config, context) {
-            self.act(change, &mut effects);
+            self.act(change, context, &mut effects);
         }
         self.confirmation(ui, context, &mut effects);
         effects
     }
 
     /// Takes one change, either applying it or holding it for its warning.
-    fn act(&mut self, change: Change, effects: &mut Vec<Effect>) {
+    fn act(&mut self, change: Change, context: &Context<'_>, effects: &mut Vec<Effect>) {
         match change {
             Change::Capture(key) => self.begin_capture(key),
             Change::Run { key, warning } => {
@@ -120,7 +120,7 @@ impl Page {
                 if warning.is_some() {
                     self.pending = Some(set);
                 } else {
-                    self.apply(&set, effects);
+                    self.apply(&set, context, effects);
                 }
             }
             // Applied as an ordinary `Set` of the schema's own value, so everything that
@@ -140,6 +140,7 @@ impl Page {
                         value: default,
                         warning: None,
                     },
+                    context,
                     effects,
                 );
             }
@@ -147,7 +148,7 @@ impl Page {
     }
 
     /// Writes a change through to the file.
-    fn apply(&mut self, change: &Change, effects: &mut Vec<Effect>) {
+    fn apply(&mut self, change: &Change, context: &Context<'_>, effects: &mut Vec<Effect>) {
         let Change::Set {
             key, scope, value, ..
         } = change
@@ -155,6 +156,27 @@ impl Page {
             return;
         };
         self.config.set(&path(*scope, key), value.clone());
+        // The label beside the id, for the two device pickers.
+        //
+        // `microphoneLabel` and `speakerLabel` are in the schema, have translations, and
+        // were written by nothing until 2026-08-29 -- so the recovery they exist for did
+        // not exist. Windows changes a device's id when the same headset is plugged into a
+        // different port, and the name it shows survives that; without the name stored
+        // beside the id the setting silently stops applying and the client falls back to
+        // the system default. Which is "my headset works until I move it".
+        if let Some(entries) = match *key {
+            "microphone" => Some(context.microphones),
+            "speaker" => Some(context.speakers),
+            _ => None,
+        } {
+            let chosen = value.as_str().unwrap_or_default();
+            let label = entries
+                .iter()
+                .find(|entry| entry.id == chosen)
+                .map_or("", |entry| entry.label);
+            self.config
+                .set(&format!("{key}Label"), serde_json::Value::from(label));
+        }
         self.save();
         if *key == "language" {
             effects.push(Effect::LanguageChanged);
@@ -240,7 +262,7 @@ impl Page {
                 self.pending = None;
                 match pending {
                     Change::Run { key, .. } => Self::run(key, effects),
-                    set @ Change::Set { .. } => self.apply(&set, effects),
+                    set @ Change::Set { .. } => self.apply(&set, context, effects),
                     // Unreachable: neither is ever held, for the reason above.
                     Change::Capture(_) | Change::Reset { .. } => {}
                 }
@@ -369,6 +391,26 @@ mod tests {
         Page::open(std::env::temp_dir().join("acl-settings-page-test.json"))
     }
 
+    /// The screen's surroundings, with nothing in them.
+    ///
+    /// `act` needs these because choosing a device also stores the label the picker showed
+    /// -- Windows changes a device's id when the same headset moves to another port, and
+    /// the name survives it. None of the tests here touch a device, so an empty machine is
+    /// the right one to hand them.
+    fn nowhere() -> acl_ui::views::settings::Context<'static> {
+        acl_ui::views::settings::Context {
+            t: &|key| key.to_owned(),
+            microphones: &[],
+            speakers: &[],
+            locales: &[],
+            input_level: None,
+            testing_speaker: false,
+            host_may_change: false,
+            in_menu_or_lobby: false,
+            capturing: None,
+        }
+    }
+
     fn set(key: &'static str, warning: Option<&'static str>) -> Change {
         Change::Set {
             key,
@@ -383,7 +425,7 @@ mod tests {
     fn an_unwarned_change_applies_immediately() {
         let mut page = page();
         let mut effects = Vec::new();
-        page.act(set("alwaysOnTop", None), &mut effects);
+        page.act(set("alwaysOnTop", None), &nowhere(), &mut effects);
         assert!(Values::bool_at(&page, Scope::Client, "alwaysOnTop"));
         assert!(effects.is_empty());
     }
@@ -396,6 +438,7 @@ mod tests {
         let mut effects = Vec::new();
         page.act(
             set("natFix", Some("settings.advanced.nat_fix_warning")),
+            &nowhere(),
             &mut effects,
         );
         assert!(
@@ -415,6 +458,7 @@ mod tests {
                 key: "resetOffsets",
                 warning: Some("settings.troubleshooting.reset_offsets_warning"),
             },
+            &nowhere(),
             &mut effects,
         );
         assert!(effects.is_empty(), "the action ran before it was confirmed");
@@ -452,6 +496,7 @@ mod tests {
                 value: json!("de"),
                 warning: None,
             },
+            &nowhere(),
             &mut effects,
         );
         assert_eq!(effects, [Effect::LanguageChanged]);
@@ -469,6 +514,7 @@ mod tests {
                 value: json!(true),
                 warning: None,
             },
+            &nowhere(),
             &mut effects,
         );
         assert_eq!(
@@ -484,7 +530,7 @@ mod tests {
     fn restoring_empties_rather_than_filling() {
         let mut page = page();
         let mut effects = Vec::new();
-        page.act(set("alwaysOnTop", None), &mut effects);
+        page.act(set("alwaysOnTop", None), &nowhere(), &mut effects);
         page.restore_defaults();
         assert!(page.config().get("alwaysOnTop").is_none());
         assert!(!Values::bool_at(&page, Scope::Client, "alwaysOnTop"));

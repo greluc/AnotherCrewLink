@@ -54,7 +54,7 @@ use acl_core::peers::Incoming;
 /// its "unsaved" count, which is how it asks for the reconnect that applies them.
 ///
 /// Here the reload button reopens the audio, which is the same bargain.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "one field per setting, for the reason `settings_screen` gives about its own:               packing them would hide which switch on the page each one is"
@@ -77,6 +77,23 @@ pub(crate) struct Capture {
     /// that cannot do 48 kHz is refused rather than quietly resampled -- which would leave
     /// the switch on and the thing it removes still there.
     pub(crate) fixed_rate: bool,
+    /// The microphone the player picked, by id, or empty for the system default.
+    ///
+    /// Stored, translated, shown in a picker, and read by nothing until 2026-08-29: both
+    /// devices were always the Windows default. A player on a USB headset picked it, saw
+    /// it selected, and talked into their laptop's array microphone.
+    pub(crate) microphone: String,
+    /// The speaker, the same way.
+    pub(crate) speaker: String,
+    /// What the picker showed when the microphone was chosen.
+    ///
+    /// Windows changes a device's id when the same headset moves to a different port, and
+    /// the name survives it. `microphoneLabel` exists for that and was written by nothing,
+    /// so the recovery 1.x has did not exist here: the id stopped matching and the client
+    /// silently fell back to the default.
+    pub(crate) microphone_label: String,
+    /// The same, for the speaker.
+    pub(crate) speaker_label: String,
 }
 
 impl Default for Capture {
@@ -85,6 +102,10 @@ impl Default for Capture {
             echo_cancellation: true,
             noise_suppression: true,
             voice_detection: true,
+            microphone: String::new(),
+            speaker: String::new(),
+            microphone_label: String::new(),
+            speaker_label: String::new(),
             fixed_rate: false,
         }
     }
@@ -380,7 +401,7 @@ impl Audio {
     /// five times a second, in each direction. `receive` and `take_encoded` are gone rather
     /// than merely unused: a method that exists is one something can start calling again.
     pub(crate) fn start(
-        capture: Capture,
+        capture: &Capture,
         packets: Receiver<Incoming>,
         sink: &crate::net::AudioSink,
     ) -> Self {
@@ -589,7 +610,7 @@ impl Audio {
         sink: &crate::net::AudioSink,
         voice: &Sender<bool>,
         placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
-        capture: Capture,
+        capture: &Capture,
         tuning: &Arc<Tuning>,
         ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
         tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
@@ -618,7 +639,7 @@ impl Audio {
         // away, so the stream dropped and stopped. A player whose microphone was busy,
         // missing, or at a rate `choose` could not use heard *nobody*, when 1.x leaves
         // them listening and merely unable to speak.
-        let speaker = open_speaker(&host, &ready, tone, &played)?;
+        let speaker = open_speaker(&host, &ready, tone, &played, capture)?;
         match open_microphone(&host, sink, voice, &played, capture, tuning) {
             Ok(microphone) => Ok((vec![speaker, microphone], None)),
             Err(why) => {
@@ -647,11 +668,20 @@ fn open_speaker(
     ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
+    capture: &Capture,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
-    let output = host
-        .default_output_device()
+    // The device the player picked, falling back to the system default. `find` matches on
+    // the stored id first and on the stored name second, which is the recovery Windows
+    // needs: it changes a device's id when the same headset moves to another port.
+    let output = acl_audio::device::system::Cpal::new()
+        .find(
+            acl_audio::device::Direction::Output,
+            &capture.speaker,
+            &capture.speaker_label,
+        )
+        .or_else(|| host.default_output_device())
         .ok_or_else(|| "no output device".to_owned())?;
     let config = at_any_rate(&output, false)?;
     let channels = config.channels.max(1) as usize;
@@ -779,13 +809,18 @@ fn open_microphone(
     sink: &crate::net::AudioSink,
     voice: &Sender<bool>,
     played: &Arc<Mutex<std::collections::VecDeque<f32>>>,
-    capture: Capture,
+    capture: &Capture,
     tuning: &Arc<Tuning>,
 ) -> Result<Box<dyn std::any::Any + Send>, String> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
-    let input = host
-        .default_input_device()
+    let input = acl_audio::device::system::Cpal::new()
+        .find(
+            acl_audio::device::Direction::Input,
+            &capture.microphone,
+            &capture.microphone_label,
+        )
+        .or_else(|| host.default_input_device())
         .ok_or_else(|| "no input device".to_owned())?;
     let config = at_any_rate(&input, true)?;
     if capture.fixed_rate && config.sample_rate != acl_audio::stream::WANTED_RATE {
@@ -1899,7 +1934,7 @@ mod tests {
         // A `Link` is not started here -- this is a unit test and there is nothing to
         // signal to -- so the ends are made directly, which is what `Link::start` does.
         let (link, packets) = crate::net::Link::start();
-        let audio = Audio::start(super::Capture::default(), packets, &link.audio_sink());
+        let audio = Audio::start(&super::Capture::default(), packets, &link.audio_sink());
         // `None` means the devices opened, and nothing here plays anything -- that would
         // put a noise on the machine of whoever ran the tests.
         if let Some(why) = audio.trouble() {

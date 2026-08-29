@@ -339,6 +339,10 @@ fn capture_settings(stored: &acl_ui::config::Config) -> audio::Capture {
         noise_suppression: stored.bool_at("noiseSuppression"),
         voice_detection: stored.bool_at("vadEnabled"),
         fixed_rate: stored.bool_at("oldSampleDebug"),
+        microphone: stored.text_at("microphone"),
+        speaker: stored.text_at("speaker"),
+        microphone_label: stored.text_at("microphoneLabel"),
+        speaker_label: stored.text_at("speakerLabel"),
     }
 }
 
@@ -1210,7 +1214,7 @@ impl Client {
         let (link, packets) = net::Link::start();
         // Before the switch watcher, which writes the microphone gate into the capture
         // callback's `Tuning` and therefore needs one to write into.
-        let audio = audio::Audio::start(capture, packets, &link.audio_sink());
+        let audio = audio::Audio::start(&capture, packets, &link.audio_sink());
         Self {
             state_file,
             hats: hat_store::Loader::start(paths.hat_cache()),
@@ -3222,7 +3226,7 @@ impl eframe::App for Client {
                 // client deaf from the first rebuild onwards.
                 let packets = self.link.rewire_audio();
                 self.audio = audio::Audio::start(
-                    capture_settings(self.settings.config()),
+                    &capture_settings(self.settings.config()),
                     packets,
                     &self.link.audio_sink(),
                 );
