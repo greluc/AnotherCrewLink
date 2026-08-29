@@ -151,6 +151,25 @@ certificate and a listener on the server — and it is a separate decision.
 
 **RFC 6062** — TCP allocations, where the *relayed* leg is TCP. Not wanted: media is UDP.
 
+## One limitation, stated rather than hidden
+
+`RTCTcpTransport::write` is awaited inside the driver's select loop. That is upstream's
+design and it was already true of ICE-TCP; what is new is that it is now on the media path.
+If a relay stops draining its socket, the TCP send buffer fills and that peer connection
+makes no progress at all until it drains — no reads, no timers, so ICE consent freshness
+fails and the connection dies.
+
+Measured rather than feared: at Opus rates the relay has to read nothing for roughly six
+seconds to fill a default send buffer, by which point the connection is failing for its own
+reasons. Each peer has its own driver and its own connection to the relay, so one stuck
+relay stalls one peer and not the lobby.
+
+The fix is a per-stream writer task with a bounded queue and drop-on-full, because queueing
+real-time audio is the wrong answer anyway. It is about eighty lines, it changes ICE-TCP's
+behaviour as well as TURN's, and it would roughly double a patch whose whole value is that
+a reviewer can read it. It is not done. If a relay is ever observed stalling a connection
+this way, that is what to write.
+
 ## Where it lives
 
 - `vendor/webrtc/` — the fork. Six files differ from upstream.
