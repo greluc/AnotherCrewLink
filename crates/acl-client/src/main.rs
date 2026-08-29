@@ -1202,6 +1202,8 @@ struct Client {
     /// helper would act on either correctly, and a command five times a second for a state
     /// that has not changed is a pipe carrying nothing.
     overlay_shown: bool,
+    /// Whether the missing overlay names have been mentioned. Once per session.
+    warned_about_names: bool,
     /// The window level the viewport has been told about.
     ///
     /// Remembered rather than sent every frame: a viewport command is a round trip to
@@ -1292,6 +1294,7 @@ impl Client {
             overlay_due: Cadence::default(),
             game_window: GameWindow::default(),
             overlay_shown: false,
+            warned_about_names: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
             launch_trouble: None,
@@ -1299,6 +1302,28 @@ impl Client {
             on_top: None,
             watching_lobbies: false,
             devices: Devices::default(),
+        }
+    }
+
+    /// Says once that the overlay cannot draw the names this position promises.
+    ///
+    /// A setting that does nothing and says nothing is the worst of the three states it
+    /// could be in. `Position::shows_names` decides which positions put a name beside each
+    /// crewmate, and nothing draws one: `acl_ui::sprite` has no font and no glyph
+    /// rasteriser, so the two "with names" positions are indistinguishable from the plain
+    /// ones. That is a feature this port has not built rather than a wiring mistake, and it
+    /// is recorded as such in `docs/rust-port/11-audit-two-2026-08-29.md`.
+    #[cfg(windows)]
+    fn mention_missing_names(&mut self) {
+        let stored = self.settings.config();
+        let position = acl_ui::overlay_layout::Position::parse(&stored.text_at("overlayPosition"));
+        let compact = stored.bool_at("compactOverlay") || position.forces_compact();
+        if position.shows_names(compact) && !self.warned_about_names {
+            self.warned_about_names = true;
+            acl_core::log_warn!(
+                "overlay",
+                "this overlay position draws player names in 1.x and does not here yet, so it looks the same as the one without them"
+            );
         }
     }
 
@@ -1352,6 +1377,7 @@ impl Client {
         // Before the reader is borrowed, for the same reason the bounds are: this reads
         // `self.game_window` and `self.overlay_shown`.
         let showable = self.overlay_is_showable();
+        self.mention_missing_names();
 
         let Some(reader) = self.reader.as_ref() else {
             return;
@@ -1367,6 +1393,13 @@ impl Client {
         let position =
             acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
         let compact = settings.bool_at("compactOverlay") || position.forces_compact();
+        // Said once, because a setting that does nothing and says nothing is the worst of
+        // the three states it could be in. `Position::shows_names` decides which positions
+        // draw a name beside each crewmate, and nothing draws one: `acl_ui::sprite` has no
+        // font and no glyph rasteriser, so the two "with names" positions are currently
+        // indistinguishable from the plain ones. That is a feature this port has not
+        // built rather than a wiring mistake, and it is recorded as such in
+        // docs/rust-port/11-audit-two-2026-08-29.md.
 
         // Two more reasons to draw nothing, and both were missing until 2026-08-29.
         //
