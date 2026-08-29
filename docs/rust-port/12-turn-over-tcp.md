@@ -151,6 +151,26 @@ certificate and a listener on the server — and it is a separate decision.
 
 **RFC 6062** — TCP allocations, where the *relayed* leg is TCP. Not wanted: media is UDP.
 
+## What it costs the relay, and why that is not new
+
+A relay allocation is a port, and a relay has a finite range of them. Every client now
+holds **two** allocations per peer connection where it held one -- the UDP relay and the
+TCP one -- because ICE allocates on every URL it is given and both are now reachable. In a
+fourteen-player lobby that is 182 allocations across the lobby rather than 91.
+
+That is not a new load on the server, it is the load the server was already carrying.
+`Voice.tsx:976` in the 1.x client calls the same `withTcpRelays` and hands both URLs to a
+Chromium `RTCPeerConnection`, which allocates on both. The 2.x client was the outlier: it
+took the same list and allocated on half of it, because the transport threw the other half
+away. This change makes it match the client it replaces rather than exceed it.
+
+Worth watching anyway, because relay rule one exists for a reason -- audit 1 found every
+player holding *three* reservations where one would do, and one player exhausting a
+server's supply was a real report. If halving the relay's capacity ever matters, the
+answer is not to stop offering TCP: it is to decide once per session whether this machine
+can reach a relay over UDP at all, and offer the TCP form only when it cannot. That is a
+probe and a cached verdict, and it belongs in `acl-net`, not in the fork.
+
 ## One limitation, stated rather than hidden
 
 `RTCTcpTransport::write` is awaited inside the driver's select loop. That is upstream's
