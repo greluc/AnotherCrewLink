@@ -1092,6 +1092,10 @@ impl Roster for Seat<'_> {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per thing the window remembers, for the reason `settings_screen`             gives about its own: packing them would hide which of them each is, and             every combination of these is reachable"
+)]
 struct Client {
     state_file: PathBuf,
     reader: Option<reader::Reader>,
@@ -1114,6 +1118,12 @@ struct Client {
     /// Kept here because the detector reports *changes* and the window paints levels: a
     /// frame that saw no transition still has to draw the indicator it had.
     local_talking: bool,
+    /// Whether the local player is wearing a colour that is not their own.
+    ///
+    /// A mod's disguise. While it is on, this client does not tell the lobby it is
+    /// speaking: a name lighting up gives away the player nobody is supposed to recognise.
+    /// See the two effects at `Voice.tsx:1641-1649`.
+    disguised: bool,
     /// The sockets whose gain is above zero this frame. See where it is filled.
     hearable: std::collections::BTreeSet<String>,
     /// What the lobby has already been told about this client. See [`Announced`].
@@ -1248,6 +1258,7 @@ impl Client {
             hats: hat_store::Loader::start(paths.hat_cache()),
             portraits: Portraits::default(),
             local_talking: false,
+            disguised: false,
             hearable: std::collections::BTreeSet::new(),
             announced: Announced::default(),
             dead: std::collections::BTreeMap::new(),
@@ -3140,9 +3151,35 @@ impl Client {
         // reports transitions rather than a level, so nothing else remembers it. Only on a
         // transition -- its hangover is what makes that a handful of messages a minute
         // rather than fifty a second.
+        // Whether this player is wearing a shifted colour, which in the mods that have one
+        // means somebody else's. `Voice.tsx:1641-1649` is two effects: the moment it stops
+        // being -1 the lobby is told `false`, and while it is not -1 a `true` is never
+        // sent. The disguise is the point -- a name lighting up when a player nobody can
+        // see is speaking gives them away, and `shiftedColor` was read, carried across the
+        // pipe, and consumed by nothing until 2026-08-29.
+        let shifted = self
+            .reader
+            .as_ref()
+            .and_then(|reader| reader.latest())
+            .and_then(|state| state.players.iter().find(|player| player.is_local))
+            .map_or(-1, |player| player.shifted_color);
+        let disguised = shifted != -1;
+        if disguised != self.disguised {
+            self.disguised = disguised;
+            // On the edge into a disguise, and only that way round: the lobby is told the
+            // player has stopped, because as far as it is concerned they have.
+            if disguised {
+                self.local_talking = false;
+                self.link.say_speaking(false);
+            }
+        }
         if let Some(speaking) = self.audio.take_voice_activity() {
             self.local_talking = speaking;
-            self.link.say_speaking(speaking);
+            // A `false` always goes out -- somebody who stops talking has stopped talking
+            // whatever they are wearing -- and a `true` only when they are themselves.
+            if !disguised || !speaking {
+                self.link.say_speaking(speaking);
+            }
         }
         self.dress_portraits(context)
     }

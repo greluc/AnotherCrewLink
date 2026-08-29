@@ -271,6 +271,29 @@ pub(crate) struct Controls {
 impl Controls {
     /// Shortcuts from their settings strings.
     pub(crate) fn new(mute: &str, deafen: &str, talk: &str, radio: &str) -> Self {
+        // Said out loud, once per rebind. `binding_for` answers `Unsupported` for exactly
+        // one name -- `NumpadEnter`, which this backend cannot tell from the main Enter, so
+        // honouring it would mean a hot microphone every time somebody sends a chat message
+        // -- and `shortcuts`'s own documentation says the caller tells the player. No caller
+        // did, so a shortcut bound to it was simply dead: pressed, nothing, no reason.
+        for (setting, name) in [
+            ("muteShortcut", mute),
+            ("deafenShortcut", deafen),
+            ("pushToTalkShortcut", talk),
+            ("impostorRadioShortcut", radio),
+        ] {
+            match binding_for(name) {
+                acl_core::shortcuts::Binding::Unsupported => acl_core::log_warn!(
+                    "keys",
+                    "{setting} is bound to {name}, which this client cannot tell apart from Enter;                      it will do nothing until it is rebound"
+                ),
+                acl_core::shortcuts::Binding::None if !name.is_empty() => acl_core::log_warn!(
+                    "keys",
+                    "{setting} is bound to {name}, which is not a key this client knows"
+                ),
+                _ => {}
+            }
+        }
         Self {
             mute: Shortcut::new(binding_for(mute)),
             deafen: Shortcut::new(binding_for(deafen)),
