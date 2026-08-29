@@ -674,12 +674,16 @@ const PORTRAIT_SPRITE: i32 = 128;
 /// One struct rather than two fields because they are the same kind of thing, and because
 /// three loose booleans on a client this size is where nobody can tell which are state and
 /// which are memory of what was sent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Announced {
     /// The server has been told this client is the game host.
     host: bool,
     /// The lobby has been told this player is on the impostor radio.
     radio: bool,
+    /// The rules this client last published as the game's host.
+    ///
+    /// `None` when it is not the host, so becoming one publishes them again.
+    rules: Option<serde_json::Value>,
     /// The identity the lobby was last told, or `None` before the join.
     ///
     /// `join` carries an identity snapshotted at the moment the lobby code appeared, and
@@ -1781,6 +1785,21 @@ impl Client {
             hear_through_cameras: settings.bool_at("localLobbySettings.hearThroughCameras"),
             walls_block_audio: settings.bool_at("localLobbySettings.wallsBlockAudio"),
         };
+        // The host's rules, over this client's own.
+        //
+        // The rules that decide what everybody hears -- walls, haunting, vision hearing,
+        // the distance -- belong to the game's host in 1.x, which carries them over the
+        // WebRTC data channel and applies them at `Voice.tsx:1297`. This client had no
+        // channel for them, so every player applied their own: the host turning on
+        // walls-block-audio changed the game for the host and for nobody else, and two
+        // players in the same lobby could disagree about who could hear whom.
+        //
+        // Falling back to the local copy is what a lobby with a 1.x host still does, and
+        // what every lobby did until now.
+        let lobby = self
+            .link
+            .host_rules()
+            .map_or(lobby, |rules| Self::host_rules(lobby, rules));
         // Two fields, not five. `masterVolume` and `crewVolumeAsGhost` are applied
         // elsewhere in the Electron graph -- one on the output node and one inside the
         // ghost rule -- and `voice_params` takes only what its own rules read. Passing them
@@ -1808,6 +1827,42 @@ impl Client {
             .map(|(socket, _)| socket.clone())
             .collect();
         self.audio.place(placements);
+    }
+
+    /// The host's rules laid over this client's own, field by field.
+    ///
+    /// Each one is taken only when the host actually sent it, so a host running an older 2.x
+    /// build that does not know a rule leaves that rule where the listener had it -- which is
+    /// the same degradation a 1.x host produces for all of them.
+    ///
+    /// The keys are `localLobbySettings`'s own, because the payload is that object.
+    #[cfg(windows)]
+    fn host_rules(
+        mut lobby: acl_audio::voice::LobbySettings,
+        rules: &serde_json::Value,
+    ) -> acl_audio::voice::LobbySettings {
+        let flag = |key: &str| rules.get(key).and_then(serde_json::Value::as_bool);
+        if let Some(distance) = rules.get("maxDistance").and_then(serde_json::Value::as_f64) {
+            lobby.max_distance = distance;
+        }
+        // Written out rather than looped over. A loop would need the fields by pointer or a
+        // setter per field, and the list is the interesting part: adding a rule means adding a
+        // line here, which is exactly where somebody adding one will look.
+        lobby.haunting = flag("haunting").unwrap_or(lobby.haunting);
+        lobby.coms_sabotage = flag("commsSabotage").unwrap_or(lobby.coms_sabotage);
+        lobby.hear_impostors_in_vents =
+            flag("hearImpostorsInVents").unwrap_or(lobby.hear_impostors_in_vents);
+        lobby.impostors_hear_impostors_in_vent =
+            flag("impostersHearImpostersInvent").unwrap_or(lobby.impostors_hear_impostors_in_vent);
+        lobby.impostor_radio_enabled =
+            flag("impostorRadioEnabled").unwrap_or(lobby.impostor_radio_enabled);
+        lobby.dead_only = flag("deadOnly").unwrap_or(lobby.dead_only);
+        lobby.meeting_ghost_only = flag("meetingGhostOnly").unwrap_or(lobby.meeting_ghost_only);
+        lobby.vision_hearing = flag("visionHearing").unwrap_or(lobby.vision_hearing);
+        lobby.hear_through_cameras =
+            flag("hearThroughCameras").unwrap_or(lobby.hear_through_cameras);
+        lobby.walls_block_audio = flag("wallsBlockAudio").unwrap_or(lobby.walls_block_audio);
+        lobby
     }
 
     /// What every peer in the lobby should sound like.
@@ -2143,6 +2198,23 @@ impl Client {
             // us. Among Us promotes somebody when the host leaves, and the server goes on
             // routing host-dependent decisions to a socket that is gone until it is told.
             let host_now = state.as_ref().is_some_and(|state| state.is_host);
+            // The host publishes the rules everybody plays by. On a change rather than
+            // every frame: it is a broadcast, and the rules move when somebody opens the
+            // settings screen.
+            if host_now {
+                let rules = self
+                    .settings
+                    .config()
+                    .get("localLobbySettings")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                if self.announced.rules.as_ref() != Some(&rules) {
+                    self.link.say_rules(rules.clone());
+                    self.announced.rules = Some(rules);
+                }
+            } else {
+                self.announced.rules = None;
+            }
             if host_now && !self.announced.host {
                 let client_id = state
                     .as_ref()

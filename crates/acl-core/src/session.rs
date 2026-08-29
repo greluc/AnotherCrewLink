@@ -144,6 +144,22 @@ pub enum Event {
         /// Whether they are on it.
         on_radio: bool,
     },
+    /// The host's lobby rules, as the server relays them.
+    ///
+    /// The rules that decide what everybody hears -- walls, haunting, vision hearing, the
+    /// distance -- belong to the game's host in 1.x, which carries them over the WebRTC
+    /// data channel as `maxDistance` and applies them at `Voice.tsx:1297`. This client has
+    /// no data channel, so they travel as a socket event, the way `impostorRadio` does.
+    ///
+    /// A mixed lobby degrades the way the radio does: 2.x clients agree with each other
+    /// and a 1.x client keeps its own, which is what happens today for everybody.
+    LobbyRules {
+        /// Whose. The receiver applies them only if this is the socket it believes is the
+        /// game's host -- a client that lied would be believed by nobody.
+        socket_id: String,
+        /// The rules, as the settings file stores them.
+        rules: Value,
+    },
     /// A peer's voice activity, as the server relays it.
     VoiceActivity {
         /// Whose.
@@ -350,6 +366,7 @@ impl Lobby {
             "signal" => self.on_signal(args, events),
             "VAD" => Self::on_voice_activity(args, events),
             "impostorRadio" => Self::on_impostor_radio(args, events),
+            "lobbyRules" => Self::on_lobby_rules(args, events),
             "new_lobbies" => Self::on_lobbies(args, events),
             "update_lobby" => Self::on_lobby_updated(args, events),
             "remove_lobby" => Self::on_lobby_removed(args, events),
@@ -561,6 +578,28 @@ impl Lobby {
             from: from.to_owned(),
             data: payload.get("data").cloned().unwrap_or(Value::Null),
         });
+    }
+
+    /// Reads the server's `lobbyRules`.
+    fn on_lobby_rules(args: &[Value], events: &mut Vec<Event>) {
+        let Some(payload) = args.first() else {
+            events.push(Event::Ignored("lobbyRules with no payload".to_owned()));
+            return;
+        };
+        match (
+            payload.get("socketId").and_then(Value::as_str),
+            payload.get("rules"),
+        ) {
+            (Some(socket_id), Some(rules)) if rules.is_object() => {
+                events.push(Event::LobbyRules {
+                    socket_id: socket_id.to_owned(),
+                    rules: rules.clone(),
+                });
+            }
+            _ => events.push(Event::Ignored(
+                "lobbyRules with an unexpected shape".to_owned(),
+            )),
+        }
     }
 
     /// Reads the server's `impostorRadio`.
@@ -799,6 +838,22 @@ impl Session {
     /// [`TransportError`] if the frame cannot be written.
     pub async fn impostor_radio(&mut self, on_radio: bool) -> Result<(), TransportError> {
         self.emit("impostorRadio", vec![json!(on_radio)]).await
+    }
+
+    /// Tells the lobby what the host's rules are.
+    ///
+    /// Only the host sends it, and only on a change: it is a broadcast, and the rules move
+    /// when somebody opens the settings screen rather than every frame.
+    ///
+    /// Whether the sender is *entitled* to is not decided here. Every receiver checks the
+    /// socket against the host it believes in, which is the same arrangement
+    /// `impostor_radio` has and for the same reason.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the frame cannot be written.
+    pub async fn lobby_rules(&mut self, rules: Value) -> Result<(), TransportError> {
+        self.emit("lobbyRules", vec![rules]).await
     }
 
     /// Tells the lobby whether this player is speaking.

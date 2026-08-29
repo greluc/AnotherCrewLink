@@ -111,6 +111,11 @@ the warning below it.
 `leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`, `join_lobby`,
 `lobbybrowser`, `disconnect`.
 
+Plus two this client adds and 1.x carries over its WebRTC data channel instead:
+`impostorRadio` and `lobbyRules`. Added alongside rather than repurposed, so a
+mixed lobby degrades — 2.x clients agree with each other, and a 1.x client keeps
+its own rules, which is what every client did before either existed.
+
 **Server to client**, which is just as much of the contract, and there are eleven:
 `join`, `left`, `signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`,
 `VAD`, `new_lobbies`, `update_lobby`, `remove_lobby`.

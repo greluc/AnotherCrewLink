@@ -93,6 +93,8 @@ pub(crate) enum Command {
     SetHost(i64),
     /// Claim or release the impostor radio.
     ImpostorRadio(bool),
+    /// Tell the lobby what the host's rules are.
+    LobbyRules(serde_json::Value),
     /// Leave it, closing every connection.
     Leave,
 }
@@ -147,6 +149,19 @@ pub(crate) enum State {
 
 /// The session, as the window holds it.
 pub(crate) struct Link {
+    /// The rules the socket this client believes is the host last sent.
+    ///
+    /// Kept as raw JSON: it is the settings file's own shape, and the audio decision reads
+    /// it with the same accessors it reads the local copy with. Storing a parsed struct
+    /// would mean a second place that has to learn about a new rule.
+    host_rules: Option<serde_json::Value>,
+    /// Which socket sent them, so a host change discards them.
+    rules_from: Option<String>,
+    /// The client id the server says is the game's host.
+    ///
+    /// `Event::HostChanged` carries a client id and the rules arrive against a socket, so
+    /// one has to be turned into the other -- `sockets` is the map that does it.
+    host: Option<i64>,
     /// Decides how much redundancy the encoder should carry, from what peers report.
     ///
     /// Here rather than on the worker because it is a decision and the worker's job is
@@ -288,6 +303,9 @@ impl Link {
             // stays idle.
             .ok();
         let link = Self {
+            host_rules: None,
+            rules_from: None,
+            host: None,
             fec: acl_audio::fec::FecController::new(),
             loss: None,
             commands,
@@ -460,6 +478,32 @@ impl Link {
             Event::LobbyCode { code, server } => {
                 self.answer = Some(format!("{code} — {server}"));
             }
+            // Kept only from the socket this client believes is the game's host, which is
+            // the same check `impostorRadio` gets: a client that lied would be believed by
+            // nobody. `Voice.tsx:1298` makes the identical test against `hostRef`.
+            Event::HostChanged(client_id) => {
+                if self.host != Some(client_id) {
+                    // A new host's rules are not the old one's. Dropped rather than kept
+                    // until the new host says something: the previous host may have been
+                    // playing by rules this one has never seen.
+                    self.host_rules = None;
+                    self.rules_from = None;
+                }
+                self.host = Some(client_id);
+            }
+            Event::LobbyRules { socket_id, rules } => {
+                let from_the_host = self
+                    .host
+                    .and_then(|client_id| self.sockets.get(&client_id))
+                    .is_some_and(|socket| *socket == socket_id);
+                if from_the_host {
+                    if self.rules_from.as_deref() != Some(socket_id.as_str()) {
+                        acl_core::log_info!("lobby", "taking the host's rules from {socket_id}");
+                    }
+                    self.rules_from = Some(socket_id);
+                    self.host_rules = Some(rules);
+                }
+            }
             Event::LobbyUnavailable(why) => self.answer = Some(why),
             // Said out loud. `Event::Ignored` is how `acl-core` reports a payload of the
             // wrong shape -- a rejected `clientPeerConfig`, a `join` with no socket id, a
@@ -521,6 +565,22 @@ impl Link {
         self.sockets
             .get(&client_id)
             .is_some_and(|socket| self.vocal.contains(socket))
+    }
+
+    /// Tells the lobby what the host's rules are.
+    ///
+    /// Only the host calls it, and only on a change.
+    pub(crate) fn say_rules(&self, rules: serde_json::Value) {
+        self.send(Command::LobbyRules(rules));
+    }
+
+    /// The rules the game's host last sent, if anybody has.
+    ///
+    /// `None` until a 2.x host says something, which is when this client falls back to its
+    /// own settings -- the same thing every client did before, and what a lobby with a 1.x
+    /// host still does.
+    pub(crate) fn host_rules(&self) -> Option<&serde_json::Value> {
+        self.host_rules.as_ref()
     }
 
     /// Corrects this client's in-game identity.
@@ -1505,6 +1565,11 @@ fn obey(
         Command::SetHost(client_id) => {
             if let Some(live) = session.as_mut() {
                 let _ = runtime.block_on(live.set_host(client_id));
+            }
+        }
+        Command::LobbyRules(rules) => {
+            if let Some(live) = session.as_mut() {
+                let _ = runtime.block_on(live.lobby_rules(rules));
             }
         }
         Command::ImpostorRadio(on_radio) => {
