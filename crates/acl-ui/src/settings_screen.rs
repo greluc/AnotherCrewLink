@@ -146,7 +146,70 @@ pub struct Instead {
     pub label: &'static str,
 }
 
-/// One control on the screen.
+/// When a warned control actually raises its dialog.
+///
+/// `Settings.tsx` passes a fourth argument to `openWarningDialog` -- `showDialog` -- and
+/// every one of its eight call sites passes something different. This models that
+/// argument, and it was missing until 2026-08-29: the port warned on every change of a
+/// warned control, in both directions.
+///
+/// That is not merely noisy. Turning the public lobby *off* raised a dialog headed "this
+/// will make your lobby public"; switching the voice detector back *on* raised the one
+/// about switching it off. And the sensitivity slider raised its dialog on every drag
+/// tick, so getting from one end to the other meant twenty dialogs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum WarnWhen {
+    /// On any change. What an action button gets, since it has no direction.
+    #[default]
+    Always,
+    /// Only when the new value is `true`.
+    ///
+    /// `publicLobby_on`, `deadOnly`, `meetingGhostOnly`, `natFix` and `oldSampleDebug`:
+    /// each of them is harmless to switch off and worth a word before switching on.
+    TurnedOn,
+    /// Only when the new value is `false`.
+    ///
+    /// `vadEnabled` and hardware acceleration, whose warnings are about losing them.
+    TurnedOff,
+    /// Only when the slider lands exactly here, coming from below `from`.
+    ///
+    /// One control has this: `Settings.tsx:844` is
+    /// `newValue == 0.7 && settings.micSensitivity < 0.3`. The stored value is
+    /// `1 - displayed`, so in stored terms it means "dragged all the way to the
+    /// least-sensitive end, from somewhere sensitive". Anywhere in between is not worth a
+    /// dialog, and dragging past it in the other direction certainly is not.
+    Reaches {
+        /// The stored value that raises it.
+        value: f64,
+        /// Only when the value it is replacing is above this.
+        above: f64,
+    },
+}
+
+impl WarnWhen {
+    /// Whether this change is one to ask about.
+    ///
+    /// `held` is what is stored now; `wanted` is what the control is asking for.
+    #[must_use]
+    pub fn applies(self, held: &serde_json::Value, wanted: &serde_json::Value) -> bool {
+        match self {
+            Self::Always => true,
+            Self::TurnedOn => wanted.as_bool() == Some(true),
+            Self::TurnedOff => wanted.as_bool() == Some(false),
+            Self::Reaches { value, above } => {
+                let Some(wanted) = wanted.as_f64() else {
+                    return false;
+                };
+                // A float from a slider is compared with a tolerance, because the step is
+                // 0.05 and neither 0.05 nor 0.7 is exact in binary.
+                let landed = (wanted - value).abs() < 0.001;
+                landed && held.as_f64().is_some_and(|held| held > above)
+            }
+        }
+    }
+}
+
+/// One control on the settings screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Control {
     /// The settings key it reads and writes, or the action it performs.
@@ -178,6 +241,8 @@ pub struct Control {
     /// Every one of these is a setting that has broken somebody's audio. The Electron
     /// client puts them behind a dialog, and so does this.
     pub warning: Option<&'static str>,
+    /// Which direction of change the warning applies to. See [`WarnWhen`].
+    pub warn_when: WarnWhen,
 }
 
 impl Control {
@@ -190,12 +255,23 @@ impl Control {
             gate: None,
             instead: None,
             warning: None,
+            warn_when: WarnWhen::Always,
         }
     }
 
     /// A control that asks first.
     const fn warning(mut self, key: &'static str) -> Self {
         self.warning = Some(key);
+        self
+    }
+
+    /// The same, for a warning that only applies in one direction.
+    ///
+    /// Every warned control in `Settings.tsx` passes a `showDialog` condition, and the
+    /// port ignored all eight of them. See [`WarnWhen`].
+    const fn warning_when(mut self, key: &'static str, when: WarnWhen) -> Self {
+        self.warning = Some(key);
+        self.warn_when = when;
         self
     }
 
@@ -225,6 +301,7 @@ impl Control {
             gate: None,
             instead: None,
             warning: None,
+            warn_when: WarnWhen::Always,
         }
     }
 
@@ -237,6 +314,7 @@ impl Control {
             gate: None,
             instead: None,
             warning: None,
+            warn_when: WarnWhen::Always,
         }
     }
 }
@@ -316,10 +394,14 @@ const LOBBY: &[Control] = &[
         "impostorRadioEnabled",
         "settings.lobbysettings.impostor_radio",
     ),
-    Control::toggle("deadOnly", "settings.lobbysettings.ghost_only")
-        .warning("settings.lobbysettings.ghost_only_warning"),
-    Control::toggle("meetingGhostOnly", "settings.lobbysettings.meetings_only")
-        .warning("settings.lobbysettings.meetings_only_warning"),
+    Control::toggle("deadOnly", "settings.lobbysettings.ghost_only").warning_when(
+        "settings.lobbysettings.ghost_only_warning",
+        WarnWhen::TurnedOn,
+    ),
+    Control::toggle("meetingGhostOnly", "settings.lobbysettings.meetings_only").warning_when(
+        "settings.lobbysettings.meetings_only_warning",
+        WarnWhen::TurnedOn,
+    ),
 ];
 
 /// Listing the lobby publicly, and what it is listed as.
@@ -328,7 +410,10 @@ const PUBLIC_LOBBY: &[Control] = &[
         "publicLobby_on",
         "settings.lobbysettings.public_lobby.enabled",
     )
-    .warning("settings.lobbysettings.public_lobby.enable_warning"),
+    .warning_when(
+        "settings.lobbysettings.public_lobby.enable_warning",
+        WarnWhen::TurnedOn,
+    ),
     Control::of(
         "publicLobby_title",
         Some("settings.lobbysettings.public_lobby.title"),
@@ -414,7 +499,16 @@ const AUDIO: &[Control] = &[
             0.05,
         )
         .gated_by("micSensitivityEnabled")
-        .warning("settings.audio.microphone_sens_warning")
+        .warning_when(
+            "settings.audio.microphone_sens_warning",
+            // `Settings.tsx:844`: the displayed 0.7 is a stored 0.3, and it only asks when
+            // the value it replaces was above that -- dragged from somewhere sensitive
+            // all the way to the least sensitive end.
+            WarnWhen::Reaches {
+                value: 0.3,
+                above: 0.3,
+            },
+        )
     },
     Control::slider(
         "masterVolume",
@@ -539,7 +633,7 @@ const LAUNCH: &[Control] = &[Control::of(
 /// The network, and the server.
 const ADVANCED: &[Control] = &[
     Control::toggle("natFix", "settings.advanced.nat_fix")
-        .warning("settings.advanced.nat_fix_warning"),
+        .warning_when("settings.advanced.nat_fix_warning", WarnWhen::TurnedOn),
     Control::of(
         "serverURL",
         Some("settings.advanced.voice_server"),
@@ -561,17 +655,20 @@ const ADVANCED: &[Control] = &[
 /// The switches that are still being decided about.
 const BETA: &[Control] = &[
     Control::toggle("vadEnabled", "settings.beta.vad_enabled")
-        .warning("settings.beta.vad_enabled_warning"),
+        .warning_when("settings.beta.vad_enabled_warning", WarnWhen::TurnedOff),
     Control::toggle(
         "hardware_acceleration",
         "settings.beta.hardware_acceleration",
     )
-    .warning("settings.beta.hardware_acceleration_warning"),
+    .warning_when(
+        "settings.beta.hardware_acceleration_warning",
+        WarnWhen::TurnedOff,
+    ),
     Control::toggle("echoCancellation", "settings.beta.echocancellation"),
     Control::toggle("noiseSuppression", "settings.beta.noiseSuppression"),
     Control::toggle("enableSpatialAudio", "settings.beta.spatial_audio"),
     Control::toggle("oldSampleDebug", "settings.beta.oldsampledebug")
-        .warning("settings.beta.oldsampledebug_warning"),
+        .warning_when("settings.beta.oldsampledebug_warning", WarnWhen::TurnedOn),
 ];
 
 /// What to hide from a camera.
@@ -1284,5 +1381,88 @@ mod tests {
                 control.key
             );
         }
+    }
+
+    /// Every warned control asks in the direction `Settings.tsx` asks in.
+    ///
+    /// The port carried the warning and not the condition, so it warned on every change of
+    /// a warned control, in both directions. Turning the public lobby *off* raised the
+    /// dialog headed "this will make your lobby public"; switching the voice detector back
+    /// *on* raised the one about switching it off. `Settings.tsx` passes a fourth argument
+    /// to `openWarningDialog` at all eight sites and no two of them are the same.
+    #[test]
+    fn a_warning_asks_in_one_direction_only() {
+        use serde_json::json;
+
+        let of = |key: &str| -> super::Control {
+            *SECTIONS
+                .iter()
+                .flat_map(|section| section.controls)
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("no control called {key}"))
+        };
+
+        // `Settings.tsx:480`, `:676`, `:698`, `:1034` and `:1112` -- each of these is
+        // harmless to switch off and worth a word before switching on.
+        for key in [
+            "publicLobby_on",
+            "deadOnly",
+            "meetingGhostOnly",
+            "natFix",
+            "oldSampleDebug",
+        ] {
+            let control = of(key);
+            assert!(control.warning.is_some(), "{key} should warn at all");
+            assert_eq!(control.warn_when, super::WarnWhen::TurnedOn, "{key}");
+            assert!(
+                control.warn_when.applies(&json!(false), &json!(true)),
+                "{key}"
+            );
+            assert!(
+                !control.warn_when.applies(&json!(true), &json!(false)),
+                "{key} must not warn on the way back"
+            );
+        }
+
+        // `:1058` and `:1075` -- these two warn about *losing* something.
+        for key in ["vadEnabled", "hardware_acceleration"] {
+            let control = of(key);
+            assert_eq!(control.warn_when, super::WarnWhen::TurnedOff, "{key}");
+            assert!(
+                control.warn_when.applies(&json!(true), &json!(false)),
+                "{key}"
+            );
+            assert!(
+                !control.warn_when.applies(&json!(false), &json!(true)),
+                "{key}"
+            );
+        }
+    }
+
+    /// The sensitivity slider asks once, at one position, coming from one direction.
+    ///
+    /// `Settings.tsx:844` is `newValue == 0.7 && settings.micSensitivity < 0.3`. Without
+    /// the condition the dialog appeared on every tick of a drag, so crossing the slider
+    /// meant twenty of them.
+    #[test]
+    fn the_sensitivity_slider_asks_once_and_only_at_the_end() {
+        use serde_json::json;
+
+        let control = *SECTIONS
+            .iter()
+            .flat_map(|section| section.controls)
+            .find(|control| control.key == "micSensitivity")
+            .expect("the sensitivity slider");
+
+        // Stored values: the slider is inverted, so a stored 0.3 is a displayed 0.7 -- the
+        // least sensitive end.
+        assert!(control.warn_when.applies(&json!(0.85), &json!(0.3)));
+        // Every step on the way there is not it.
+        assert!(!control.warn_when.applies(&json!(0.85), &json!(0.5)));
+        assert!(!control.warn_when.applies(&json!(0.85), &json!(0.35)));
+        // Nor is arriving from somewhere already insensitive.
+        assert!(!control.warn_when.applies(&json!(0.25), &json!(0.3)));
+        // Nor is leaving.
+        assert!(!control.warn_when.applies(&json!(0.3), &json!(0.85)));
     }
 }

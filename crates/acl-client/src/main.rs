@@ -2335,11 +2335,23 @@ impl Client {
                     }
                 }
                 settings_page::Effect::ResetOffsets => {
-                    // The offsets belong to the helper, which owns the file and the
-                    // fetch. Nothing here can throw them away, and pretending otherwise
-                    // would leave the client showing a reset that did not happen.
+                    // Stop *and start*, in that order and on one channel, so the thread
+                    // does them in that order -- which is what the reload button beside it
+                    // already does. It sent only the stop until 2026-08-29, so pressing
+                    // "reset game offsets" put the reader down and nothing ever picked it
+                    // up: no game state, no proximity, no overlay, and no way back except
+                    // the reload button or a restart. A button labelled "reset" that ends
+                    // the feature is worse than one that does nothing.
+                    //
+                    // The offsets themselves belong to the helper, which owns the file and
+                    // the fetch, so what this can do is make it fetch again.
                     if let Some(reader) = self.reader.as_ref() {
+                        acl_core::log_info!(
+                            "chrome",
+                            "resetting the offsets: restarting the reader"
+                        );
                         reader.ask_to_stop();
+                        reader.ask_to_start();
                     }
                 }
             }

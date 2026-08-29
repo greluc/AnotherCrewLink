@@ -258,15 +258,94 @@ fn choice(
                     )
                     .clicked()
                 {
+                    let value = as_json(choice.value);
                     changes.push(Change::Set {
                         key: control.key,
                         scope,
-                        value: as_json(choice.value),
-                        warning: control.warning,
+                        warning: control.warning.filter(|_| {
+                            control
+                                .warn_when
+                                .applies(&held_value(values, scope, control), &value)
+                        }),
+                        value,
                     });
                 }
             }
         });
+}
+
+/// One free-text setting.
+///
+/// A function of its own because the buffer has to outlive the frame, and `one` was
+/// already at the line limit.
+fn text_field(
+    ui: &mut Ui,
+    control: &'static Control,
+    scope: Scope,
+    label: &str,
+    values: &dyn Values,
+    changes: &mut Vec<Change>,
+) {
+    ui.label(label);
+    // The buffer lives in `egui`'s own per-widget memory rather than being rebuilt
+    // from the file every frame, and that is the whole of a fix from 2026-08-29.
+    //
+    // `let mut text = values.text_at(...)` read the *stored* value on every pass.
+    // The field is drawn five times a second at least, so a keystroke was written
+    // into a `String` that was thrown away before the next frame recreated it from
+    // the file -- and the file only changes on `lost_focus`, which never came,
+    // because there was never anything in the field to lose. Neither of the two
+    // text settings could be typed into at all: the voice server address and the
+    // public lobby's title.
+    //
+    // Held only while the field has focus. Outside that it follows the file, so a
+    // value changed elsewhere -- restore defaults, a hand-edited settings file --
+    // shows up rather than being masked by a stale draft.
+    let id = ui.make_persistent_id(("settings-text", path(scope, control.key)));
+    let stored = values.text_at(scope, control.key);
+    let mut text = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| stored.clone());
+    let field = ui.text_edit_singleline(&mut text);
+    // On losing focus rather than on every keystroke. `serverURL` is validated and
+    // reconnected to when it changes, and half a URL is a server that does not
+    // exist.
+    if field.lost_focus() {
+        let value = json!(text);
+        changes.push(Change::Set {
+            key: control.key,
+            scope,
+            // A text field has no direction, so its warning -- the voice server's --
+            // applies to any change. See `WarnWhen`.
+            warning: control
+                .warning
+                .filter(|_| control.warn_when.applies(&json!(stored), &value)),
+            value,
+        });
+        ui.data_mut(|data| data.remove::<String>(id));
+    } else if field.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text));
+    } else {
+        ui.data_mut(|data| data.remove::<String>(id));
+    }
+}
+
+/// What is stored for a control right now, as JSON.
+///
+/// `WarnWhen` compares the value being asked for against the one it replaces, and the two
+/// have to be the same shape. `Values` answers by type, so this asks for the one the
+/// control's kind implies.
+fn held_value(values: &dyn Values, scope: Scope, control: &Control) -> Value {
+    match control.kind {
+        Kind::Toggle { inverted } => json!(values.bool_at(scope, control.key) != inverted),
+        Kind::Slider { .. } => json!(values.number_at(scope, control.key)),
+        Kind::Text | Kind::Shortcut | Kind::Device { .. } | Kind::Language => {
+            json!(values.text_at(scope, control.key))
+        }
+        // An action, a meter, a reset or a probe: nothing is stored, so there is nothing
+        // for a condition to compare against and `WarnWhen::Always` is what they carry.
+        _ => Value::Null,
+    }
 }
 
 /// What the microphone is hearing, as a bar.
@@ -324,11 +403,20 @@ fn one(
                 |instead| (context.t)(instead.label),
             )
     };
+    // The warning only travels with a change it applies to. `Settings.tsx` passes a
+    // `showDialog` condition at every one of its eight warned call sites and the port
+    // ignored all of them, so turning the public lobby *off* raised the dialog about
+    // turning it on, switching the voice detector back *on* raised the one about switching
+    // it off, and the sensitivity slider raised its dialog on every tick of a drag.
     let set = |value: Value| Change::Set {
         key: control.key,
         scope,
+        warning: control.warning.filter(|_| {
+            control
+                .warn_when
+                .applies(&held_value(values, scope, control), &value)
+        }),
         value,
-        warning: control.warning,
     };
     match control.kind {
         Kind::Toggle { inverted } => {
@@ -379,16 +467,7 @@ fn one(
             }
         }
         Kind::Meter => meter(ui, context.input_level),
-        Kind::Text => {
-            let mut text = values.text_at(scope, control.key);
-            ui.label(label);
-            // On losing focus rather than on every keystroke. `serverURL` is validated and
-            // reconnected to when it changes, and half a URL is a server that does not
-            // exist.
-            if ui.text_edit_singleline(&mut text).lost_focus() {
-                changes.push(set(json!(text)));
-            }
-        }
+        Kind::Text => text_field(ui, control, scope, &label, values, changes),
         Kind::Action => {
             if ui.button(label).clicked() {
                 changes.push(Change::Run {
