@@ -571,6 +571,15 @@ fn run(
     // says which relays to use -- a mesh built before it would be one built against
     // defaults the server was about to replace.
     let mut mesh: Option<acl_core::peers::PeerSet> = None;
+    // One entry per peer this client has ever offered to or been offered by, holding what
+    // is known about repairing that connection. Beside the mesh rather than inside it,
+    // because everything it decides is `acl_net`'s and `acl_core::peers` is the part that
+    // owns transports.
+    let mut repairs: std::collections::BTreeMap<String, Repair> = std::collections::BTreeMap::new();
+    // This client's own socket id, which decides which end of a pair offers the
+    // replacement. Both ends must agree, and comparing socket ids is how they do it
+    // without a round trip.
+    let mut own_id = String::new();
     // Whether the handshake has completed. See the module documentation: a session that is
     // connected but not live drops everything emitted to it.
     let mut live = false;
@@ -653,10 +662,18 @@ fn run(
                 Ok(Some(events)) => {
                     for event in events {
                         if let Some(live) = session.as_mut() {
-                            runtime.block_on(follow(&event, &mut mesh, live, answers, force_relay));
+                            runtime.block_on(follow(
+                                &event,
+                                &mut mesh,
+                                &mut repairs,
+                                live,
+                                answers,
+                                force_relay,
+                            ));
                         }
                         if let Event::Connected(id) = &event {
                             live = true;
+                            own_id.clone_from(id);
                             if answers
                                 .send(Report::State(State::Connected(id.clone())))
                                 .is_err()
@@ -684,7 +701,13 @@ fn run(
             // candidates are gathered after the offer and there may be no event left to
             // hang the sending off.
             if let Some(current) = session.as_mut() {
-                runtime.block_on(drain(&mut mesh, current, answers));
+                runtime.block_on(drain(&mut mesh, &mut repairs, current, answers));
+                // Every round, because a repair is decided by elapsed time rather than by
+                // an event: a link that has been quiet for four seconds has to be noticed
+                // by something that looks, and a rebuild scheduled for two seconds hence
+                // has to be fired by something that is awake. The loop already wakes at
+                // least every fifty milliseconds.
+                runtime.block_on(repair(&mut mesh, &mut repairs, current, &own_id, answers));
             }
         }
     }
@@ -747,6 +770,7 @@ fn broadcast(
 async fn follow(
     event: &Event,
     mesh: &mut Option<acl_core::peers::PeerSet>,
+    repairs: &mut std::collections::BTreeMap<String, Repair>,
     session: &mut Session,
     answers: &Sender<Report>,
     force_relay: &std::sync::atomic::AtomicBool,
@@ -784,6 +808,11 @@ async fn follow(
             let Some(mesh) = mesh.as_mut() else {
                 return;
             };
+            // Tracked whichever end offers, because either end can be the one that notices
+            // the link go. An entry that already exists is left alone: a peer who rejoins
+            // a lobby they never left keeps the attempt count that says how much trouble
+            // this pair has been.
+            repairs.entry(socket_id.clone()).or_insert_with(Repair::new);
             // Only to a newcomer. The other side offers when we are the newcomer, and both
             // offering is the glare.
             if *arrival == Arrival::Newcomer {
@@ -810,6 +839,11 @@ async fn follow(
         }
         Event::PeerLeft { socket_id } => {
             acl_core::log_info!("peer", "{socket_id} left");
+            // Before the close, so a rebuild scheduled a moment ago cannot fire against
+            // somebody who has gone. The server announces departures, so a peer still in
+            // the map is one still in the lobby -- which is the test `Voice.tsx` makes at
+            // the top of `scheduleReconnect` and for the same reason.
+            repairs.remove(socket_id);
             if let Some(mesh) = mesh.as_mut() {
                 mesh.close(socket_id).await;
             }
@@ -822,18 +856,290 @@ async fn follow(
             let Some(mesh) = mesh.as_mut() else {
                 return;
             };
-            if let Ok(outbound) = mesh.on_signal(from, data).await {
-                for out in outbound {
-                    let _ = session.signal(&out.to, out.payload.to_value()).await;
+            // A signal can be the first thing heard about a peer: the `join` that would
+            // have created the entry is the *other* end's, and an offer can overtake the
+            // membership event that announces its sender.
+            repairs.entry(from.clone()).or_insert_with(Repair::new);
+            match mesh.on_signal(from, data).await {
+                Ok(outbound) => {
+                    for out in outbound {
+                        let _ = session.signal(&out.to, out.payload.to_value()).await;
+                    }
                 }
+                // Said out loud, and that is a fix of its own. Offer glare -- both ends
+                // offering at once, which happens when two players join within the same
+                // server tick -- ends with each applying an answer to a connection already
+                // in `stable`, which the crate refuses. Discarded silently, that was a
+                // pair who could never hear each other and nothing in the log to say why.
+                // The rebuild above is what gets them out of it; this is what makes it
+                // legible when it happens.
+                Err(why) => acl_core::log_warn!("peer", "a signal from {from} was refused: {why}"),
             }
         }
         Event::Closed(_) | Event::Refused(_) => {
+            repairs.clear();
             if let Some(mesh) = mesh.as_mut() {
                 mesh.close_all().await;
             }
         }
         _ => {}
+    }
+}
+
+/// What is known about one peer's connection, and about repairing it.
+///
+/// **The whole of this existed and was never called.** `acl_net::reconnect` and
+/// `acl_net::peer::RepairPolicy` were ported, tested, and had zero production callers
+/// until 2026-08-29: `drain` logged the state, told the window the ring had gone out, and
+/// did nothing else. A wifi roam, a NAT rebind or a relay reservation expiring silenced
+/// that pair for the rest of the session while everyone else still heard both of them.
+///
+/// `Voice.tsx:1324` describes exactly that, at the place where 1.x fixed it -- "a player
+/// who drops out of one conversation stays out of it until the app is restarted, while
+/// everyone else still hears them". The port reintroduced it.
+struct Repair {
+    /// Whether ICE has started, so a connection that never begins can be given up on
+    /// rather than waited for indefinitely.
+    attempt: acl_net::peer::Attempt,
+    /// What the transport last said about a link that was up.
+    link: acl_net::peer::LinkState,
+    /// When the current phase began. `Attempt::poll` and `RepairPolicy::poll` both take an
+    /// elapsed time rather than reading a clock, which is what makes them testable.
+    since: std::time::Instant,
+    /// How many repairs have been attempted, counted from one.
+    tries: u32,
+    /// The one restart this connection is allowed.
+    policy: acl_net::peer::RepairPolicy,
+    /// When the next rebuild is due, once one has been scheduled.
+    due: Option<std::time::Instant>,
+    /// What the last attempt gathered before it was torn down.
+    ///
+    /// Snapshotted at the moment of failure, because tearing the connection down is what
+    /// forgets it and it is the evidence the escalation decision is made from.
+    /// `Voice.tsx` does the same in its `error` handler, and says why there.
+    relay_candidates: Option<u32>,
+}
+
+impl Repair {
+    /// A peer that has just been offered to.
+    fn new() -> Self {
+        Self {
+            attempt: acl_net::peer::Attempt::new(),
+            link: acl_net::peer::LinkState::Connected,
+            since: std::time::Instant::now(),
+            tries: 0,
+            policy: acl_net::peer::RepairPolicy::new(),
+            due: None,
+            relay_candidates: None,
+        }
+    }
+
+    /// Records a state the transport reported.
+    fn observe(&mut self, state: webrtc::peer_connection::RTCPeerConnectionState) {
+        use acl_net::peer::{Ended, LinkState};
+        use webrtc::peer_connection::RTCPeerConnectionState as Reported;
+
+        let link = match state {
+            Reported::Connecting => {
+                self.attempt.started();
+                LinkState::Connected
+            }
+            Reported::Connected => {
+                self.attempt.connected();
+                // A fresh burst for a connection that worked. `Voice.tsx` never resets its
+                // counter, so a peer that dropped once an hour ago is retried on the slow
+                // forty-five-second schedule for ever after; a link that carried audio has
+                // earned its fast attempts back.
+                self.tries = 0;
+                self.policy = acl_net::peer::RepairPolicy::new();
+                self.due = None;
+                LinkState::Connected
+            }
+            Reported::Disconnected => LinkState::Disconnected,
+            Reported::Failed => {
+                self.attempt.ended(Ended::Failed);
+                LinkState::Failed
+            }
+            Reported::Closed => {
+                self.attempt.ended(Ended::Closed);
+                LinkState::Failed
+            }
+            // `New` is where every connection starts and says nothing about a live link.
+            // The timeout on it belongs to `Attempt`, which is polled separately.
+            _ => LinkState::Connected,
+        };
+        if link != self.link {
+            self.link = link;
+            self.since = std::time::Instant::now();
+        }
+    }
+}
+
+/// Long enough in one state that the state means something.
+///
+/// Named rather than repeated: `RepairPolicy` decides *what* on the strength of how long a
+/// link has been unwell, and the tests below have to ask it about a duration past that
+/// threshold without hard-coding the threshold a second time.
+#[cfg(test)]
+const PATIENCE: std::time::Duration = acl_net::peer::ICE_RESTART_AFTER_DISCONNECTED;
+
+/// Tears a failed connection down and decides when, and how, to make its replacement.
+///
+/// Split out of [`repair`] only because it is long; it is the whole of what happens the
+/// moment a link is declared dead, and the order of the four steps matters. The candidate
+/// count is read before the close, the escalation is decided before the delay, and the
+/// delay is armed rather than slept through.
+async fn schedule_rebuild(
+    mesh: &mut acl_core::peers::PeerSet,
+    repair: &mut Repair,
+    peer: &str,
+    initiator: bool,
+    anyone_relayed: bool,
+    answers: &Sender<Report>,
+) {
+    use acl_net::reconnect::{RelaySignals, reconnect_delay, should_give_up, should_use_relay};
+
+    // Before the connection goes, because closing it is what forgets the count.
+    repair.relay_candidates = mesh.relay_candidates(peer);
+    repair.tries = repair.tries.saturating_add(1);
+    mesh.close(peer).await;
+    let _ = answers.send(Report::Peer {
+        socket_id: peer.to_owned(),
+        connected: false,
+    });
+
+    // Whether to stop trying the direct path. `should_use_relay` reads the candidate count
+    // first: above zero means the relay answered and the direct path failed anyway, so
+    // there is nothing to learn from failing at it twice; zero means the allocation failed,
+    // and forcing relay-only would leave the connection with no candidates at all.
+    if !mesh.relaying(peer)
+        && should_use_relay(RelaySignals {
+            attempt: repair.tries,
+            relay_candidates: repair.relay_candidates,
+            other_peers_needed_relay: anyone_relayed,
+        })
+    {
+        if mesh.has_relay() {
+            acl_core::log_info!(
+                "peer",
+                "switching to the relay for {peer} after {} attempts, having gathered {:?} relay candidates",
+                repair.tries,
+                repair.relay_candidates
+            );
+            mesh.use_relay(peer);
+        } else {
+            acl_core::log_warn!(
+                "peer",
+                "the direct path to {peer} keeps failing and this server advertises no relay to fall back to"
+            );
+        }
+    }
+
+    // Past the fast burst the interval goes flat and long rather than stopping. Giving up
+    // outright is what 1.0.4 removed: the reasons a connection cannot be made are
+    // frequently not permanent -- a relay whose reservations are all taken frees one when
+    // somebody leaves, and nothing was ever going to ask again.
+    let wait = if should_give_up(repair.tries) {
+        acl_net::reconnect::SLOW_DELAY
+    } else {
+        reconnect_delay(repair.tries, initiator)
+    };
+    acl_core::log_info!(
+        "peer",
+        "{peer} failed; rebuilding in {} ms, attempt {}",
+        wait.as_millis(),
+        repair.tries
+    );
+    repair.due = Some(std::time::Instant::now() + wait);
+}
+
+/// Repairs what the transport has reported broken, and gives up on what never started.
+///
+/// Called every round, which is at most every fifty milliseconds. Everything decided here
+/// is decided by `acl_net::peer` and `acl_net::reconnect`, which are pure and tested
+/// without a network; this is only the part that needs a connection to act on.
+async fn repair(
+    mesh: &mut Option<acl_core::peers::PeerSet>,
+    repairs: &mut std::collections::BTreeMap<String, Repair>,
+    session: &mut Session,
+    own_id: &str,
+    answers: &Sender<Report>,
+) {
+    use acl_net::peer::{Ended, Progress, Repair as Cure};
+    use acl_net::reconnect::initiates_reconnect;
+
+    let Some(mesh) = mesh.as_mut() else {
+        return;
+    };
+    // Read once for the whole round: the lobby's experience of the relay is evidence about
+    // every peer in it, and a peer escalated inside this loop should not change the answer
+    // the peers after it get.
+    let anyone_relayed = mesh.anyone_relayed();
+    let now = std::time::Instant::now();
+
+    for (peer, repair) in repairs.iter_mut() {
+        // A connection that never left `new`. ICE reports nothing at all in that case, so
+        // there is no state change to react to and the peer would wait for an event that
+        // is not coming.
+        if repair.due.is_none()
+            && matches!(
+                repair.attempt.poll(repair.since.elapsed()),
+                Progress::GiveUp(Ended::NeverStarted)
+            )
+        {
+            acl_core::log_warn!(
+                "peer",
+                "{peer} never started connecting; giving up on this attempt"
+            );
+            repair.attempt.ended(Ended::Failed);
+            repair.link = acl_net::peer::LinkState::Failed;
+            repair.since = now;
+        }
+
+        let initiator = initiates_reconnect(own_id, peer);
+        match repair
+            .policy
+            .poll(repair.link, repair.since.elapsed(), initiator)
+        {
+            // The cheap repair: re-gather, keeping the connection, its tracks and its DTLS
+            // session. Only the end that offers can do it, and only once -- both rules are
+            // `RepairPolicy`'s and neither is repeated here.
+            Cure::RestartIce => match mesh.restart_ice(peer).await {
+                Ok(outbound) => {
+                    acl_core::log_info!("peer", "{peer} went quiet; restarting ICE");
+                    let _ = session
+                        .signal(&outbound.to, outbound.payload.to_value())
+                        .await;
+                }
+                Err(why) => acl_core::log_warn!("peer", "could not restart ICE for {peer}: {why}"),
+            },
+            Cure::Rebuild if repair.due.is_none() => {
+                schedule_rebuild(mesh, repair, peer, initiator, anyone_relayed, answers).await;
+            }
+            Cure::Rebuild | Cure::None => {}
+        }
+
+        // The rebuild itself, when its delay has run out.
+        if repair.due.is_some_and(|due| now >= due) {
+            repair.due = None;
+            repair.since = now;
+            repair.attempt = acl_net::peer::Attempt::new();
+            // The other end got there first. Both ends schedule -- either may be the only
+            // one that noticed -- and the answering end waits `ANSWER_GRACE` longer, so in
+            // the ordinary case exactly one offer is made.
+            if mesh.holds(peer) {
+                continue;
+            }
+            match mesh.rebuild(peer).await {
+                Ok(outbound) => {
+                    acl_core::log_info!("peer", "rebuilding the connection to {peer}");
+                    let _ = session
+                        .signal(&outbound.to, outbound.payload.to_value())
+                        .await;
+                }
+                Err(why) => acl_core::log_warn!("peer", "could not rebuild {peer}: {why}"),
+            }
+        }
     }
 }
 
@@ -847,6 +1153,7 @@ async fn follow(
 /// ever. `two_links_reach_each_other` found exactly that.
 async fn drain(
     mesh: &mut Option<acl_core::peers::PeerSet>,
+    repairs: &mut std::collections::BTreeMap<String, Repair>,
     session: &mut Session,
     answers: &Sender<Report>,
 ) {
@@ -866,6 +1173,13 @@ async fn drain(
         // Connected in well under a second when it works, so a line per step is a handful
         // per peer per session and tells the whole story when it does not.
         acl_core::log_info!("peer", "{peer} is now {state}");
+        // The only place a link's health is learnt, so it is the only place the repair
+        // bookkeeping can be kept up to date. `observe` records the phase and when it
+        // started; `repair` decides what to do about it, on its own clock.
+        repairs
+            .entry(peer.clone())
+            .or_insert_with(Repair::new)
+            .observe(state);
         let _ = answers.send(Report::Peer {
             socket_id: peer,
             connected: state == webrtc::peer_connection::RTCPeerConnectionState::Connected,
@@ -979,8 +1293,116 @@ fn obey(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-    use super::{Link, State};
+    use super::{Link, Repair, State};
     use acl_core::session::{Event, PublicLobby};
+
+    use acl_net::peer::{LinkState, Repair as Cure};
+    use webrtc::peer_connection::RTCPeerConnectionState as Reported;
+
+    /// Every state the transport can report, and what it makes of a link.
+    ///
+    /// Until 2026-08-29 none of this ran: `acl_net::reconnect` and
+    /// `acl_net::peer::RepairPolicy` were ported, tested and had no production caller, so
+    /// a connection that failed stayed failed for the rest of the session. These assert
+    /// the mapping the driver reads, which is the half that could get it wrong silently.
+    #[test]
+    fn a_failed_link_is_a_failed_link_and_a_connecting_one_is_not() {
+        let mut repair = Repair::new();
+        // The states a healthy handshake walks through. None of them is trouble, and a
+        // repair triggered on one of them would tear down connections that were working.
+        for state in [Reported::New, Reported::Connecting, Reported::Connected] {
+            repair.observe(state);
+            assert_eq!(
+                repair.policy.poll(repair.link, super::PATIENCE, true),
+                Cure::None,
+                "{state} is not a fault"
+            );
+        }
+
+        // `disconnected` means checks have stopped succeeding and ICE has not given up. It
+        // frequently heals; only after `ICE_RESTART_AFTER_DISCONNECTED` is it worth the
+        // cheap repair, and only at the end that offers.
+        repair.observe(Reported::Disconnected);
+        assert_eq!(repair.link, LinkState::Disconnected);
+        assert_eq!(
+            repair
+                .policy
+                .poll(repair.link, std::time::Duration::ZERO, true),
+            Cure::None,
+            "a moment of quiet is not a fault yet"
+        );
+        assert_eq!(
+            repair.policy.poll(repair.link, super::PATIENCE, false),
+            Cure::None,
+            "the answering end cannot restart: a restart works by offering"
+        );
+        assert_eq!(
+            repair.policy.poll(repair.link, super::PATIENCE, true),
+            Cure::RestartIce
+        );
+        assert_eq!(
+            repair.policy.poll(repair.link, super::PATIENCE, true),
+            Cure::None,
+            "one restart per connection, or a path that is gone re-gathers on a loop"
+        );
+
+        // `failed` is ICE giving up, and it costs the expensive repair whichever end sees
+        // it. `closed` is treated the same: something ended the connection and nothing is
+        // going to bring that one back.
+        for state in [Reported::Failed, Reported::Closed] {
+            let mut repair = Repair::new();
+            repair.observe(state);
+            assert_eq!(repair.link, LinkState::Failed);
+            assert_eq!(
+                repair
+                    .policy
+                    .poll(repair.link, std::time::Duration::ZERO, false),
+                Cure::Rebuild,
+                "{state} costs a rebuild at either end, immediately"
+            );
+        }
+    }
+
+    /// A link that came back gets its fast attempts back.
+    #[test]
+    fn a_connection_that_recovers_starts_its_burst_again() {
+        let mut repair = Repair::new();
+        repair.observe(Reported::Connecting);
+        repair.observe(Reported::Failed);
+        repair.tries = 4;
+        repair.due = Some(std::time::Instant::now());
+
+        repair.observe(Reported::Connected);
+        assert_eq!(repair.tries, 0);
+        assert!(repair.due.is_none(), "a scheduled rebuild is off");
+        // And the restart budget with it, so the next spell of trouble may spend the cheap
+        // repair rather than going straight to a rebuild.
+        assert!(!repair.policy.has_restarted());
+
+        // This is a deliberate difference from 1.x. `Voice.tsx` never resets its counter,
+        // so a peer that dropped once an hour ago is retried on the flat forty-five-second
+        // schedule for ever after -- and the whole point of the fast burst is the first
+        // few seconds after something goes wrong.
+        repair.observe(Reported::Failed);
+        assert_eq!(
+            acl_net::reconnect::reconnect_delay(repair.tries + 1, true),
+            acl_net::reconnect::BASE_DELAY
+        );
+    }
+
+    /// The clock only moves when the state does.
+    #[test]
+    fn a_state_repeated_does_not_restart_the_patience() {
+        let mut repair = Repair::new();
+        repair.observe(Reported::Disconnected);
+        let first = repair.since;
+        // The transport can report the same state more than once, and a link that has been
+        // quiet for four seconds must stay four seconds quiet however many times it says
+        // so -- otherwise the restart is postponed for as long as the trouble lasts, which
+        // is exactly when it is wanted.
+        repair.observe(Reported::Disconnected);
+        assert_eq!(repair.since, first);
+    }
 
     fn lobby(id: u64, title: &str) -> PublicLobby {
         PublicLobby {

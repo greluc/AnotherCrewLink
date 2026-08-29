@@ -281,6 +281,18 @@ struct Peer {
     generation: Generation,
     current: Arc<AtomicU64>,
     queue: CandidateQueue<RTCIceCandidateInit>,
+    /// How many relay candidates this connection has gathered.
+    ///
+    /// The one fact that separates "force the relay now" from "forcing the relay would
+    /// guarantee failure", and [`acl_net::reconnect::should_use_relay`] is written around
+    /// it. Above zero means the allocation succeeded, so the relay is reachable from this
+    /// machine and the direct path failed anyway -- there is nothing to learn from failing
+    /// at it again. Zero means the allocation failed, and forcing relay-only would leave
+    /// the connection with no candidates at all.
+    ///
+    /// `peer.ts:275` counts them the same way and for the same reason. Nothing counted
+    /// them here until 2026-08-29, so the whole escalation could never have been fed.
+    relay_candidates: u32,
     /// Whether a remote description has been applied.
     ///
     /// `peer.ts`'s `negotiated`, and [`acl_net::signal_route`] reads it: an offer arriving
@@ -293,6 +305,15 @@ struct Peer {
 pub struct PeerSet {
     config: RtcConfig,
     peers: HashMap<String, Peer>,
+    /// Peers whose next connection is built relay-only.
+    ///
+    /// Per peer rather than per session, because what blocks a direct path is the network
+    /// at one end and the escalation is a decision about that one pair. `Voice.tsx` keeps
+    /// the same thing in `relayedPeers.current` and reads it in the same place.
+    ///
+    /// It outlives the connection deliberately: the decision is made when one fails and
+    /// has to still be here when its replacement is built.
+    relayed: std::collections::HashSet<String>,
     events: UnboundedSender<Inbound>,
     inbox: UnboundedReceiver<Inbound>,
 }
@@ -305,6 +326,7 @@ impl PeerSet {
         Self {
             config,
             peers: HashMap::new(),
+            relayed: std::collections::HashSet::new(),
             events,
             inbox,
         }
@@ -509,7 +531,14 @@ impl PeerSet {
             PeerConnectionBuilder::new()
                 .with_udp_addrs(vec!["0.0.0.0:0"])
                 .with_media_engine(media)
-                .with_configuration(to_configuration(&self.config))
+                .with_configuration(to_configuration(&if self.relayed.contains(peer) {
+                    // Relay-only, for this peer and this build. `RtcConfig::new` re-derives
+                    // the servers from the ones already in hand, which is a clone of a
+                    // short list once per rebuild rather than anything on a hot path.
+                    RtcConfig::new(&self.config.ice_servers, true)
+                } else {
+                    self.config.clone()
+                }))
                 .with_handler(Arc::new(Handler {
                     peer: peer.to_owned(),
                     generation,
@@ -548,6 +577,7 @@ impl PeerSet {
                 generation,
                 current,
                 queue: CandidateQueue::new(),
+                relay_candidates: 0,
                 negotiated: false,
             },
         ) {
@@ -568,6 +598,89 @@ impl PeerSet {
                 .store(gone.generation.next().raw(), Ordering::Release);
             let _ = gone.connection.close().await;
         }
+    }
+
+    /// Re-gathers a connection's candidates without replacing it.
+    ///
+    /// The cheap repair, and the one 1.x reaches for first: the connection, its tracks and
+    /// its DTLS session all survive, so a path that comes back comes back in a second
+    /// rather than in a fresh handshake. It works by making the next offer carry new ICE
+    /// credentials, which is why only the end that offers can perform one --
+    /// [`acl_net::peer::RepairPolicy`] holds that rule and this does not repeat it.
+    ///
+    /// `peer.ts:161` is the same call in the same place.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError`] if there is no such connection, or the crate refuses the restart or
+    /// the offer that follows it.
+    pub async fn restart_ice(&mut self, peer: &str) -> Result<Outbound, PeerError> {
+        self.connection(peer)?.restart_ice().await?;
+        // A renegotiation, because the connection is still there: `offer` marks it so, and
+        // the far end routes it to the existing connection rather than building another.
+        Box::pin(self.offer(peer)).await
+    }
+
+    /// Throws a connection away and offers a fresh one.
+    ///
+    /// The expensive repair, for a link ICE has given up on. The offer that comes back is
+    /// *not* marked as a renegotiation -- there is nothing left to renegotiate with -- so
+    /// the far end builds its own replacement rather than applying this to the one it is
+    /// about to hear has failed.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError`] if the replacement cannot be built or offered.
+    pub async fn rebuild(&mut self, peer: &str) -> Result<Outbound, PeerError> {
+        self.close(peer).await;
+        Box::pin(self.offer(peer)).await
+    }
+
+    /// How many relay candidates a connection has gathered, if it is still held.
+    ///
+    /// Read *before* the connection is torn down, because tearing it down is what forgets
+    /// the number, and the number is what the escalation decision is made from.
+    #[must_use]
+    pub fn relay_candidates(&self, peer: &str) -> Option<u32> {
+        self.peers.get(peer).map(|held| held.relay_candidates)
+    }
+
+    /// Builds this peer's next connection relay-only.
+    ///
+    /// Not this one: an existing connection keeps the configuration it was made with, and
+    /// changing a live one would drop a call to fix something already broken. It applies
+    /// from the next [`Self::rebuild`].
+    pub fn use_relay(&mut self, peer: &str) {
+        self.relayed.insert(peer.to_owned());
+    }
+
+    /// Whether any peer in this lobby has been escalated to the relay.
+    ///
+    /// The lobby's experience, which [`acl_net::reconnect::should_use_relay`] takes as
+    /// evidence about the peers that have not failed yet: what blocks a direct path is
+    /// almost always the network at one end rather than the pair, so the second peer to
+    /// need the relay says something about the eleventh.
+    #[must_use]
+    pub fn anyone_relayed(&self) -> bool {
+        !self.relayed.is_empty()
+    }
+
+    /// Whether this peer is being relayed.
+    #[must_use]
+    pub fn relaying(&self, peer: &str) -> bool {
+        self.relayed.contains(peer)
+    }
+
+    /// Whether the configuration this set was given offers a relay at all.
+    ///
+    /// Asked before escalating, because forcing relay mode with nothing to relay through
+    /// leaves the connection unable to gather any candidate -- which fails harder and
+    /// faster than the direct attempt it replaced. A lobby where nobody can reach anybody
+    /// and no relay is advertised is a server configuration problem, and from a player's
+    /// side it looks identical to a broken client, so it is said out loud instead.
+    #[must_use]
+    pub fn has_relay(&self) -> bool {
+        acl_net::ice::has_relay(&self.config.ice_servers)
     }
 
     /// Tears down everything.
@@ -603,6 +716,15 @@ impl PeerSet {
                     // may have been replaced -- the message is in flight, not in the past.
                     if !self.is_live(&peer, generation) {
                         continue;
+                    }
+                    // Counted on the way past. The SDP attribute grammar in RFC 5245 puts
+                    // the type after a literal `typ`, and `relay` is one of the four it
+                    // can be, so the space in front is what stops `typ srflx raddr ...`
+                    // from matching on a later token.
+                    if init.candidate.contains(" typ relay")
+                        && let Some(held) = self.peers.get_mut(&peer)
+                    {
+                        held.relay_candidates = held.relay_candidates.saturating_add(1);
                     }
                     if let Ok(candidate) = serde_json::to_value(&init) {
                         outbound.push(Outbound {

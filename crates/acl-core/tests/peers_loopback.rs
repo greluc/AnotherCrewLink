@@ -49,6 +49,31 @@ async fn deliver(outbound: Vec<Outbound>, to: &mut PeerSet, from: &str) -> Vec<O
     replies
 }
 
+/// Offers, answers and trickles until both ends are up.
+///
+/// Extracted so the repair tests can start from a working connection rather than
+/// reproducing the handshake three times.
+async fn connect(first: &mut PeerSet, second: &mut PeerSet) {
+    let offer = first.offer(SECOND).await.expect("an offer");
+    let answer = deliver(vec![offer], second, FIRST).await;
+    deliver(answer, first, SECOND).await;
+    settle(first, second).await;
+}
+
+/// Trickles candidates both ways until both ends say connected.
+async fn settle(first: &mut PeerSet, second: &mut PeerSet) {
+    let up = tokio::time::timeout(PATIENCE, async {
+        let mut up = (false, false);
+        while !(up.0 && up.1) {
+            up.0 |= exchange(first, FIRST, second).await;
+            up.1 |= exchange(second, SECOND, first).await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(up.is_ok(), "neither side reached connected in time");
+}
+
 /// Drains one side, hands what it produced to the other, and says whether it is connected.
 ///
 /// Panics on `Failed`, because on loopback that is a defect rather than a network.
@@ -110,6 +135,114 @@ async fn two_sets_negotiate_and_reach_connected() {
 
     first.close_all().await;
     second.close_all().await;
+}
+
+/// A connection that failed is rebuilt, and the rebuilt one reaches connected.
+///
+/// The repair layer's first half. `acl_net::reconnect` and `acl_net::peer::RepairPolicy`
+/// were ported, tested and had zero production callers until 2026-08-29, so a peer
+/// connection that failed mid-lobby was dead for the rest of the session -- which is what
+/// `Voice.tsx:1324` describes, at the place 1.x fixed it. The decision now runs in
+/// `acl-client`; this proves the primitive it calls actually makes a connection again.
+///
+/// Rebuilt from *both* sides, because that is what happens in the field: whichever end
+/// notices first offers, and the other has already thrown its half away.
+#[tokio::test]
+async fn a_rebuilt_connection_reaches_connected_again() {
+    let mut first = PeerSet::new(configuration());
+    let mut second = PeerSet::new(configuration());
+
+    connect(&mut first, &mut second).await;
+
+    // What a failure costs: both ends drop what they had. `rebuild` closes and offers, and
+    // the offer must NOT be marked as a renegotiation -- there is nothing left to
+    // renegotiate with, and the far end has to build its own replacement rather than apply
+    // this to the one it is about to hear has failed.
+    second.close(FIRST).await;
+    let offer = first.rebuild(SECOND).await.expect("a rebuilt offer");
+    assert!(
+        matches!(
+            &offer.payload,
+            Payload::Offer {
+                renegotiation: false,
+                ..
+            }
+        ),
+        "a rebuild starts a connection rather than continuing one: {:?}",
+        offer.payload
+    );
+
+    let answer = deliver(vec![offer], &mut second, FIRST).await;
+    assert_eq!(answer.len(), 1, "the rebuilt offer should be answered");
+    deliver(answer, &mut first, SECOND).await;
+    settle(&mut first, &mut second).await;
+
+    first.close_all().await;
+    second.close_all().await;
+}
+
+/// An ICE restart re-gathers without replacing the connection.
+///
+/// The cheap repair, and the one `peer.ts:161` reaches for before it tears anything down.
+/// Two things are asserted because getting either wrong is silent: the offer is marked as
+/// a renegotiation, so the far end applies it to the connection it already has rather than
+/// building a second one; and the connection is still the same one afterwards, which is
+/// what makes it cheaper than a rebuild in the first place.
+#[tokio::test]
+async fn an_ice_restart_keeps_the_connection_it_repairs() {
+    let mut first = PeerSet::new(configuration());
+    let mut second = PeerSet::new(configuration());
+
+    connect(&mut first, &mut second).await;
+    assert!(first.holds(SECOND));
+
+    let offer = first.restart_ice(SECOND).await.expect("a restart offer");
+    assert!(
+        matches!(
+            &offer.payload,
+            Payload::Offer {
+                renegotiation: true,
+                ..
+            }
+        ),
+        "a restart continues a connection rather than starting one: {:?}",
+        offer.payload
+    );
+    assert!(
+        first.holds(SECOND),
+        "the restart must not have thrown the connection away -- that is the rebuild"
+    );
+
+    let answer = deliver(vec![offer], &mut second, FIRST).await;
+    assert_eq!(answer.len(), 1, "the restart offer should be answered");
+    deliver(answer, &mut first, SECOND).await;
+    settle(&mut first, &mut second).await;
+
+    first.close_all().await;
+    second.close_all().await;
+}
+
+/// Escalating one peer to the relay does not escalate the lobby.
+///
+/// `use_relay` is per peer because what blocks a direct path is the network at one end
+/// rather than the pair, and routing a whole lobby through a relay that only one player
+/// needed costs the relay's bandwidth and a hop of latency for everybody else.
+#[tokio::test]
+async fn the_relay_decision_is_made_one_peer_at_a_time() {
+    let mut set = PeerSet::new(configuration());
+    assert!(!set.anyone_relayed());
+
+    set.use_relay(SECOND);
+    assert!(set.relaying(SECOND));
+    assert!(!set.relaying("somebody-else"));
+    // The lobby-wide signal `should_use_relay` reads: the second peer to need the relay is
+    // evidence about the eleventh.
+    assert!(set.anyone_relayed());
+
+    // And it outlives the connection, because the decision is made when one fails and has
+    // to still be there when its replacement is built.
+    set.close(SECOND).await;
+    assert!(set.relaying(SECOND));
 }
 
 /// A second offer to a peer already connected is a renegotiation, and renegotiating must
