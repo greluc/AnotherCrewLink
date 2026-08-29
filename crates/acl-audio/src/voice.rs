@@ -373,15 +373,20 @@ pub fn voice_params(
         Reach::ThroughCamera(from) => pan = from,
     }
 
-    // The muffle. The radio's settings win, because its branch is the one that also sets
-    // the filter type.
-    let muffle = if radio_muffle {
-        Some(Muffle {
-            kind: FilterKind::HighPass,
-            frequency: RADIO_MUFFLE.0,
-            q: RADIO_MUFFLE.1,
-        })
-    } else if state.game_state == GameState::Tasks
+    // The muffle. Two writes to one filter, in the order the original makes them, and the
+    // order is the whole of it.
+    //
+    // `Voice.tsx` sets the radio's high pass at line 483 and the vent's low pass at line
+    // 588, and the second is a separate `if` on the same node rather than an `else if`. So
+    // an impostor who is on the radio *and* in a vent hears the vent: low pass at 2 kHz,
+    // Q 20, and the gain brought down from 1.0. This was an `else if` until 2026-08-29,
+    // which gave the radio the win it does not have.
+    let mut muffle = radio_muffle.then_some(Muffle {
+        kind: FilterKind::HighPass,
+        frequency: RADIO_MUFFLE.0,
+        q: RADIO_MUFFLE.1,
+    });
+    if state.game_state == GameState::Tasks
         && ((me.in_vent && !me.is_dead) || (other.in_vent && !other.is_dead) || on_camera)
     {
         let (frequency, q) = if on_camera {
@@ -398,16 +403,14 @@ pub fn voice_params(
         if gain == 1.0 {
             gain = if on_camera { CAMERA_GAIN } else { VENT_GAIN };
         }
-        Some(Muffle {
+        muffle = Some(Muffle {
             // Explicit, every time. See `Muffle::kind`: the radio leaves this node a high
             // pass, and only writing it back makes the next vent a low pass again.
             kind: FilterKind::LowPass,
             frequency,
             q,
-        })
-    } else {
-        None
-    };
+        });
+    }
 
     if !settings.enable_spatial_audio || skip_distance_check {
         pan = Vector2 { x: 0.0, y: 0.0 };
@@ -1576,8 +1579,14 @@ mod tests {
     // ---------------------------------------------------------------- interactions
 
     #[test]
-    fn a_vented_impostor_on_the_radio_keeps_the_radios_filter() {
-        // Both branches apply; the radio's wins, because it is the one that sets the type.
+    fn a_vented_impostor_on_the_radio_hears_the_vent_and_not_the_radio() {
+        // Both branches apply, and the vent wins because it runs *second*. `Voice.tsx`
+        // sets the radio's high pass at line 483 and the vent's low pass at line 588, and
+        // the second is a separate `if` on the same filter node rather than an `else if`.
+        //
+        // This test asserted the opposite until 2026-08-29, which is worse than having no
+        // test: it was written from a reading of the branch structure rather than of the
+        // order, and it then defended the mistake.
         let lobby = LobbySettings {
             hear_impostors_in_vents: true,
             ..radio_lobby()
@@ -1592,10 +1601,40 @@ mod tests {
             in_vent: true,
             ..far()
         };
-        let muffle = voice_params(
+        let params = voice_params(
             &State::default(),
             &ClientSettings::default(),
             &lobby,
+            &impostor,
+            &partner,
+            RANGE,
+            Some(partner.client_id),
+        );
+        let muffle = params.muffle.unwrap();
+        assert_eq!(muffle.kind, FilterKind::LowPass);
+        assert_eq!(muffle.frequency, VENT_MUFFLE.0);
+        assert_eq!(muffle.q, VENT_MUFFLE.1);
+        // And the vent's gain reduction with it, from the same block.
+        assert!((params.gain - VENT_GAIN).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_radio_with_no_vent_is_still_the_radios_filter() {
+        // The other half of the same rule: with only one of the two blocks running, the
+        // one that runs decides. A fix that made the vent win unconditionally would pass
+        // the test above and break this.
+        let impostor = Player {
+            is_impostor: true,
+            ..me()
+        };
+        let partner = Player {
+            is_impostor: true,
+            ..far()
+        };
+        let muffle = voice_params(
+            &State::default(),
+            &ClientSettings::default(),
+            &radio_lobby(),
             &impostor,
             &partner,
             RANGE,
@@ -1605,6 +1644,7 @@ mod tests {
         .unwrap();
         assert_eq!(muffle.kind, FilterKind::HighPass);
         assert_eq!(muffle.frequency, RADIO_MUFFLE.0);
+        assert_eq!(muffle.q, RADIO_MUFFLE.1);
     }
 
     #[test]

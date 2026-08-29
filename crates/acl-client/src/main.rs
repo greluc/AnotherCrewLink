@@ -1171,7 +1171,7 @@ struct Client {
     /// The server rate-limits this handler, and the listing is derived from a frame that
     /// arrives five times a second — most of which say the same thing. `Voice.tsx` sends it
     /// on a change too, from a `useEffect`.
-    listed: Option<serde_json::Value>,
+    listed: Option<(String, serde_json::Value)>,
     /// Whether the server has been asked for public-lobby updates.
     ///
     /// Told once, like `overlay_shown`: `watch_lobbies` is a message, and asking every frame
@@ -1329,7 +1329,14 @@ impl Client {
         }
         let in_menu = state.game_state == acl_game::GameState::Unknown;
         if meeting && state.game_state == acl_game::GameState::Discussion {
-            Self::compose_meeting(&mut self.overlay_shown, reader, &bounds, state);
+            Self::compose_meeting(
+                &mut self.overlay_shown,
+                reader,
+                &bounds,
+                state,
+                voice.talking,
+                local_talking,
+            );
             return;
         }
         let laid = acl_ui::overlay_layout::lay_out(
@@ -1473,6 +1480,8 @@ impl Client {
         reader: &reader::Reader,
         bounds: &acl_core::game_window::Bounds,
         state: &acl_game::AmongUsState,
+        talking: &dyn Fn(i64) -> bool,
+        local_talking: bool,
     ) {
         let game = acl_ui::overlay_layout::Rect {
             x: bounds.x,
@@ -1489,11 +1498,21 @@ impl Client {
         let mut placement: Option<acl_ui::overlay_layout::Rect> = None;
         let mut sprites: Vec<(i32, i32, acl_ui::sprite::Bitmap)> = Vec::new();
         for (player, seat) in state.players.iter().zip(seats.iter()) {
-            // Nothing knows who is talking yet, so no seat is marked. The shape is here and
-            // the audio is what fills it in; drawing every seat lit would be worse than
-            // drawing none, because it would say something false rather than nothing.
-            let talking = false;
-            if !talking {
+            // `let talking = false;` stood here, hard-coded, from before the audio was
+            // wired -- so the meeting overlay computed every seat and then drew none of
+            // them, for ever. The predicate it was waiting for has existed since
+            // 2026-08-27 and is the same one the corner strip uses ten lines above the
+            // call; nothing connected the two.
+            //
+            // The local player is asked separately for the same reason `Voice` carries
+            // `local_talking` separately: this client's own speech comes from its own
+            // detector rather than from a `VAD` event it does not send itself.
+            let speaking = if player.is_local {
+                local_talking
+            } else {
+                player.client_id.is_some_and(|id| talking(i64::from(id)))
+            };
+            if !speaking {
                 continue;
             }
             let (body, shadow) =
@@ -1739,7 +1758,16 @@ impl Client {
                 lobby,
                 &listener,
                 &as_voice_player(player),
-                lobby.max_distance,
+                // `hearing`, not `lobby.max_distance`, and they are not the same number.
+                // `Voice.tsx:408` passes `maxDistanceRef.current` to `noteVoice`, and
+                // `maxDistanceRef` is the vision-hearing figure worked out at line 1505 --
+                // the light radius plus half a unit for a crewmate in a lobby with the
+                // toggle on, and a floor of 1 below 0.6.
+                //
+                // The panner four lines below was already given `hearing`, so with the
+                // toggle on the cutoff and the roll-off disagreed: a player shown in range
+                // and cut to silence, or heard past where the ring says they are.
+                hearing,
                 // Who the lobby says is on the radio. `voice_params` has implemented the
                 // rule since P3+ -- skip the distance check, add the highpass muffle -- and
                 // was passed `None` until 2026-08-27, so it never once fired.
@@ -1796,13 +1824,27 @@ impl Client {
                     // convolver is state, and state cannot live in a value the window
                     // rebuilds every frame.
                     reverb: params.reverb,
+                    // Exactly what `Voice.tsx:618-620` writes into the `PannerNode`:
+                    // `positionX = panPos[0]`, `positionY = panPos[1]`, and a fixed
+                    // `positionZ = -0.5`.
+                    //
+                    // The game's `y` goes to the panner's *elevation*, not its depth. That
+                    // reads backwards -- the game is flat and elevation ought to be
+                    // meaningless -- and it is what the client this is a port of does, so
+                    // it is what players have been hearing since 1.0.0. It matters twice.
+                    // The azimuth is `atan2(x, -z)`, which with a fixed `z` collapses to
+                    // `atan2(x, 0.5)`: the stereo image comes from the sideways offset
+                    // alone, and a player two units to the right is hard right whether they
+                    // are level with you or across the map. Reading the game's `y` as depth
+                    // instead put that same player at 26 degrees rather than 76.
+                    //
+                    // And the fixed half unit is a floor on the distance. Without it two
+                    // players standing on the same tile are zero apart, which the panner
+                    // answers by centring -- correct, and not what 1.x does.
                     source: acl_audio::panner::Position {
                         x: params.pan.x,
-                        y: 0.0,
-                        // The game is flat and the listener faces along `z`, so the game's
-                        // `y` is the panner's depth. Negative in front, which is the Web
-                        // Audio convention the Electron client already works in.
-                        z: -params.pan.y,
+                        y: params.pan.y,
+                        z: -0.5,
                     },
                     panner: acl_audio::panner::Panner {
                         max_distance: hearing,
@@ -1883,10 +1925,20 @@ impl Client {
             "isPublic": stored.bool_at("localLobbySettings.publicLobby_on"),
             "gameState": state.game_state as i32,
         });
-        if self.listed.as_ref() == Some(&lobby) {
+        // The code is part of what is compared, and it was not until 2026-08-29. The
+        // payload alone does not name the lobby -- the code is the separate first argument
+        // to `advertise` -- so a host whose next lobby happened to have the same title,
+        // language, player count and game state as the last one was compared equal to it
+        // and never advertised. Their lobby was simply absent from the public browser,
+        // with nothing to say so.
+        if self
+            .listed
+            .as_ref()
+            .is_some_and(|(was, before)| was.as_str() == code.as_str() && before == &lobby)
+        {
             return;
         }
-        self.listed = Some(lobby.clone());
+        self.listed = Some((code.clone(), lobby.clone()));
         self.link.advertise(&code, lobby);
     }
 
@@ -2006,6 +2058,10 @@ impl Client {
             self.announced.host = is_host;
         } else {
             acl_core::log_info!("lobby", "leaving");
+            // So the next lobby is advertised even if it looks exactly like this one.
+            // `keep_listed` compares against what was last sent, and a value left behind
+            // across a lobby change is a comparison against a lobby that no longer exists.
+            self.listed = None;
             self.link.leave();
         }
         self.joined = wanted;
