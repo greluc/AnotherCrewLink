@@ -14,6 +14,16 @@ pub enum ReadError {
     /// The process is gone, or the handle is no longer valid.
     #[error("the process is not readable: {0}")]
     ProcessGone(String),
+    /// The process is there and this one may not open it.
+    ///
+    /// Which on Windows means it is running at a higher integrity level -- Among Us started
+    /// as administrator, or under an anti-cheat that does the same. A distinct variant
+    /// because the answer is completely different from "the game is not running": one is
+    /// waited out and the other is fixed by re-launching this client's helper through UAC,
+    /// which is what §6 describes and what nothing could ask for while the two looked
+    /// alike.
+    #[error("process {0} is running at a higher integrity level than this one")]
+    AccessDenied(u32),
     /// The address is not mapped, or is not readable at this length.
     #[error("cannot read {length} bytes at {address:#x}")]
     Unreadable {

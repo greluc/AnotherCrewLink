@@ -268,6 +268,10 @@ fn run() -> Result<(), Fatal> {
 /// [`acl_ipc::pipe::PipeConnection::available`]; this loop peeks instead, which it can
 /// afford because it is already awake every [`SAMPLE_INTERVAL`].
 #[cfg(windows)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop, and every arm of it is a message this helper answers. The message             names and the answers belong beside each other; splitting them would put the             protocol in two files"
+)]
 fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Result<(), Fatal> {
     // Started once, kept for the life of the helper, and hidden until the core asks. A
     // machine with no interactive desktop -- which is not a case this client runs in, but
@@ -277,7 +281,13 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
     let mut offsets = Bundles::default();
     let mut sampler: Option<Sampler> = None;
     let mut reading = false;
+    // Gathered so the loop below stays one screen. Each is a piece of what the helper
+    // remembers between rounds; none is shared with anything else.
+
     let mut next_attempt = Instant::now();
+    // Whether the core has already been told the game is out of reach. Once per helper:
+    // the retry runs every seven and a half seconds and this is a sentence for a person.
+    let mut said_denied = false;
 
     loop {
         let tick = Instant::now() + SAMPLE_INTERVAL;
@@ -387,7 +397,13 @@ fn pump(transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>) -> Resul
         }
 
         if reading && Instant::now() >= next_attempt && offsets.any() {
-            sample_once(transport, &offsets, &mut sampler, &mut next_attempt)?;
+            sample_once(
+                transport,
+                &offsets,
+                &mut sampler,
+                &mut next_attempt,
+                &mut said_denied,
+            )?;
         }
 
         // What is left of the interval after the work, rather than a flat sleep: a sample
@@ -431,12 +447,27 @@ fn sample_once(
     offsets: &Bundles,
     sampler: &mut Option<Sampler>,
     next_attempt: &mut Instant,
+    said_denied: &mut bool,
 ) -> Result<(), Fatal> {
     if sampler.is_none() {
-        let Some(attached) = Sampler::attach(offsets) else {
+        let mut denied = false;
+        let Some(attached) = Sampler::attach(offsets, &mut denied) else {
+            if denied && !*said_denied {
+                // Once per helper, because the retry runs every seven and a half seconds
+                // and this is a sentence for a person to read rather than a log to page
+                // through. The core turns it into the offer to try again elevated.
+                *said_denied = true;
+                stop_reason(
+                    transport,
+                    "Among Us is running as administrator and this helper is not, so its \
+                     memory cannot be read. Restarting AnotherCrewLink as administrator, or \
+                     starting Among Us without it, will fix it.",
+                )?;
+            }
             *next_attempt = Instant::now() + RETRY_INTERVAL;
             return Ok(());
         };
+        *said_denied = false;
         *sampler = Some(attached);
     }
     let Some(active) = sampler.as_mut() else {
@@ -454,6 +485,23 @@ fn sample_once(
         Ok(payload) => transport.send(&HelperMessage::GameState(payload))?,
         Err(error) => stop(transport, &format!("a frame did not encode: {error}")),
     }
+    Ok(())
+}
+
+/// Says why, without stopping.
+///
+/// `Stopping` is the only channel the helper has for a sentence a person should read, and
+/// the core treats it as trouble to show rather than as a shutdown -- it is `Report::Trouble`
+/// on the other side. The helper carries on retrying, because the thing being reported is
+/// recoverable by the player.
+#[cfg(windows)]
+fn stop_reason(
+    transport: &mut StreamTransport<acl_ipc::pipe::PipeConnection>,
+    reason: &str,
+) -> Result<(), Fatal> {
+    transport.send(&HelperMessage::Stopping {
+        reason: reason.to_owned(),
+    })?;
     Ok(())
 }
 
@@ -481,14 +529,29 @@ struct Sampler {
 impl Sampler {
     /// Finds the game and resolves the bundle's signatures against it.
     ///
-    /// `None` rather than an error, for every reason it can fail. The game not running is
-    /// the ordinary case and is not worth a type; the game running elevated while this
-    /// process is not is the case the elevation prompt exists for, and the core already
-    /// knows what to do about it.
-    fn attach(offsets: &Bundles) -> Option<Self> {
+    /// `None` rather than an error, for every reason it can fail *except* one. The game not
+    /// running is the ordinary case and is not worth a type. The game running elevated
+    /// while this process is not is the case the elevation prompt exists for -- and until
+    /// 2026-08-29 it was swallowed by the same `ok()?` as everything else, so it looked
+    /// exactly like a game that was closed and nothing ever asked to be re-launched.
+    ///
+    /// `denied` is set when that happens, so `sample_once` can say so once rather than on
+    /// every retry.
+    fn attach(offsets: &Bundles, denied: &mut bool) -> Option<Self> {
         use acl_game::ProcessMemory;
 
-        let process = acl_game::windows::WindowsProcess::open_by_name(GAME_EXECUTABLE).ok()?;
+        let process = match acl_game::windows::WindowsProcess::open_by_name(GAME_EXECUTABLE) {
+            Ok(process) => process,
+            Err(acl_game::ReadError::AccessDenied(pid)) => {
+                // Not logged here: the helper cannot write to the client's file -- see the
+                // note at the top of this crate -- so the message *is* the channel, and the
+                // caller sends it.
+                let _ = pid;
+                *denied = true;
+                return None;
+            }
+            Err(_) => return None,
+        };
         let module = process.module(GAME_MODULE)?;
         // The bundle is chosen here, where the game's width is known. Choosing on the
         // other side of the pipe would be guessing, and a wrong guess resolves every

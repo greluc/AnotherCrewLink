@@ -92,8 +92,19 @@ impl WindowsProcess {
         // SAFETY: a documented call with a constant rights mask and no pointer arguments.
         let handle = unsafe { OpenProcess(requested_rights(), 0, pid) };
         if handle.is_null() {
+            // SAFETY: read immediately after the failing call, on this thread, which is
+            // the whole of `GetLastError`'s contract.
+            let why = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            // The two are different problems with the same symptom, and telling them apart
+            // is the difference between "start the game" and "run this as administrator".
+            // Nothing distinguished them until 2026-08-29, so a player whose game runs
+            // elevated saw a client that behaved exactly as if Among Us were closed --
+            // for ever, because the elevation path exists and had no caller.
+            if why == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED {
+                return Err(ReadError::AccessDenied(pid));
+            }
             return Err(ReadError::ProcessGone(format!(
-                "could not open process {pid}; the game may be running elevated"
+                "could not open process {pid} (error {why})"
             )));
         }
 

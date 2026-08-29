@@ -79,11 +79,27 @@ mod platform {
         GetCurrentProcess, GetCurrentProcessId, OpenProcessToken,
     };
 
-    /// One frame's worth of headroom, twice over.
+    /// A whole overlay frame's worth, with headroom.
     ///
-    /// The kernel's own buffers, not ours: `StreamTransport` does its own framing. Sized
-    /// so a whole maximum frame fits without the writer blocking on a reader that is busy.
-    const BUFFER: u32 = 128 * 1024;
+    /// The kernel's own buffers, not ours: `StreamTransport` does its own framing. Sized so
+    /// that a writer does not block on a reader that is busy -- and the unit that matters
+    /// is not one message but one *overlay frame*, which is a clear, a `DrawSprite` per
+    /// player and a present, written back to back.
+    ///
+    /// The arithmetic, as of 2026-08-29: an overlay sprite is 56 by 56 in RGBA, which is
+    /// 12,544 bytes, and a full lobby is fifteen of them -- 188,160 bytes before framing.
+    /// At 128 KiB the buffer filled two thirds of the way through a full lobby's frame and
+    /// the write blocked, on the thread that also drains game state from the helper. A
+    /// stalled overlay therefore stopped proximity, which is the wrong way round: the
+    /// overlay is the decoration and the state is the client.
+    ///
+    /// 384 KiB is that frame twice over. It is kernel memory per pipe and there is one
+    /// pipe.
+    ///
+    /// It bounds a *busy* reader, not a stopped one. A helper that stops reading entirely
+    /// still blocks the writer once this fills -- and that is now recoverable rather than
+    /// permanent: the reader thread notices a lost helper and starts another.
+    const BUFFER: u32 = 384 * 1024;
     // Written out rather than derived, because deriving it needs a cast and a cast is how
     // a buffer silently becomes too small. This says the same thing at compile time.
     const _: () = assert!(BUFFER as usize >= crate::MAX_FRAME);
