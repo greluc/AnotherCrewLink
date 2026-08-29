@@ -371,11 +371,24 @@ pub fn read_outfit(
         }
 
         if key == 0 && index == 0 {
-            outfit.name = strip_rich_text(&read_named_string(memory, value, offsets.player_name)?);
+            // Hedged, all four, the way `color_id` beside them already is. A `?` here
+            // fails `read_outfit`, which fails `read_player`, which drops that player out
+            // of the frame entirely -- so a hat pointer caught mid-write took a whole
+            // crewmate off the roster and out of the mix for that frame. Nobody in the
+            // lobby could hear them, and the reason was a cosmetic they were wearing.
+            //
+            // A name that cannot be read is a real loss and is still not worth the frame:
+            // the Electron reader's `readString` returns `''` on a bad pointer and carries
+            // on, and a player with an empty name is visible and audible where a player
+            // who is not there is neither.
+            outfit.name = strip_rich_text(
+                &read_named_string(memory, value, offsets.player_name).unwrap_or_default(),
+            );
             outfit.color_id = read_u32(memory, value, offsets.color_id).unwrap_or(0);
-            outfit.hat_id = read_named_string(memory, value, offsets.hat_id)?;
-            outfit.skin_id = read_named_string(memory, value, offsets.skin_id)?;
-            outfit.visor_id = read_named_string(memory, value, offsets.visor_id)?;
+            outfit.hat_id = read_named_string(memory, value, offsets.hat_id).unwrap_or_default();
+            outfit.skin_id = read_named_string(memory, value, offsets.skin_id).unwrap_or_default();
+            outfit.visor_id =
+                read_named_string(memory, value, offsets.visor_id).unwrap_or_default();
             // The Electron reader stops here when the current outfit is the base one or
             // out of range, and so does this: a shifted colour cannot be entry zero.
             if current_outfit == 0 || current_outfit > 10 {

@@ -180,33 +180,39 @@ pub fn read_state(
     // Outside the block, because the menu hold below compares it against the previous
     // frame's. `GameReader.ts` reads it unconditionally for the same reason; here the
     // reads are inside a guard, so the value has to be hoisted rather than the reads.
-    let mut all_players = 0u64;
+    // Read unconditionally, and that is a fix of 2026-08-29 rather than a preference.
+    // `GameReader.ts:270-272` reads all three before its guard, and the menu hold below
+    // compares `all_players` against the previous frame's. Inside the guard the value was
+    // zero on every menu frame, so `context.last_player_ptr == all_players` was `0 == 0`
+    // on the first menu frame after a lobby and could never distinguish "the same player
+    // table as before" from "no player table at all" -- which is exactly the question it
+    // was written to ask.
+    //
+    // A player table that cannot be reached is an empty lobby, not a failed frame. The
+    // Electron reader walks a garbage pointer, gets nothing back and pushes no players.
+    let all_players_ptr =
+        follow(memory, base, top_level_chain(offsets, "allPlayersPtr")).unwrap_or(0);
+    let all_players = follow(
+        memory,
+        all_players_ptr,
+        top_level_chain(offsets, "allPlayers"),
+    )
+    .unwrap_or(0);
+    let count = read_u32_at(
+        memory,
+        all_players_ptr,
+        first_offset(offsets, "playerCount"),
+    )
+    .unwrap_or(0) as usize;
+
     // Whether the block below ran at all. Two fields keep a starting value rather than a
     // read value when it does not, and the two are different numbers.
-    let mut read_players = false;
+    //
+    // `&& playerCount` is part of the Electron condition, so a lobby the reader can reach
+    // but which reports nobody leaves the two starting values standing.
+    let read_players = (!game_code.is_empty() || is_local_game) && count > 0;
 
-    if !game_code.is_empty() || is_local_game {
-        // Same again: a player table that cannot be reached is an empty lobby, not a
-        // failed frame. The Electron reader walks a garbage pointer, gets nothing back
-        // and pushes no players.
-        let all_players_ptr =
-            follow(memory, base, top_level_chain(offsets, "allPlayersPtr")).unwrap_or(0);
-        all_players = follow(
-            memory,
-            all_players_ptr,
-            top_level_chain(offsets, "allPlayers"),
-        )
-        .unwrap_or(0);
-        let count = read_u32_at(
-            memory,
-            all_players_ptr,
-            first_offset(offsets, "playerCount"),
-        )
-        .unwrap_or(0) as usize;
-        // `&& playerCount` is part of the Electron condition, so a lobby the reader can
-        // reach but which reports nobody leaves the two starting values standing.
-        read_players = count > 0;
-
+    if read_players {
         let stride = memory.pointer_size() as u64;
         let mut entry =
             all_players.saturating_add_signed(first_offset(offsets, "playerAddrPtr").unwrap_or(0));
@@ -449,9 +455,21 @@ fn position(read: Option<f32>) -> f64 {
         clippy::float_cmp,
         reason = "JavaScript truthiness is the specification here"
     )]
-    if rounded != 0.0 {
+    // `is_finite` on each, and that is the other half of the same quirk. A NaN read out of
+    // a half-written player record is falsy in JavaScript -- `if (NaN)` is false -- so the
+    // Electron reader falls through both branches and reports 999, which is the "nowhere
+    // near you" sentinel every distance check already understands. Rust's `!=` says a NaN
+    // is not zero, so the port returned the NaN.
+    //
+    // It does not stay a coordinate. The difference between two positions is a NaN, the
+    // hearing range derived from it is a NaN, and `Panner::distance_gain` clamps against
+    // it -- `f64::clamp` asserts `min <= max`, which a NaN fails, and it runs on the mixing
+    // thread of a `panic = "abort"` build. A single unlucky frame took the whole client
+    // down. Infinity does not panic and is no better: every gain becomes zero and that
+    // player is silent for as long as it lasts.
+    if rounded.is_finite() && rounded != 0.0 {
         rounded
-    } else if raw != 0.0 {
+    } else if raw.is_finite() && raw != 0.0 {
         raw
     } else {
         999.0

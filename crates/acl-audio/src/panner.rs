@@ -81,10 +81,19 @@ impl Panner {
     #[must_use]
     pub fn distance_gain(self, distance: f64) -> f64 {
         let span = self.max_distance - self.reference_distance;
-        if span <= 0.0 {
+        // A non-finite anything is answered before `clamp` sees it. `f64::clamp` asserts
+        // `min <= max` and panics otherwise, and a NaN fails that comparison however the
+        // two are ordered -- inside a mixing thread, in a `panic = "abort"` build, that is
+        // the client gone. Silence is the honest answer: a distance nobody can compute is
+        // not a distance you can hear across.
+        if !span.is_finite()
+            || !distance.is_finite()
+            || !self.reference_distance.is_finite()
+            || span <= 0.0
+        {
             // Degenerate settings. The specification divides by this, and a panner whose
             // range is zero should be silent rather than infinite.
-            return if distance <= self.reference_distance {
+            return if distance.is_finite() && distance <= self.reference_distance {
                 1.0
             } else {
                 0.0
@@ -274,6 +283,33 @@ mod tests {
         assert!((panner.distance_gain(0.0) - 1.0).abs() < 1e-12);
         assert!(panner.distance_gain(1000.0).abs() < 1e-12);
         assert!(panner.distance_gain(1000.0) >= 0.0);
+    }
+
+    #[test]
+    fn a_non_finite_number_is_silence_rather_than_an_abort() {
+        // `f64::clamp` asserts `min <= max` and a NaN fails that comparison whichever way
+        // round it is, so this used to panic -- on the mixing thread, in a build compiled
+        // with `panic = "abort"`, which means the whole client vanished. The route in is
+        // `hearing_range`, which becomes `max_distance`: the game's light radius is read
+        // out of process memory, and a coordinate caught mid-write is a NaN.
+        //
+        // Fixed in three places on 2026-08-29, deliberately: the reader turns a non-finite
+        // coordinate into the 999 sentinel the Electron reader uses, `hearing_range`
+        // refuses a non-finite range, and this refuses to divide by one. The last of the
+        // three is the one that has to hold, because it is the one that panics.
+        let broken = Panner {
+            max_distance: f64::NAN,
+            ..Panner::default()
+        };
+        assert_eq!(broken.distance_gain(1.0), 0.0);
+        assert_eq!(broken.distance_gain(f64::NAN), 0.0);
+
+        let ordinary = Panner::default();
+        assert_eq!(ordinary.distance_gain(f64::NAN), 0.0);
+        assert_eq!(ordinary.distance_gain(f64::INFINITY), 0.0);
+        // Infinity outwards is silence and infinity inwards is not full volume: a
+        // reference distance that cannot be computed is not a distance you are inside of.
+        assert_eq!(ordinary.distance_gain(f64::NEG_INFINITY), 0.0);
     }
 
     #[test]

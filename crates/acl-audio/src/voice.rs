@@ -284,7 +284,14 @@ pub fn hearing_range(lobby: &LobbySettings, me: &Player, light_radius: f64) -> f
     } else {
         lobby.max_distance
     };
-    if range <= MINIMUM_RANGE {
+    // `!is_finite()` as well as too small, and it is not defensive programming for its own
+    // sake. `light_radius` comes out of the game's memory through `position`-style reads,
+    // and a NaN there makes this a NaN, which `Panner::distance_gain` then hands to
+    // `f64::clamp` -- and `clamp` asserts `min <= max`, which a NaN fails. On the mixing
+    // thread of a `panic = "abort"` build that is the whole client gone, from one unlucky
+    // frame. The reader stops NaNs at source since 2026-08-29; this is the second line,
+    // because the first one is a hundred lines away in another crate.
+    if !range.is_finite() || range <= MINIMUM_RANGE {
         FALLBACK_RANGE
     } else {
         range
