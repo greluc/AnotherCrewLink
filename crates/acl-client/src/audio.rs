@@ -102,14 +102,17 @@ enum Floor {
 impl Floor {
     /// The settings a detector should be rebuilt with.
     fn settings(self) -> acl_audio::vad::VadSettings {
-        let mut settings = acl_audio::vad::VadSettings::default();
-        // Unconditionally, because `Voice.tsx:1092` does it unconditionally: it writes
-        // `maxNoiseLevel = 1` on the line after it writes the floor, whether or not the
-        // player enabled the slider. `MAX_NOISE_LEVEL = 0.7` is `vad.ts`'s own default
-        // and 1.x overrides it every time, so the port matched a number the client it
-        // copies never uses -- and the mismatch was fatal rather than cosmetic, because
-        // the slider stores up to 1.0 and a floor above the ceiling used to panic.
-        settings.max_noise_level = 1.0;
+        let mut settings = acl_audio::vad::VadSettings {
+            // Unconditionally, because `Voice.tsx:1092` does it unconditionally: it
+            // writes `maxNoiseLevel = 1` on the line after it writes the floor, whether
+            // or not the player enabled the slider. `MAX_NOISE_LEVEL = 0.7` is `vad.ts`'s
+            // own default and 1.x overrides it every time, so the port matched a number
+            // the client it copies never uses -- and the mismatch was fatal rather than
+            // cosmetic, because the slider stores up to 1.0 and a floor above the ceiling
+            // used to abort the process from inside the capture callback.
+            max_noise_level: 1.0,
+            ..acl_audio::vad::VadSettings::default()
+        };
         if let Self::At(level) = self {
             settings.min_noise_level = level;
         }
@@ -380,14 +383,17 @@ impl Audio {
             &playing,
             &tone,
         ) {
-            Ok(streams) => Self {
+            // `trouble` now carries a *partial* failure as well as a total one: the
+            // speaker is open and the microphone is not, so there is something to say and
+            // something still to hear.
+            Ok((streams, trouble)) => Self {
                 incoming,
                 outgoing,
                 activity,
                 placements,
                 tuning,
                 tone,
-                trouble: None,
+                trouble,
                 _streams: streams,
             },
             Err(why) => Self {
@@ -563,7 +569,7 @@ impl Audio {
         tuning: &Arc<Tuning>,
         ready: &Arc<Mutex<std::collections::VecDeque<f32>>>,
         tone: &Arc<Mutex<std::collections::VecDeque<f32>>>,
-    ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
+    ) -> Result<Opened, String> {
         // What the mixing thread produces and the output callback consumes. A mutex the
         // callback only ever *tries*: blocking there would miss a deadline measured in
         // milliseconds because the mixer was busy, and a click is worse than a gap.
@@ -582,9 +588,20 @@ impl Audio {
         let host = cpal::default_host();
         // The speaker first, because a client that can hear is useful on its own and a
         // microphone failure should not cost it.
+        //
+        // That was written here from the start and was not true until 2026-08-29: the
+        // speaker was opened first and then `?` on the microphone threw the whole `Vec`
+        // away, so the stream dropped and stopped. A player whose microphone was busy,
+        // missing, or at a rate `choose` could not use heard *nobody*, when 1.x leaves
+        // them listening and merely unable to speak.
         let speaker = open_speaker(&host, &ready, tone, &played)?;
-        let microphone = open_microphone(&host, encoded, voice, &played, capture, tuning)?;
-        Ok(vec![speaker, microphone])
+        match open_microphone(&host, encoded, voice, &played, capture, tuning) {
+            Ok(microphone) => Ok((vec![speaker, microphone], None)),
+            Err(why) => {
+                acl_core::log_warn!("audio", "no microphone: {why}");
+                Ok((vec![speaker], Some(why)))
+            }
+        }
     }
 
     /// Off Windows, or in a build without the audio feature, there are no devices.
@@ -594,7 +611,7 @@ impl Audio {
         _encoded: &Sender<Vec<u8>>,
         _voice: &Sender<bool>,
         _placements: &Arc<Mutex<std::collections::BTreeMap<String, Placement>>>,
-    ) -> Result<Vec<Box<dyn std::any::Any + Send>>, String> {
+    ) -> Result<Opened, String> {
         Err("this build has no audio devices; enable the `audio` feature".to_owned())
     }
 }
@@ -627,23 +644,13 @@ fn open_speaker(
                 // previous frame played again.
                 buffer.fill(0.0);
                 if let Ok(mut ready) = playing.try_lock() {
-                    for slot in buffer.iter_mut() {
-                        let Some(sample) = ready.pop_front() else {
-                            break;
-                        };
-                        *slot = sample;
-                    }
+                    lay_out(&mut ready, buffer, channels);
                 }
                 // On top of whatever is being said, not instead of it. The point of the
                 // button is to prove this device makes a sound, and a test that silenced
                 // the lobby to do it would be answering a different question.
                 if let Ok(mut tone) = testing.try_lock() {
-                    for slot in buffer.iter_mut() {
-                        let Some(sample) = tone.pop_front() else {
-                            break;
-                        };
-                        *slot += sample;
-                    }
+                    lay_out(&mut tone, buffer, channels);
                 }
                 // A copy for the canceller, averaged to mono. Tried rather than waited on:
                 // a frame of reference it did not get costs some cancellation for one
@@ -672,6 +679,69 @@ fn open_speaker(
         .play()
         .map_err(|error| format!("the speaker would not start: {error}"))?;
     Ok(Box::new(stream))
+}
+
+/// What opening the devices produced: the streams to hold open, and what went wrong.
+///
+/// A pair rather than a `Result`, because the two halves are independent. The speaker
+/// failing is fatal and comes back as the `Err`; the microphone failing is not, and comes
+/// back here beside a speaker that is still playing.
+type Opened = (Vec<Box<dyn std::any::Any + Send>>, Option<String>);
+
+/// Lays interleaved-stereo samples into a device buffer, whatever the device's layout.
+///
+/// Added rather than assigned, because the buffer is zeroed first and the test tone plays
+/// on top of the mix; for the mix itself the two are the same thing.
+///
+/// **This is the whole of a fix made on 2026-08-29.** The callback used to write one
+/// queued sample per slot and never consult `channels`:
+///
+/// ```text
+/// for slot in buffer.iter_mut() { *slot = ready.pop_front()...; }
+/// ```
+///
+/// `cpal`'s WASAPI backend reports exactly one channel count per device -- the endpoint's
+/// mix format -- so `at_any_rate` returns 6 on a 5.1 endpoint, 8 on 7.1, and 1 on a
+/// Bluetooth hands-free one. The queue was then consumed at three, four or half the rate
+/// the mixer fills it, and every voice played at that speed. The repository already had
+/// this failure written down for the test tone a few hundred lines up -- *"pushed once,
+/// the tone played across the two channels at double speed and half the length"* -- and
+/// the voice path had the same mistake.
+///
+/// Two at a time or none, because the queue is interleaved stereo: taking a single sample
+/// out of a pair would swap left and right for every frame after it, permanently.
+///
+/// A device with more than two channels gets the pair in slots 0 and 1 and silence
+/// elsewhere. Under WASAPI those two are front-left and front-right for every layout
+/// there is, which is where stereo content belongs.
+#[cfg(feature = "audio")]
+fn lay_out(queue: &mut std::collections::VecDeque<f32>, buffer: &mut [f32], channels: usize) {
+    if channels == 0 {
+        return;
+    }
+    for frame in buffer.chunks_mut(channels) {
+        if queue.len() < 2 {
+            break;
+        }
+        let (Some(left), Some(right)) = (queue.pop_front(), queue.pop_front()) else {
+            break;
+        };
+        if channels == 1 {
+            // The average, not one side: a mono headset that played only the left channel
+            // would drop half of a spatialised lobby, and the pan is what puts a player
+            // there in the first place.
+            if let Some(slot) = frame.first_mut() {
+                *slot += f32::midpoint(left, right);
+            }
+            continue;
+        }
+        if let Some(slot) = frame.first_mut() {
+            *slot += left;
+        }
+        if let Some(slot) = frame.get_mut(1) {
+            *slot += right;
+        }
+    }
 }
 
 /// Opens the microphone: resample, cancel the echo, encode, hand over.
@@ -1550,6 +1620,111 @@ mod tests {
         assert!((default.max_noise_level - 1.0).abs() < f64::EPSILON);
         assert!((moved.max_noise_level - 1.0).abs() < f64::EPSILON);
         assert!(moved.max_noise_level > moved.min_noise_level);
+    }
+
+    /// Every device layout `at_any_rate` can return, against the queue it is fed.
+    ///
+    /// The four rows are the four things `cpal` reports on real Windows hardware: an
+    /// ordinary stereo endpoint, a Bluetooth hands-free one at a single channel, and 5.1
+    /// and 7.1, which is what a machine plugged into a television or an AV receiver
+    /// reports. Before 2026-08-29 the callback ignored the count and wrote one queued
+    /// sample per slot, so the last two consumed the mix three and four times too fast
+    /// and the first one consumed it at half speed.
+    #[cfg(feature = "audio")]
+    #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "every value is an exact binary fraction written in this test, so the
+                  sums are exact and an approximate comparison would hide the very
+                  off-by-one-slot mistake being checked for"
+    )]
+    fn a_stereo_pair_reaches_every_layout_at_the_right_speed() {
+        use std::collections::VecDeque;
+
+        // One second of "audio" is unnecessary; four stereo frames say everything.
+        let source: Vec<f32> = vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0];
+
+        // Stereo: straight through, and four device frames consume all four.
+        let mut queue: VecDeque<f32> = source.iter().copied().collect();
+        let mut buffer = vec![0.0f32; 8];
+        super::lay_out(&mut queue, &mut buffer, 2);
+        assert_eq!(buffer, source);
+        assert!(
+            queue.is_empty(),
+            "eight slots at two channels is four frames"
+        );
+
+        // Mono: the average of the pair, and four device frames still consume all four.
+        let mut queue: VecDeque<f32> = source.iter().copied().collect();
+        let mut buffer = vec![0.0f32; 4];
+        super::lay_out(&mut queue, &mut buffer, 1);
+        assert_eq!(
+            buffer,
+            vec![0.0, 0.0, 0.0, 0.0],
+            "equal and opposite averages to nil"
+        );
+        assert!(queue.is_empty(), "four slots at one channel is four frames");
+
+        // 5.1: the pair in front left and front right, silence in the other four. Four
+        // device frames is twenty-four slots, and it must still take exactly four pairs.
+        let mut queue: VecDeque<f32> = source.iter().copied().collect();
+        let mut buffer = vec![0.0f32; 24];
+        super::lay_out(&mut queue, &mut buffer, 6);
+        assert_eq!(buffer[0], 1.0);
+        assert_eq!(buffer[1], -1.0);
+        assert_eq!(&buffer[2..6], &[0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(buffer[18], 4.0);
+        assert_eq!(buffer[19], -4.0);
+        assert!(
+            queue.is_empty(),
+            "twenty-four slots at six channels is four frames"
+        );
+
+        // 7.1, which is where the old code was worst: it drained the whole queue into the
+        // first frame.
+        let mut queue: VecDeque<f32> = source.iter().copied().collect();
+        let mut buffer = vec![0.0f32; 32];
+        super::lay_out(&mut queue, &mut buffer, 8);
+        assert_eq!(buffer[0], 1.0);
+        assert_eq!(buffer[24], 4.0);
+        assert!(
+            queue.is_empty(),
+            "thirty-two slots at eight channels is four frames"
+        );
+    }
+
+    /// A queue with one sample left is left alone rather than half-consumed.
+    #[cfg(feature = "audio")]
+    #[test]
+    fn an_odd_sample_never_swaps_the_channels() {
+        use std::collections::VecDeque;
+
+        // The mixer always hands over whole stereo frames, so this cannot arise today.
+        // It is asserted anyway because the consequence is silent and permanent: taking
+        // the left of a pair and leaving the right makes every later frame play right
+        // where left should be, for the rest of the session, with nothing to show for it.
+        let mut queue: VecDeque<f32> = [1.0, -1.0, 9.0].into_iter().collect();
+        let mut buffer = vec![0.0f32; 8];
+        super::lay_out(&mut queue, &mut buffer, 2);
+        assert_eq!(&buffer[..2], &[1.0, -1.0]);
+        assert_eq!(queue.len(), 1, "the lone sample waits for its partner");
+        assert_eq!(queue.front().copied(), Some(9.0));
+    }
+
+    /// The test tone is added to the mix, not substituted for it.
+    #[cfg(feature = "audio")]
+    #[test]
+    fn the_tone_plays_over_the_lobby_rather_than_instead_of_it() {
+        use std::collections::VecDeque;
+
+        // Every value here is an exact binary fraction, so the sums are exact too and
+        // comparing them is a comparison rather than an approximation.
+        let mut buffer = vec![0.0f32; 4];
+        let mut voices: VecDeque<f32> = [0.5, 0.25, 0.5, 0.25].into_iter().collect();
+        let mut tone: VecDeque<f32> = [0.125, 0.0625, 0.125, 0.0625].into_iter().collect();
+        super::lay_out(&mut voices, &mut buffer, 2);
+        super::lay_out(&mut tone, &mut buffer, 2);
+        assert_eq!(buffer, vec![0.625, 0.3125, 0.625, 0.3125]);
     }
 
     use super::{Audio, Listener, Placement, encode_frame};
