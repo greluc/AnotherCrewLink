@@ -12,7 +12,7 @@ publish = false
 # The models, not a copy of them. The spike exists to find out whether the views can be
 # built on what P1+ produced, and reimplementing the ordering here would answer a question
 # nobody asked.
-acl-ui = { path = "../../crates/acl-ui", version = "2.0.0-alpha.5" }
+acl-ui = { path = "../../crates/acl-ui", version = "2.0.0-alpha.6" }
 # Defaults off, then back on by name, as `overlay-probe` does. `glow` because the overlay
 # probe used it and the two results should be comparable; the wgpu rung of §4.8's fallback
 # chain is a separate question and a separate measurement.

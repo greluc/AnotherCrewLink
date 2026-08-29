@@ -1,5 +1,138 @@
 # AnotherCrewLink Changelog
 
+## v2.0.0-alpha.6
+
+The one where somebody went looking. Two audits were run over this client — the first
+across the audio and the network paths, the second across everything the first never
+opened — and between them they found sixty-five things wrong. All sixty-five are fixed
+here, bar one deliberate refusal at the end of these notes.
+
+That is the whole of this release, and it is worth saying what kind of bugs they were.
+Almost none of them were code that did the wrong thing. They were code that was written,
+tested, and then never called: the layer that repairs a broken connection, the one that
+restarts a lost game reader, the one that fetches new memory offsets when Among Us
+updates. Eighteen finished features with nothing wired to them.
+
+**Still an alpha.** The caveat that has survived every release below survives this one, and
+it is at the bottom of these notes.
+
+### Fixed — you can be heard on networks where you could not
+
+- **A network that blocks outgoing UDP left you unable to reach anybody.** School and
+  office networks, hotels and some mobile providers do this, and they are exactly the
+  networks where a relay is the only way through. The client asked for one over TCP, the
+  server offered one — and the transport underneath threw the request away before it was
+  ever sent, without a word in the log. The same person is audible on 1.x and silent here.
+
+  Relays now work over TCP as well as UDP. The transport this client is built on could not
+  do it, so this project now carries its own copy of it with that one capability added;
+  everything else in it is unchanged, and the build proves that on every run.
+
+### Fixed — an Among Us update no longer breaks this client
+
+- **The client only ever knew one version of the game.** When Among Us moves things around
+  — which it does on almost every update — a client that has not been rebuilt reads
+  nothing at all, and everyone appears to be standing still. The machinery to download new
+  offsets the day they are published has been in this project from the start, and nothing
+  called it.
+
+  It is called now, and it asks the game which build it actually is rather than assuming
+  it is the newest. A player on an older Among Us gets the offsets for *their* game, and
+  if the download fails they keep what was working rather than being given a different
+  game's.
+
+### Fixed — what you hear
+
+- **Moving the microphone sensitivity slider closed the client.** Not once — every time,
+  and the setting is saved, so it closed again on the next start and kept doing it. That
+  one is why alpha.5 was hard to configure.
+
+- **A broken connection stayed broken.** When the path between two players goes bad, it
+  usually heals in a second or two, and when it does not it has to be rebuilt. Nothing was
+  watching, and nothing rebuilt it: one player went quiet for the rest of the round.
+
+- **A dropped connection to the voice server was never noticed.** The client sat there
+  looking connected.
+
+- **Leaving a lobby left its connections open,** so the next lobby was joined with the
+  previous one still attached.
+
+- **Your speaker and microphone choices were listed and ignored.** Whatever Windows
+  considered the default was opened instead.
+
+- **A microphone that could not be opened took the speaker with it.** One unavailable
+  device and you heard nobody, rather than hearing everybody and not being heard.
+
+- **Push-to-talk let the first fraction of a second through** before it decided you were
+  not speaking.
+
+- **Speech was measured and mixed on the drawing loop.** The window redraws when it has
+  reason to; audio does not care what the window is doing. Both now run on their own
+  clocks.
+
+- **The client did not tell the encoder that packets were being lost,** so the redundancy
+  that recovers a lost packet was never switched on.
+
+- **A ghost haunting you was reverberated and then moved,** rather than moved and then
+  reverberated, so the room was in the wrong place around them.
+
+- **Echo cancellation was fed the wrong thing** — the speaker's output at the speaker's
+  rate rather than at the microphone's.
+
+- **Nobody was told what the host had set.** The lobby's own rules reached everyone except
+  the person who needed them.
+
+### Fixed — the game reader and the overlay
+
+- **Running Among Us as administrator looked exactly like not running it at all.** No game
+  state, no prompt, no explanation. You are now told what is wrong and what fixes it.
+
+- **A game reader that died stayed dead,** and the client went on showing everyone frozen
+  where they were standing when it happened. Another is started now.
+
+- **Closing and reopening Among Us was never noticed,** so the client kept reading a game
+  that was gone.
+
+- **The overlay floated over everything** — your browser, this client's own settings, any
+  window at all — for the rest of the round. It now hides when the game is not in front.
+
+- **The overlay never came back after the game reader was replaced.**
+
+- **The overlay silently did not appear at all in exclusive fullscreen,** which reads as a
+  broken feature rather than as a display mode.
+
+- **The two overlay positions that promise player names did not draw any,** so they looked
+  identical to the two that do not. They draw them now.
+
+- **Your crewmate could be the wrong colour** on a game using a different palette, and the
+  server you were on was not read at all.
+
+- **One bad byte from the game could take down the client.** A single unreadable field now
+  costs that one field.
+
+### Fixed — the settings screen
+
+- **Binding mute or deafen muted you on the spot.** Creating the shortcut while the key
+  was still down read the release as a press.
+
+- **A text box could not be typed into,** the reset confirmation asked twice, and resetting
+  offsets ended the session.
+
+- **A shortcut that cannot work now says so** rather than silently doing nothing.
+
+### What is not in this release
+
+**Relays offered over TLS.** A relay named that way is an operator asking for the traffic
+to be inside encryption, and this client would have to connect to it without any. Refusing
+is the better of the two, and it is the one finding out of sixty-five that is left standing
+on purpose.
+
+**And still: nobody has used this client to talk to anybody.** More of it is proven than at
+any point in the port — a relay carrying a real conversation between two of these clients
+is now tested on every build, and so is the game reader against twelve and a half thousand
+recorded frames — but the whole of it has never been in a lobby with people in it. That is
+unchanged since alpha.1 and it is the thing this port most needs.
+
 ## v2.0.0-alpha.5
 
 alpha.4 gave the client an icon and it was the wrong one. This is the right one.

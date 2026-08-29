@@ -14,7 +14,7 @@ members = ["crates/acl-types", "crates/acl-turn-framing", "crates/acl-audio", "c
 exclude = ["server"]
 
 [workspace.package]
-version = "2.0.0-alpha.5"
+version = "2.0.0-alpha.6"
 edition = "2024"
 rust-version = "1.98.0"
 license = "GPL-3.0-or-later"
@@ -71,15 +71,15 @@ webrtc = { path = "vendor/webrtc", version = "=0.20.3" }
 # It has to match `package.version` above, and cargo enforces that by refusing to resolve
 # rather than by warning -- which is a good failure, but it means a version bump is five
 # edits and not one. There is no workspace inheritance for a version *requirement*.
-acl-types = { path = "crates/acl-types", version = "2.0.0-alpha.5" }
+acl-types = { path = "crates/acl-types", version = "2.0.0-alpha.6" }
 # The TURN stream splitter. Named here as well as used by `vendor/webrtc`, so that the one
 # place in the tree which parses bytes off a hostile network is a workspace member: clippy
 # lints it, `cargo test --workspace` runs it, and `cargo vet` calls it first-party because
 # it is.
-acl-turn-framing = { path = "crates/acl-turn-framing", version = "2.0.0-alpha.5" }
-acl-i18n = { path = "crates/acl-i18n", version = "2.0.0-alpha.5" }
-acl-audio = { path = "crates/acl-audio", version = "2.0.0-alpha.5" }
-acl-ipc = { path = "crates/acl-ipc", version = "2.0.0-alpha.5" }
+acl-turn-framing = { path = "crates/acl-turn-framing", version = "2.0.0-alpha.6" }
+acl-i18n = { path = "crates/acl-i18n", version = "2.0.0-alpha.6" }
+acl-audio = { path = "crates/acl-audio", version = "2.0.0-alpha.6" }
+acl-ipc = { path = "crates/acl-ipc", version = "2.0.0-alpha.6" }
 # The `log` facade, so a bridge can be installed for it. Every dependency that logs --
 # the transport above all -- writes into the default no-op logger otherwise, and the
 # transport's warnings are the only evidence a player on a UDP-blocked network has for why

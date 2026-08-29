@@ -26,7 +26,7 @@
 +# directories up, and a version bump therefore touches this line and the patch file with it.
 +[dependencies.acl-turn-framing]
 +path = "../../crates/acl-turn-framing"
-+version = "=2.0.0-alpha.5"
++version = "=2.0.0-alpha.6"
 +
  [dependencies.async-broadcast]
  version = "0.7.2"
