@@ -362,6 +362,13 @@ impl Link {
                 self.answer = Some(format!("{code} — {server}"));
             }
             Event::LobbyUnavailable(why) => self.answer = Some(why),
+            // Said out loud. `Event::Ignored` is how `acl-core` reports a payload of the
+            // wrong shape -- a rejected `clientPeerConfig`, a `join` with no socket id, a
+            // `join_lobby` answered without a status -- and it reached no logger and no
+            // screen. A server whose configuration this client refuses is a server
+            // operator's problem, and from a player's side it looked exactly like a broken
+            // client.
+            Event::Ignored(why) => acl_core::log_warn!("net", "{why}"),
             // Everything else belongs to the voice mesh, which this window does not have
             // yet. Dropped rather than kept: `acl-core` has already reported them, and a
             // queue of events nobody reads is a leak with a long fuse.
@@ -854,22 +861,46 @@ async fn follow(
         // The relays, as the server issued them for this session. The mesh is built here
         // rather than at connect, because a mesh built before this is one built against
         // defaults the server was about to replace.
+        // A mesh from the moment there is a socket, built on the defaults `Voice.tsx`
+        // ships. It used to be built here and nowhere else, so a server that sent no
+        // `clientPeerConfig`, or sent one this client refuses, left `mesh` as `None` --
+        // and every arm below returns early on that. The client joined the lobby, appeared
+        // in everyone's roster, and created no peer connections at all. Silently, for the
+        // whole session.
+        //
+        // `PeerConfig` now only ever reconfigures, which is also the honest shape: the
+        // configuration a connection was built with is fixed, and `reconfigure` says so.
+        Event::Connected(_) => {
+            if mesh.is_none() {
+                *mesh = Some(acl_core::peers::PeerSet::new(acl_net::ice::RtcConfig::new(
+                    &acl_net::ice::default_servers(),
+                    false,
+                )));
+            }
+        }
         Event::PeerConfig(config) => {
-            // `force_relay_only` is the server's request rather than an instruction, and
-            // `RtcConfig::new` is where that distinction is applied -- a configuration that
-            // forces relay mode with no relay in it has already been refused by
-            // `peer_config`, because gathering nothing fails harder than the direct attempt
-            // it replaced.
+            // The server's `forceRelayOnly` is already applied -- and already refused when
+            // it named no relay -- by `RtcConfig::new`, which `apply_client_peer_config`
+            // built this with.
             //
             // The player's own `natFix` is an *or*, the way `Voice.tsx` writes it:
-            // `settingsRef.current.natFix || relayedPeers.current[peer]`. Only when there
-            // is a relay to use, though -- forcing relay-only with none advertised gathers
-            // no candidates at all, which is the rule two lines above and the reason
-            // `apply_client_peer_config` refuses the same combination from the server.
-            let asked = force_relay.load(std::sync::atomic::Ordering::Relaxed)
-                && acl_net::ice::has_relay(&config.ice_servers);
-            let rtc =
-                acl_net::ice::RtcConfig::new(&config.ice_servers, config.force_relay_only || asked);
+            // `settingsRef.current.natFix || relayedPeers.current[peer]`. Rebuilding
+            // through `RtcConfig::new` is what applies relay rule three to it too, so
+            // ticking the box on a server with no relay leaves the client on `All` rather
+            // than gathering nothing. `with_tcp_relays` deduplicates, so passing a list
+            // that has already been through it adds nothing.
+            let asked = force_relay.load(std::sync::atomic::Ordering::Relaxed);
+            let rtc = if asked {
+                acl_net::ice::RtcConfig::new(&config.ice_servers, true)
+            } else {
+                (**config).clone()
+            };
+            acl_core::log_info!(
+                "net",
+                "peer configuration: {:?} ({:?})",
+                rtc.urls(),
+                rtc.ice_transport_policy
+            );
             match mesh.as_mut() {
                 Some(mesh) => mesh.reconfigure(rtc),
                 None => *mesh = Some(acl_core::peers::PeerSet::new(rtc)),

@@ -160,22 +160,46 @@ pub struct RtcConfig {
     pub bundle_policy: BundlePolicy,
 }
 
+/// What a client uses before a server has said otherwise.
+///
+/// `DEFAULT_ICE_CONFIG` in `Voice.tsx:142-150`, which is one public STUN server and
+/// nothing else. It is not much, and it is the difference between a lobby where direct
+/// connections work and a lobby with no peer connections at all: a client whose server
+/// never sent a usable `clientPeerConfig` had no mesh whatsoever until 2026-08-29, because
+/// the mesh was built in the handler for that message and nowhere else.
+#[must_use]
+pub fn default_servers() -> Vec<IceServer> {
+    vec![IceServer::new("stun:stun.l.google.com:19302")]
+}
+
 impl RtcConfig {
     /// Builds the configuration from what a server advertised.
     ///
-    /// `force_relay` is the server's request, not an instruction: the caller has already
-    /// refused a configuration that forces relay mode with no relay in it — see
-    /// [`crate::peer_config::apply_client_peer_config`] — because gathering nothing at
-    /// all fails harder than the direct attempt it replaced.
+    /// `force_relay` is the server's request rather than an instruction, and it is refused
+    /// here when there is no relay to force through. Relay rule three of §4.6: gathering
+    /// nothing at all fails harder and more completely than the direct attempt it
+    /// replaced, so a connection that sometimes succeeded stops succeeding ever.
+    ///
+    /// **This lived in [`crate::peer_config::apply_client_peer_config`] until 2026-08-29,
+    /// which has no callers.** The doc here said the caller had already refused it; the
+    /// caller that would have was never wired, and `Lobby::on_peer_config` used
+    /// `validate_peer_config` instead — which checks the shape and not the rule. So a
+    /// server sending `forceRelayOnly` with an empty or STUN-only `iceServers` produced a
+    /// relay-only client with no relay, and nobody in that lobby could reach anybody.
+    ///
+    /// The rule is applied by the type now, so no caller can forget it and none has to
+    /// remember. `apply_client_peer_config` still refuses the same combination, one layer
+    /// earlier and with a message a server operator can read.
     #[must_use]
     pub fn new(servers: &[IceServer], force_relay: bool) -> Self {
+        let ice_servers = with_tcp_relays(servers);
         Self {
-            ice_servers: with_tcp_relays(servers),
-            ice_transport_policy: if force_relay {
+            ice_transport_policy: if force_relay && has_relay(&ice_servers) {
                 IceTransportPolicy::Relay
             } else {
                 IceTransportPolicy::All
             },
+            ice_servers,
             bundle_policy: BundlePolicy::MaxBundle,
         }
     }
@@ -252,6 +276,47 @@ mod tests {
         let out = with_tcp_relays(&[relay("turn:relay.example:3478")]);
         assert_eq!(out[1].username.as_deref(), Some("u"));
         assert_eq!(out[1].credential.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn relay_only_is_refused_when_there_is_no_relay() {
+        // Relay rule three. Forcing relay mode with nothing to relay through leaves the
+        // connection unable to gather any candidate at all -- worse than the direct
+        // attempt it replaced, because a pair that sometimes connected stops connecting
+        // ever.
+        //
+        // The rule lived in `peer_config::apply_client_peer_config`, which has no callers,
+        // and this type's own documentation said the caller had already applied it. A
+        // server sending `forceRelayOnly` beside an empty or STUN-only list therefore got
+        // exactly the configuration the rule forbids.
+        let stun_only = RtcConfig::new(&[IceServer::new("stun:stun.example:3478")], true);
+        assert_eq!(stun_only.ice_transport_policy, IceTransportPolicy::All);
+        assert_eq!(
+            RtcConfig::new(&[], true).ice_transport_policy,
+            IceTransportPolicy::All
+        );
+
+        // And it is still honoured when there is something to honour it with.
+        assert_eq!(
+            RtcConfig::new(&[relay("turn:relay.example:3478")], true).ice_transport_policy,
+            IceTransportPolicy::Relay
+        );
+        // Including a TLS-only deployment, which `has_relay` counts and a substring check
+        // for "turn:" would miss.
+        assert_eq!(
+            RtcConfig::new(&[relay("turns:relay.example:5349")], true).ice_transport_policy,
+            IceTransportPolicy::Relay
+        );
+    }
+
+    #[test]
+    fn the_default_is_the_one_the_electron_client_ships() {
+        // `DEFAULT_ICE_CONFIG` in `Voice.tsx:142-150`. Used when a server sends no usable
+        // peer configuration, which used to mean no mesh at all.
+        let config = RtcConfig::new(&default_servers(), false);
+        assert_eq!(config.urls(), ["stun:stun.l.google.com:19302"]);
+        assert_eq!(config.ice_transport_policy, IceTransportPolicy::All);
+        assert_eq!(config.bundle_policy, BundlePolicy::MaxBundle);
     }
 
     #[test]

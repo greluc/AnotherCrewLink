@@ -24,8 +24,8 @@
 //! here invents one.
 
 use acl_net::client::{Action, CloseReason};
+use acl_net::ice::RtcConfig;
 use acl_net::mesh::{self, Membership};
-use acl_net::peer_config::PeerConfig;
 use acl_net::transport::{Connection, TransportError};
 use serde_json::{Value, json};
 
@@ -94,7 +94,7 @@ pub enum Event {
     /// The session is up, and this is the id the server addresses it by.
     Connected(String),
     /// How to reach the relay, as the server issued it for this session.
-    PeerConfig(Box<PeerConfig>),
+    PeerConfig(Box<RtcConfig>),
     /// Somebody is in the lobby who was not.
     PeerJoined {
         /// Their socket id.
@@ -420,13 +420,33 @@ impl Lobby {
 
     /// A peer config this client will not accept means no relay, which is a degradation.
     /// Refusing the whole session over it would be an outage, so the session continues.
+    ///
+    /// `apply_client_peer_config` rather than `validate_peer_config`, and that is a fix of
+    /// 2026-08-29. The first applies relay rule three -- a configuration that forces relay
+    /// mode with no relay advertised is refused, because gathering nothing at all fails
+    /// harder than the direct attempt it replaced. The second checks the shape and not the
+    /// rule, and it was what this called; `apply_client_peer_config` had no callers at all,
+    /// so the rule was tested and bypassed.
+    ///
+    /// A refused configuration leaves the client on its defaults, which is what
+    /// `Voice.tsx:968-971` does with the same combination: it logs and returns, keeping
+    /// `DEFAULT_ICE_CONFIG`.
     fn on_peer_config(args: &[Value], events: &mut Vec<Event>) {
-        match args.first().map(acl_net::peer_config::validate_peer_config) {
+        use acl_net::peer_config::Rejection;
+        match args
+            .first()
+            .map(acl_net::peer_config::apply_client_peer_config)
+        {
             Some(Ok(config)) => events.push(Event::PeerConfig(Box::new(config))),
-            Some(Err(complaints)) => events.push(Event::Ignored(format!(
+            Some(Err(Rejection::Malformed(complaints))) => events.push(Event::Ignored(format!(
                 "clientPeerConfig rejected: {}",
                 complaints.join("; ")
             ))),
+            Some(Err(Rejection::RelayForcedWithoutRelay)) => events.push(Event::Ignored(
+                "clientPeerConfig asks for relay-only and advertises no relay, which would \
+                 gather no candidates at all; keeping the default configuration"
+                    .to_owned(),
+            )),
             None => events.push(Event::Ignored(
                 "clientPeerConfig with no payload".to_owned(),
             )),
