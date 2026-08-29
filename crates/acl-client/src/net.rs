@@ -550,6 +550,95 @@ impl Link {
     }
 }
 
+/// What the worker holds between rounds.
+///
+/// Gathered into one value rather than six locals so that a round can be handed to a
+/// function instead of to eight arguments. Nothing here is shared with another thread:
+/// the worker owns all of it, and the window reaches it only through commands.
+#[derive(Default)]
+struct Held {
+    session: Option<Session>,
+    /// Built when the server issues a peer configuration, because that is what says which
+    /// relays to use -- a mesh built before it would be one built against defaults the
+    /// server was about to replace.
+    mesh: Option<acl_core::peers::PeerSet>,
+    /// One entry per peer this client has offered to or been offered by, holding what is
+    /// known about repairing that connection. Beside the mesh rather than inside it,
+    /// because everything it decides is `acl_net`'s and `acl_core::peers` is the part that
+    /// owns transports.
+    repairs: std::collections::BTreeMap<String, Repair>,
+    /// This client's own socket id, which decides which end of a pair offers a
+    /// replacement. Both ends must agree, and comparing socket ids is how they do it
+    /// without a round trip.
+    own_id: String,
+    /// Whether the handshake has completed. See the module documentation: a session that
+    /// is connected but not live drops everything emitted to it.
+    live: bool,
+    /// Commands that arrived before it did.
+    deferred: Vec<Command>,
+}
+
+/// Carries out one round's worth of commands. `false` means the window is gone.
+fn carry_out(
+    runtime: &tokio::runtime::Runtime,
+    waiting: Vec<Command>,
+    held: &mut Held,
+    answers: &Sender<Report>,
+) -> bool {
+    for command in waiting {
+        match command {
+            // These two are about the connection itself, so they are never deferred:
+            // one replaces it and the other ends it.
+            connection @ (Command::Connect(_) | Command::Disconnect) => {
+                held.live = false;
+                held.deferred.clear();
+                // The peers went with the socket they were signalled over. Handled
+                // here rather than in `obey` because `obey` has no mesh -- which is
+                // how they came to be left standing.
+                forget_the_peers(runtime, &mut held.mesh, &mut held.repairs);
+                if !obey(runtime, &mut held.session, connection, answers) {
+                    return false;
+                }
+            }
+            // Leaving a lobby closed nothing at all until 2026-08-29, and the damage
+            // was not the lobby just left -- it was the next one.
+            //
+            // `Session::leave` clears the membership and *discards* the
+            // `Action::Disconnect` list that `Membership::clear` returns; it is the one
+            // call site that throws it away, where the other two turn it into
+            // `Event::PeerLeft` and so into `mesh.close`. So the connection stayed in
+            // the map with nothing to say it was dead. Meet the same person in the next
+            // lobby and `PeerSet::offer` sees `holds(peer)`, skips the build, and
+            // offers a *renegotiation* on a transport whose credentials are gone. That
+            // pair never connects again for the life of the app.
+            Command::Leave => {
+                forget_the_peers(runtime, &mut held.mesh, &mut held.repairs);
+                // A join still waiting for the handshake is a join for the lobby this
+                // command is leaving. Replayed after the connect, it would put the
+                // client back into a lobby the player has already walked out of, and
+                // `follow_the_lobby` would not send another `leave` because its edge
+                // has been and gone.
+                held.deferred
+                    .retain(|waiting| !matches!(waiting, Command::Join { .. }));
+                if !obey(runtime, &mut held.session, Command::Leave, answers) {
+                    return false;
+                }
+            }
+            // Audio is never deferred. A packet held until the handshake finishes is
+            // a packet describing a moment that has passed, and twenty milliseconds of
+            // stale speech is worse than the gap it fills.
+            Command::SendAudio(packet) => broadcast(runtime, held.mesh.as_mut(), &packet),
+            other if !held.live => held.deferred.push(other),
+            other => {
+                if !obey(runtime, &mut held.session, other, answers) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// The thread: a runtime, and a session that outlives individual connections.
 fn run(
     orders: &Receiver<Command>,
@@ -566,25 +655,7 @@ fn run(
         return;
     };
 
-    let mut session: Option<Session> = None;
-    // The mesh. Built when the server issues a peer configuration, because that is what
-    // says which relays to use -- a mesh built before it would be one built against
-    // defaults the server was about to replace.
-    let mut mesh: Option<acl_core::peers::PeerSet> = None;
-    // One entry per peer this client has ever offered to or been offered by, holding what
-    // is known about repairing that connection. Beside the mesh rather than inside it,
-    // because everything it decides is `acl_net`'s and `acl_core::peers` is the part that
-    // owns transports.
-    let mut repairs: std::collections::BTreeMap<String, Repair> = std::collections::BTreeMap::new();
-    // This client's own socket id, which decides which end of a pair offers the
-    // replacement. Both ends must agree, and comparing socket ids is how they do it
-    // without a round trip.
-    let mut own_id = String::new();
-    // Whether the handshake has completed. See the module documentation: a session that is
-    // connected but not live drops everything emitted to it.
-    let mut live = false;
-    // Commands that arrived before it did.
-    let mut deferred: Vec<Command> = Vec::new();
+    let mut held = Held::default();
     loop {
         // Without a session there is nothing to await, so the command channel is blocked
         // on. With one, everything waiting is taken before the session is attended to.
@@ -609,35 +680,15 @@ fn run(
         // frame is a question to answer before relying on it, not during a live test.
         // Draining costs nothing and removes the growth; the wait below now bounds only how
         // long a command may sit, never how many get through.
-        let Some(waiting) = take_waiting(orders, session.is_some()) else {
+        let Some(waiting) = take_waiting(orders, held.session.is_some()) else {
             return;
         };
 
-        for command in waiting {
-            match command {
-                // These two are about the connection itself, so they are never deferred:
-                // one replaces it and the other ends it.
-                connection @ (Command::Connect(_) | Command::Disconnect) => {
-                    live = false;
-                    deferred.clear();
-                    if !obey(&runtime, &mut session, connection, answers) {
-                        return;
-                    }
-                }
-                // Audio is never deferred. A packet held until the handshake finishes is
-                // a packet describing a moment that has passed, and twenty milliseconds of
-                // stale speech is worse than the gap it fills.
-                Command::SendAudio(packet) => broadcast(&runtime, mesh.as_mut(), &packet),
-                other if !live => deferred.push(other),
-                other => {
-                    if !obey(&runtime, &mut session, other, answers) {
-                        return;
-                    }
-                }
-            }
+        if !carry_out(&runtime, waiting, &mut held, answers) {
+            return;
         }
 
-        if let Some(current) = session.as_mut() {
+        if let Some(current) = held.session.as_mut() {
             // A short wait rather than none: this is the only place the heartbeat is
             // answered from, and a busy loop would spin a core to answer it no sooner.
             let next = runtime.block_on(async {
@@ -647,9 +698,9 @@ fn run(
                 // The session ended. The window is told, and the loop goes back to
                 // blocking on commands rather than spinning on a dead session.
                 Ok(None) => {
-                    session = None;
-                    live = false;
-                    deferred.clear();
+                    held.session = None;
+                    held.live = false;
+                    held.deferred.clear();
                     if answers
                         .send(Report::State(State::Failed(
                             "the connection closed".to_owned(),
@@ -661,19 +712,19 @@ fn run(
                 }
                 Ok(Some(events)) => {
                     for event in events {
-                        if let Some(live) = session.as_mut() {
+                        if let Some(live) = held.session.as_mut() {
                             runtime.block_on(follow(
                                 &event,
-                                &mut mesh,
-                                &mut repairs,
+                                &mut held.mesh,
+                                &mut held.repairs,
                                 live,
                                 answers,
                                 force_relay,
                             ));
                         }
                         if let Event::Connected(id) = &event {
-                            live = true;
-                            own_id.clone_from(id);
+                            held.live = true;
+                            held.own_id.clone_from(id);
                             if answers
                                 .send(Report::State(State::Connected(id.clone())))
                                 .is_err()
@@ -686,9 +737,9 @@ fn run(
                         }
                     }
                     // Whatever was asked for while the handshake was still in flight.
-                    if live {
-                        for command in deferred.drain(..) {
-                            if !obey(&runtime, &mut session, command, answers) {
+                    if held.live {
+                        for command in held.deferred.drain(..) {
+                            if !obey(&runtime, &mut held.session, command, answers) {
                                 return;
                             }
                         }
@@ -700,16 +751,38 @@ fn run(
             // Whatever the connections produced in the meantime. Every iteration, because
             // candidates are gathered after the offer and there may be no event left to
             // hang the sending off.
-            if let Some(current) = session.as_mut() {
-                runtime.block_on(drain(&mut mesh, &mut repairs, current, answers));
+            if let Some(current) = held.session.as_mut() {
+                runtime.block_on(drain(&mut held.mesh, &mut held.repairs, current, answers));
                 // Every round, because a repair is decided by elapsed time rather than by
                 // an event: a link that has been quiet for four seconds has to be noticed
                 // by something that looks, and a rebuild scheduled for two seconds hence
                 // has to be fired by something that is awake. The loop already wakes at
                 // least every fifty milliseconds.
-                runtime.block_on(repair(&mut mesh, &mut repairs, current, &own_id, answers));
+                runtime.block_on(repair(
+                    &mut held.mesh,
+                    &mut held.repairs,
+                    current,
+                    &held.own_id,
+                    answers,
+                ));
             }
         }
+    }
+}
+
+/// Closes every peer connection and forgets what was known about repairing them.
+///
+/// Both, and in that order. A repair entry left behind would schedule a rebuild towards
+/// somebody who is no longer in the lobby, and an attempt count left behind would make the
+/// next lobby start on the slow schedule.
+fn forget_the_peers(
+    runtime: &tokio::runtime::Runtime,
+    mesh: &mut Option<acl_core::peers::PeerSet>,
+    repairs: &mut std::collections::BTreeMap<String, Repair>,
+) {
+    repairs.clear();
+    if let Some(mesh) = mesh.as_mut() {
+        runtime.block_on(mesh.close_all());
     }
 }
 
