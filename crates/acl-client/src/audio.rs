@@ -103,6 +103,13 @@ impl Floor {
     /// The settings a detector should be rebuilt with.
     fn settings(self) -> acl_audio::vad::VadSettings {
         let mut settings = acl_audio::vad::VadSettings::default();
+        // Unconditionally, because `Voice.tsx:1092` does it unconditionally: it writes
+        // `maxNoiseLevel = 1` on the line after it writes the floor, whether or not the
+        // player enabled the slider. `MAX_NOISE_LEVEL = 0.7` is `vad.ts`'s own default
+        // and 1.x overrides it every time, so the port matched a number the client it
+        // copies never uses -- and the mismatch was fatal rather than cosmetic, because
+        // the slider stores up to 1.0 and a floor above the ceiling used to panic.
+        settings.max_noise_level = 1.0;
         if let Self::At(level) = self {
             settings.min_noise_level = level;
         }
@@ -1525,15 +1532,24 @@ mod tests {
         assert!((tuning.gain() - 3.0).abs() < f32::EPSILON);
     }
 
-    /// Only `Floor::At` moves the threshold; the default leaves it where the detector puts
-    /// it.
+    /// Only `Floor::At` moves the threshold, and the ceiling is 1.0 either way.
     #[test]
-    fn a_default_floor_changes_nothing() {
+    fn the_ceiling_is_raised_whatever_the_floor_is() {
         let plain = acl_audio::vad::VadSettings::default();
-        assert_eq!(super::Floor::Default.settings(), plain);
+        let default = super::Floor::Default.settings();
         let moved = super::Floor::At(0.42).settings();
+
         assert!((moved.min_noise_level - 0.42).abs() < f64::EPSILON);
-        assert!((moved.max_noise_level - plain.max_noise_level).abs() < f64::EPSILON);
+        assert!((default.min_noise_level - plain.min_noise_level).abs() < f64::EPSILON);
+
+        // Both, and 1.0 rather than the detector's own 0.7. `Voice.tsx:1092` writes
+        // `maxNoiseLevel = 1` unconditionally, so `MAX_NOISE_LEVEL` is a default that 1.x
+        // overrides every time and never actually applies. Asserted for `Default` too,
+        // because the slider stores a floor of up to 1.0 and a ceiling below it used to
+        // abort the process from inside the capture callback.
+        assert!((default.max_noise_level - 1.0).abs() < f64::EPSILON);
+        assert!((moved.max_noise_level - 1.0).abs() < f64::EPSILON);
+        assert!(moved.max_noise_level > moved.min_noise_level);
     }
 
     use super::{Audio, Listener, Placement, encode_frame};

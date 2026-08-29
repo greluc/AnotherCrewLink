@@ -177,8 +177,17 @@ impl Vad {
             self.settings.min_noise_level
         };
 
+        // `max` then `min`, not `clamp`, and that is not a style choice. `f64::clamp`
+        // asserts `min <= max` and panics otherwise, and this runs inside the capture
+        // callback of a build compiled with `panic = "abort"` -- so a floor above the
+        // ceiling killed the process with no message a second after the microphone
+        // opened, and killed it again on every launch afterwards because the setting had
+        // already been saved. `vad.ts:116-117` applies the two bounds as two sequential
+        // `if`s, which cannot fail however the two are ordered; this is that, and the
+        // ceiling wins the tie exactly as it does there.
         let base = (measured * self.settings.avg_noise_multiplier)
-            .clamp(self.settings.min_noise_level, self.settings.max_noise_level);
+            .max(self.settings.min_noise_level)
+            .min(self.settings.max_noise_level);
         self.base_level = Some(base);
         self.voice_scale = 1.0 - base;
         self.calibration.clear();
@@ -389,6 +398,35 @@ mod tests {
         // 1.0 * 1.2 is above the ceiling, so the ceiling wins — a room that was loud
         // throughout calibration does not get a floor nothing can cross.
         assert_eq!(loud.base_level().unwrap(), MAX_NOISE_LEVEL);
+    }
+
+    #[test]
+    fn a_floor_above_the_ceiling_settles_rather_than_panicking() {
+        // This configuration used to abort the process. The client writes
+        // `min_noise_level` from the stored `micSensitivity`, which the slider takes to
+        // 1.0, and left `max_noise_level` at 0.7; `f64::clamp` asserts `min <= max`, and
+        // it is called from the capture callback of a `panic = "abort"` build. The
+        // window vanished a second after the microphone opened, and because the setting
+        // was already saved it vanished again on every launch until `settings.json` was
+        // edited by hand.
+        //
+        // The client no longer produces this pair — it raises the ceiling to 1.0 the way
+        // `Voice.tsx:1092` does — but the detector must not depend on that: it is a
+        // library, its settings are public, and the failure mode was a dead installation
+        // rather than a wrong answer.
+        let mut vad = Vad::new(
+            RATE,
+            VadSettings {
+                min_noise_level: 0.95,
+                max_noise_level: MAX_NOISE_LEVEL,
+                ..VadSettings::default()
+            },
+        );
+        run(&mut vad, 20, 10);
+        vad.finish_calibration();
+        // The ceiling wins, which is what `vad.ts`'s two sequential bounds do with the
+        // same pair.
+        assert_eq!(vad.base_level().unwrap(), MAX_NOISE_LEVEL);
     }
 
     #[test]
