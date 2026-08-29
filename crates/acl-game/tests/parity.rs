@@ -211,12 +211,29 @@ fn replay(frame: &RecordedFrame) -> Option<(SparseProcess, Module)> {
 ///
 /// Compared as JSON rather than as structs, so a field the Rust reader does not model at
 /// all is a difference rather than something quietly absent from both sides.
+/// Fields the Electron reader genuinely does not put in the frame it records.
+///
+/// One entry, and it is not an exemption for a disagreement -- it is a field that is not
+/// on this channel at all. `GameReader.loadColors` sends the palette over its own IPC
+/// message, `NOTIFY_PLAYERCOLORS_CHANGED`, and never writes it into the state object the
+/// recorder captures. This port carries it in the frame instead, because there is one
+/// channel between the helper and the client and adding a second for eighteen pairs of
+/// strings would be a protocol for a value that is read once.
+///
+/// Anything added here has to be a field the *original* does not produce. A field it
+/// produces and this one gets wrong belongs in the difference list, which is the whole
+/// point of the gate.
+const NOT_ON_THIS_CHANNEL: [&str; 1] = ["playerColors"];
+
 fn differences(
     electron: &serde_json::Value,
     rust: &serde_json::Value,
     path: &str,
     out: &mut BTreeMap<String, (String, String)>,
 ) {
+    if NOT_ON_THIS_CHANNEL.contains(&path) {
+        return;
+    }
     match (electron, rust) {
         (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
             let mut keys: Vec<&String> = left.keys().chain(right.keys()).collect();

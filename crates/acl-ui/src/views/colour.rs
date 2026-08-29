@@ -46,7 +46,7 @@ pub fn crew(color_id: i32) -> (Color32, Color32) {
     let Some((body, shadow)) = acl_types::player_colors::colors_for(color_id) else {
         return UNKNOWN;
     };
-    match (parse_hex(body), parse_hex(shadow)) {
+    match (parse_hex(&body), parse_hex(&shadow)) {
         (Some(body), Some(shadow)) => (body, shadow),
         _ => UNKNOWN,
     }

@@ -30,7 +30,7 @@ use crate::scan::{Pattern, Signature, find_pattern, resolve_signature};
 /// appears twice on purpose: a build with a game options manager uses that, and one
 /// without falls back to the player control singleton — the same field, filled from a
 /// different scan.
-const FILLS: [(&str, &str); 7] = [
+const FILLS: [(&str, &str); 8] = [
     ("innerNetClient", "innerNetClient.base"),
     ("meetingHud", "meetingHud"),
     ("gameData", "allPlayersPtr"),
@@ -38,6 +38,11 @@ const FILLS: [(&str, &str); 7] = [
     ("miniGame", "miniGame"),
     ("palette", "palette"),
     ("gameOptionsManager", "gameoptionsData"),
+    // `GameReader.ts:626` scans for this and reads a .NET string through it. The bundle
+    // ships both the signature and the chain, and the port scanned for neither -- so
+    // `AmongUsState::current_server` was the empty string on every frame, and the public
+    // lobby browser could not say which region a lobby was on.
+    ("serverManager", "serverManager_currentServer"),
 ];
 
 /// The fallback when a build has no game options manager.

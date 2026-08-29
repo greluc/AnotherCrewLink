@@ -40,6 +40,11 @@ pub struct ReadContext {
     pub loaded_mod: Mod,
     /// Which server the game is on. Read rarely and carried between frames.
     pub current_server: String,
+    /// Whether the game's colour palette has been read.
+    ///
+    /// `GameReader.loadColors` guards on `colorsInitialized` for the same reason: it is
+    /// two pointer walks and a loop, for a table that does not change while a game runs.
+    pub colors_read: bool,
     /// How many more frames the menu may be held for.
     ///
     /// `GameReader.menuUpdateTimer`, and it starts at 20 there. See the hold in
@@ -65,6 +70,7 @@ impl ReadContext {
             previous: None,
             loaded_mod,
             current_server: String::new(),
+            colors_read: false,
             menu_update_timer: MENU_HOLD_FRAMES,
             last_player_ptr: 0,
         }
@@ -302,6 +308,34 @@ pub fn read_state(
         .as_ref()
         .map_or(GameState::Unknown, |state| state.game_state);
 
+    // Which region the game is connected to.
+    //
+    // `GameReader.ts:285-291` reads it when it has nothing, or on a transition out of the
+    // menu -- never every frame, because it is a pointer walk and a .NET string for a value
+    // that changes when somebody picks a different region. The same condition here.
+    //
+    // Nothing read it at all until 2026-08-29: the `serverManager` signature was not in
+    // `FILLS`, so the chain was never filled and `current_server` was the empty string on
+    // every frame. The public lobby browser shows it, and `keep_listed` sends it to the
+    // server, so a lobby this client advertised was a lobby with no region against it.
+    // The game's own palette, once. `GameReader.ts:220` calls `loadColors` every frame and
+    // it returns immediately once it has succeeded; the guard is the same one.
+    let player_colors = if context.colors_read {
+        None
+    } else {
+        let read = read_palette(memory, base, offsets);
+        context.colors_read = read.is_some();
+        read
+    };
+
+    let leaving_the_menu = old_game_state != game_state
+        && matches!(old_game_state, GameState::Menu | GameState::Unknown);
+    if (context.current_server.is_empty() || leaving_the_menu)
+        && let Some(read) = read_current_server(memory, base, offsets)
+    {
+        context.current_server = read;
+    }
+
     // Keep reporting the menu for a few frames after the game says lobby.
     //
     // Leaving the menu into a lobby is not one event in memory. The client reports the
@@ -394,6 +428,7 @@ pub fn read_state(
         light_radius_changed: light_radius != previous_light,
         closed_doors: systems.closed_doors,
         current_server: context.current_server.clone(),
+        player_colors,
         max_players: u32::from(max_players),
         mod_id: context.loaded_mod.id().to_owned(),
         old_meeting_hud: offsets.old_meeting_hud,
@@ -474,6 +509,112 @@ fn position(read: Option<f32>) -> f64 {
     } else {
         999.0
     }
+}
+
+/// The most colours a palette may declare.
+///
+/// `GameReader.ts:675` refuses anything above three hundred. The number is a sanity bound
+/// on a length read out of another process, not a limit on the game: eighteen today, and a
+/// count of nine million is a pointer that has been reused for something else.
+const MAX_COLORS: u32 = 300;
+
+/// The colour the game uses for the rainbow cosmetic, as `loadColors` recognises it.
+///
+/// `4278190080` is opaque black in the game's ABGR packing, which no crewmate is. Reading
+/// it at some index means that index is the rainbow rather than a colour.
+const RAINBOW_PACKED: u32 = 4_278_190_080;
+
+/// What the first colour must be for the read to be believed.
+///
+/// `GameReader.ts:687` bails when index zero is not this. It is the game's red, and a
+/// palette that does not start with it is a pointer walk that landed somewhere else --
+/// which produces eighteen plausible-looking colours that are all wrong.
+const FIRST_COLOR: u32 = 4_279_308_742;
+
+/// The game's colour palette, or `None` if it cannot be believed.
+///
+/// A port of `GameReader.loadColors`. The port scanned for the `palette` signature on
+/// every attach and read nothing through it, so every client ran on the twelve compiled-in
+/// colours and drew the game's last six as grey.
+fn read_palette(
+    memory: &dyn ProcessMemory,
+    base: u64,
+    offsets: &Offsets,
+) -> Option<Vec<(String, String)>> {
+    let palette = follow(memory, base, top_level_chain(offsets, "palette")).ok()?;
+    let bodies = follow(
+        memory,
+        palette,
+        top_level_chain(offsets, "palette_playercolor"),
+    )
+    .ok()?;
+    let shadows = follow(
+        memory,
+        palette,
+        top_level_chain(offsets, "palette_shadowColor"),
+    )
+    .ok()?;
+
+    let count = read_u32_at(memory, shadows, first_offset(offsets, "playerCount")).unwrap_or(0);
+    if count == 0 || count > MAX_COLORS {
+        return None;
+    }
+
+    // The array starts where the player table's does, which is the same header size.
+    let start = first_offset(offsets, "playerAddrPtr").unwrap_or(0);
+    let mut colors = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let step = start.checked_add(i64::from(index) * 4)?;
+        let body = read_u32_at(memory, bodies, Some(step))?;
+        let shadow = read_u32_at(memory, shadows, Some(step))?;
+        if index == 0 && body != FIRST_COLOR {
+            // Not the palette. See `FIRST_COLOR`.
+            return None;
+        }
+        colors.push((packed_to_hex(body), packed_to_hex(shadow)));
+    }
+    Some(colors)
+}
+
+/// One packed colour as the hex string the rest of the client uses.
+///
+/// The game stores ABGR with the alpha in the top byte, which is why the shifts look
+/// backwards: `numberToColorHex` in the Electron client does the same reordering.
+/// The rainbow sentinel keeps its own value so that whoever reads the table can tell it
+/// apart, rather than being rendered as the black it packs to.
+fn packed_to_hex(packed: u32) -> String {
+    if packed == RAINBOW_PACKED {
+        return "#000000".to_owned();
+    }
+    let red = packed & 0xFF;
+    let green = (packed >> 8) & 0xFF;
+    let blue = (packed >> 16) & 0xFF;
+    format!("#{red:02X}{green:02X}{blue:02X}")
+}
+
+/// The longest region name worth reading.
+///
+/// A region is "North America", "Asia" or a self-hosted address; sixty-four characters is
+/// far past any of them and far short of a field that has been reused for something else.
+const MAX_SERVER_NAME: usize = 64;
+
+/// The region the game is connected to, as the game holds it.
+///
+/// `GameReader.ts:726-733`: follow `serverManager_currentServer` from the module base and
+/// read a .NET string from where it lands. `None` on any failure, which is what an
+/// unfilled signature or a build that moved the field looks like -- and the caller then
+/// keeps whatever it had, which is the Electron reader's behaviour too.
+fn read_current_server(memory: &dyn ProcessMemory, base: u64, offsets: &Offsets) -> Option<String> {
+    let at = follow(
+        memory,
+        base,
+        top_level_chain(offsets, "serverManager_currentServer"),
+    )
+    .ok()?;
+    let read = crate::dotnet::read_string(memory, at, MAX_SERVER_NAME).ok()?;
+    // An empty read is "could not" rather than "is empty": the field is a region name and
+    // the game never leaves it blank once it has connected.
+    (!read.is_empty()).then_some(read)
 }
 
 /// Walks a chain and reads a float from where it lands.

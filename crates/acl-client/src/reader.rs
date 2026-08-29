@@ -129,7 +129,21 @@ impl Reader {
                         self.trouble = None;
                     }
                 }
-                Ok(Report::Frame(state)) => self.latest = Some(state),
+                Ok(Report::Frame(state)) => {
+                    // The palette travels on one frame per attach and nothing else reads
+                    // it, so it is adopted here rather than carried further. See
+                    // `acl_types::player_colors::adopt`: the avatar, the overlay and the
+                    // recoloured sprites all have to agree about what colour seven is.
+                    if let Some(colors) = state.player_colors.clone() {
+                        acl_core::log_info!(
+                            "reader",
+                            "the game's palette has {} colours",
+                            colors.len()
+                        );
+                        acl_types::player_colors::adopt(colors);
+                    }
+                    self.latest = Some(state);
+                }
                 // Cleared rather than left standing. A frame from a helper that has gone
                 // places everybody where they were when it went, and a player who walked
                 // away is then still audible from where they used to be.

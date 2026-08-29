@@ -38,20 +38,66 @@ pub const DEFAULT_PLAYER_COLORS: [(&str, &str); 12] = [
 /// it rather than index the table with it.
 pub const RAINBOW_COLOR_ID: i32 = -99234;
 
+/// The palette the game is actually using, once something has read it.
+///
+/// The table above is twelve colours because `src/common/playerColors.ts` is twelve
+/// colours: it is the *fallback*, and the Electron client replaces it at runtime with what
+/// it reads out of the game's `Palette` class. Among Us has had eighteen since the Airship
+/// update, so a client running on the fallback alone draws the last six as grey -- and a
+/// mod that changes the palette is not represented at all.
+///
+/// The port scanned for the `palette` signature on every attach and read nothing through
+/// it. This is where what it reads goes.
+///
+/// A process-wide value rather than a parameter, for the reason the module documentation
+/// already gives about the table: the avatar, the overlay and the recoloured sprites all
+/// have to agree about what colour seven is, and they reach this without depending on each
+/// other. There is one game and one palette.
+static ADOPTED: std::sync::RwLock<Option<Vec<(String, String)>>> = std::sync::RwLock::new(None);
+
+/// Takes the palette read out of the game.
+///
+/// Replaces whatever was there. A palette that fails to read leaves the last good one
+/// standing rather than reverting to the fallback -- a crewmate whose colour flickers
+/// between the game's and this table's is worse than one that is a frame stale.
+pub fn adopt(colors: Vec<(String, String)>) {
+    if colors.is_empty() {
+        return;
+    }
+    if let Ok(mut held) = ADOPTED.write() {
+        *held = Some(colors);
+    }
+}
+
+/// Whether a palette has been read out of the game.
+#[must_use]
+pub fn adopted() -> bool {
+    ADOPTED.read().is_ok_and(|held| held.is_some())
+}
+
 /// The body and shadow for a colour id.
 ///
 /// `None` for the rainbow sentinel and for anything out of range. Out of range is not
 /// impossible: the colour is read out of another process's memory, and a game update that
 /// adds a colour produces one before this table knows about it. Returning `None` gives
 /// the caller a chance to draw something rather than panic on an index.
+///
+/// The game's own palette first, when one has been read. See [`adopt`].
 #[must_use]
-pub fn colors_for(color_id: i32) -> Option<(&'static str, &'static str)> {
+pub fn colors_for(color_id: i32) -> Option<(String, String)> {
     if color_id == RAINBOW_COLOR_ID {
         return None;
     }
-    usize::try_from(color_id)
-        .ok()
-        .and_then(|index| DEFAULT_PLAYER_COLORS.get(index).copied())
+    let index = usize::try_from(color_id).ok()?;
+    if let Ok(held) = ADOPTED.read()
+        && let Some(colors) = held.as_ref()
+        && let Some(pair) = colors.get(index)
+    {
+        return Some(pair.clone());
+    }
+    DEFAULT_PLAYER_COLORS
+        .get(index)
+        .map(|(body, shadow)| ((*body).to_owned(), (*shadow).to_owned()))
 }
 
 /// Whether this id is the rainbow cosmetic rather than an index.

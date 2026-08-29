@@ -202,6 +202,19 @@ pub struct AmongUsState {
     pub closed_doors: Vec<u32>,
     /// Which server the game is on.
     pub current_server: String,
+    /// The game's own colour palette, on the one frame it is read.
+    ///
+    /// `None` on every other frame, and that is the point. Among Us has had eighteen crew
+    /// colours since the Airship update and `src/common/playerColors.ts` has twelve --
+    /// which is why the Electron client reads the real ones out of the game's `Palette`
+    /// class and why this must too, or the last six draw grey. A mod that changes the
+    /// palette is not represented at all otherwise.
+    ///
+    /// Carried once rather than every frame because a frame crosses a named pipe five
+    /// times a second and eighteen pairs of hex strings is three hundred bytes of it. The
+    /// receiver keeps the last one it was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_colors: Option<Vec<(String, String)>>,
     /// The lobby's player limit.
     pub max_players: u32,
     /// Which mod is loaded.
