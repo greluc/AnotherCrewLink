@@ -717,6 +717,94 @@ struct Wearing {
 
 const OVERLAY_SPRITE: i32 = 56;
 
+/// How wide a name column is, in pixels.
+///
+/// Among Us caps a name at ten characters, and ten characters at [`OVERLAY_SPRITE`]'s text
+/// size come to a little under this. A name that would be wider is drawn narrower rather
+/// than allowed to run off the strip -- the shipped overlay lets it run over the game,
+/// which it can do because it is a web page over a window and this is a fixed buffer.
+#[cfg(windows)]
+const OVERLAY_NAME_WIDTH: i32 = 128;
+
+/// How wide the name column is for a position, in pixels, or zero for none.
+///
+/// The two "with names" positions keep names even when compact; the plain side columns
+/// lose them then, and a row never has them. `Position::shows_names` is the whole rule and
+/// it is `Overlay.tsx:143`'s.
+#[cfg(windows)]
+fn name_column(position: acl_ui::overlay_layout::Position, compact: bool) -> i32 {
+    if position.shows_names(compact) {
+        OVERLAY_NAME_WIDTH
+    } else {
+        0
+    }
+}
+
+/// What the four overlay settings say.
+#[cfg(windows)]
+struct OverlaySettings {
+    /// Whether there is an overlay at all.
+    enabled: bool,
+    /// Whether a meeting gets the seats layout rather than the strip.
+    meeting: bool,
+    /// Where the strip goes.
+    position: acl_ui::overlay_layout::Position,
+    /// Whether it is the compact form, which the two named positions force.
+    compact: bool,
+}
+
+/// Rasterised names, by the text they were drawn from.
+///
+/// Names change when somebody joins, leaves or renames, which is rarely; the overlay is
+/// composed ten times a second. Rasterising costs a clone of the whole font atlas, so
+/// without this the overlay would copy megabytes a second to draw the same nine words.
+#[cfg(windows)]
+#[derive(Default)]
+struct NamePlates {
+    drawn: std::collections::HashMap<String, acl_ui::sprite::Bitmap>,
+}
+
+#[cfg(windows)]
+impl NamePlates {
+    /// The plate for each name, drawing the ones not seen before.
+    ///
+    /// Returns `None` for a name that could not be drawn at all -- empty, or laid out to
+    /// nothing -- and the caller then draws no name rather than an empty plate.
+    fn plates(
+        &mut self,
+        ctx: &egui::Context,
+        names: &[String],
+        pixels: f32,
+    ) -> Vec<Option<acl_ui::sprite::Bitmap>> {
+        let wanted: Vec<String> = names
+            .iter()
+            .filter(|name| !self.drawn.contains_key(*name))
+            .cloned()
+            .collect();
+        if !wanted.is_empty() {
+            // One call for all of them, because each one copies the font atlas.
+            for (name, drawn) in
+                wanted
+                    .iter()
+                    .zip(acl_ui::text::lines(ctx, &wanted, pixels, (255, 255, 255)))
+            {
+                if let Some(drawn) = drawn {
+                    self.drawn.insert(name.clone(), acl_ui::text::plate(&drawn));
+                }
+            }
+        }
+        // Anybody who has left. Bounded rather than tidy: a lobby is fifteen names and a
+        // session is a few hundred, but nothing here should grow without a limit.
+        if self.drawn.len() > 256 {
+            self.drawn.retain(|name, _| names.contains(name));
+        }
+        names
+            .iter()
+            .map(|name| self.drawn.get(name).cloned())
+            .collect()
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let paths = match Paths::resolve(Environment {
         app_data: std::env::var("APPDATA").ok().as_deref(),
@@ -1202,8 +1290,12 @@ struct Client {
     /// helper would act on either correctly, and a command five times a second for a state
     /// that has not changed is a pipe carrying nothing.
     overlay_shown: bool,
-    /// Whether the missing overlay names have been mentioned. Once per session.
-    warned_about_names: bool,
+    /// The overlay's rasterised player names, kept between frames.
+    ///
+    /// Rasterising one costs a copy of the whole font atlas, and the overlay is composed
+    /// ten times a second against names that change when somebody joins or leaves.
+    #[cfg(windows)]
+    names: NamePlates,
     /// The window level the viewport has been told about.
     ///
     /// Remembered rather than sent every frame: a viewport command is a round trip to
@@ -1294,36 +1386,15 @@ impl Client {
             overlay_due: Cadence::default(),
             game_window: GameWindow::default(),
             overlay_shown: false,
-            warned_about_names: false,
             adding_platform: String::new(),
             updates: updates::Updates::start(env!("CARGO_PKG_VERSION")),
             launch_trouble: None,
             listed: None,
             on_top: None,
+            #[cfg(windows)]
+            names: NamePlates::default(),
             watching_lobbies: false,
             devices: Devices::default(),
-        }
-    }
-
-    /// Says once that the overlay cannot draw the names this position promises.
-    ///
-    /// A setting that does nothing and says nothing is the worst of the three states it
-    /// could be in. `Position::shows_names` decides which positions put a name beside each
-    /// crewmate, and nothing draws one: `acl_ui::sprite` has no font and no glyph
-    /// rasteriser, so the two "with names" positions are indistinguishable from the plain
-    /// ones. That is a feature this port has not built rather than a wiring mistake, and it
-    /// is recorded as such in `docs/rust-port/11-audit-two-2026-08-29.md`.
-    #[cfg(windows)]
-    fn mention_missing_names(&mut self) {
-        let stored = self.settings.config();
-        let position = acl_ui::overlay_layout::Position::parse(&stored.text_at("overlayPosition"));
-        let compact = stored.bool_at("compactOverlay") || position.forces_compact();
-        if position.shows_names(compact) && !self.warned_about_names {
-            self.warned_about_names = true;
-            acl_core::log_warn!(
-                "overlay",
-                "this overlay position draws player names in 1.x and does not here yet, so it looks the same as the one without them"
-            );
         }
     }
 
@@ -1362,6 +1433,25 @@ impl Client {
         composited
     }
 
+    /// What the four overlay settings say, this frame.
+    ///
+    /// Read every frame rather than cached: they are changed on the settings page, which is
+    /// this same process, and a cached copy is one more thing to invalidate.
+    #[cfg(windows)]
+    fn overlay_settings(&self) -> OverlaySettings {
+        let settings = self.settings.config();
+        let position =
+            acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
+        OverlaySettings {
+            enabled: settings.bool_at("enableOverlay"),
+            // While a meeting is up the players go over the seats of the meeting table
+            // instead of into a corner, which is what `meetingOverlay` switches on.
+            meeting: settings.bool_at("meetingOverlay"),
+            compact: settings.bool_at("compactOverlay") || position.forces_compact(),
+            position,
+        }
+    }
+
     /// Composes one overlay frame and sends it across.
     ///
     /// Every part of this is decided elsewhere: `game_window` says where the game is and
@@ -1369,7 +1459,7 @@ impl Client {
     /// each of them into bytes. What is here is the arrangement -- a row along the top of
     /// the game, which is where `Overlay.tsx` puts it by default.
     #[cfg(windows)]
-    fn compose_overlay(&mut self, state: &acl_game::AmongUsState) {
+    fn compose_overlay(&mut self, ctx: &egui::Context, state: &acl_game::AmongUsState) {
         // Asked for before the reader is borrowed, because it needs `self` mutably: it
         // remembers the game's process id rather than looking it up again every time. See
         // [`GameWindow`].
@@ -1377,30 +1467,16 @@ impl Client {
         // Before the reader is borrowed, for the same reason the bounds are: this reads
         // `self.game_window` and `self.overlay_shown`.
         let showable = self.overlay_is_showable();
-        self.mention_missing_names();
 
         let Some(reader) = self.reader.as_ref() else {
             return;
         };
-        // The three settings that decide whether there is an overlay at all, read every
-        // frame rather than cached: they are changed on the settings page, which is this
-        // same process, and a cached copy is one more thing to invalidate.
-        let settings = self.settings.config();
-        let enabled = settings.bool_at("enableOverlay");
-        // While a meeting is up the players go over the seats of the meeting table instead
-        // of into a corner, which is what `meetingOverlay` switches on.
-        let meeting = settings.bool_at("meetingOverlay");
-        let position =
-            acl_ui::overlay_layout::Position::parse(&settings.text_at("overlayPosition"));
-        let compact = settings.bool_at("compactOverlay") || position.forces_compact();
-        // Said once, because a setting that does nothing and says nothing is the worst of
-        // the three states it could be in. `Position::shows_names` decides which positions
-        // draw a name beside each crewmate, and nothing draws one: `acl_ui::sprite` has no
-        // font and no glyph rasteriser, so the two "with names" positions are currently
-        // indistinguishable from the plain ones. That is a feature this port has not
-        // built rather than a wiring mistake, and it is recorded as such in
-        // docs/rust-port/11-audit-two-2026-08-29.md.
-
+        let OverlaySettings {
+            enabled,
+            meeting,
+            position,
+            compact,
+        } = self.overlay_settings();
         // Two more reasons to draw nothing, and both were missing until 2026-08-29.
         //
         // The game must be the window in front. The overlay is `WS_EX_TOPMOST` and nothing
@@ -1437,6 +1513,9 @@ impl Client {
         let local_talking = self.local_talking;
         let hearable = &self.hearable;
         let believed_dead = &self.dead;
+        // Whether this client is receiving that player at all, which is not the same as
+        // whether they are speaking: a peer whose connection has gone is silent for a
+        // reason the overlay should not draw as quiet.
         let can_hear = |client_id: i64| {
             link.socket_of(client_id)
                 .is_some_and(|socket| hearable.contains(socket))
@@ -1496,6 +1575,7 @@ impl Client {
             },
             shown.len(),
             OVERLAY_SPRITE,
+            name_column(position, compact),
         );
         let Some(laid) = laid else {
             // Hidden, or nobody to draw. An empty strip is still a rectangle of nothing
@@ -1507,7 +1587,8 @@ impl Client {
             return;
         };
 
-        let sprites = Self::strip_sprites(&mut self.hats, &shown, state, &laid);
+        let sprites =
+            Self::strip_sprites(&mut self.hats, &mut self.names, ctx, &shown, state, &laid);
 
         reader.draw_overlay(
             (
@@ -1557,8 +1638,60 @@ impl Client {
     /// settings, deciding whether there is anything to draw, laying it out, and drawing
     /// it. This is the last one.
     #[cfg(windows)]
+    /// The name beside each crewmate, for the positions that show one.
+    ///
+    /// Placed inside the box `lay_out` reserved: flush against the crewmates and ragged on
+    /// the outside, which is the edge a reader's eye follows down the column. A name wider
+    /// than its box is drawn from the flush edge and loses its far end, rather than running
+    /// out of the strip -- the shipped overlay lets it run over the game, which it can do
+    /// because it is a web page over a window and this is a fixed buffer.
+    #[cfg(windows)]
+    fn name_sprites(
+        plates: &mut NamePlates,
+        ctx: &egui::Context,
+        shown: &[acl_ui::roster::Shown],
+        state: &acl_game::AmongUsState,
+        laid: &acl_ui::overlay_layout::Layout,
+    ) -> Vec<(i32, i32, acl_ui::sprite::Bitmap)> {
+        let names: Vec<String> = shown
+            .iter()
+            .map(|entry| {
+                state
+                    .players
+                    .get(entry.at)
+                    .map(|player| player.name.clone())
+                    .unwrap_or_default()
+            })
+            .collect();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a sprite is tens of pixels across"
+        )]
+        let pixels = OVERLAY_SPRITE as f32 * acl_ui::text::NAME_HEIGHT;
+
+        plates
+            .plates(ctx, &names, pixels)
+            .into_iter()
+            .zip(laid.names.iter())
+            .filter_map(|(plate, box_)| {
+                let plate = plate?;
+                let x = if laid.names_align_right {
+                    // Flush right: the far end of an over-long name falls off the outside,
+                    // which is the edge away from the crewmates.
+                    box_.x + box_.width - plate.width
+                } else {
+                    box_.x
+                };
+                let y = box_.y + (box_.height - plate.height) / 2;
+                Some((x, y, plate))
+            })
+            .collect()
+    }
+
     fn strip_sprites(
         hats: &mut hat_store::Loader,
+        plates: &mut NamePlates,
+        ctx: &egui::Context,
         shown: &[acl_ui::roster::Shown],
         state: &acl_game::AmongUsState,
         laid: &acl_ui::overlay_layout::Layout,
@@ -1601,6 +1734,10 @@ impl Client {
             }
         }
         Self::dress(hats, &mut sprites, &wearing);
+        // The names go on after the artwork, so a plate is never underneath a hat.
+        if !laid.names.is_empty() {
+            sprites.extend(Self::name_sprites(plates, ctx, shown, state, laid));
+        }
         sprites
     }
 
@@ -3404,7 +3541,7 @@ impl eframe::App for Client {
                 .as_ref()
                 .and_then(|reader| reader.latest().cloned())
         {
-            self.compose_overlay(&state);
+            self.compose_overlay(ctx, &state);
         }
 
         // Every frame while a capture is running, because it reads the key state rather

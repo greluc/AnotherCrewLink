@@ -107,6 +107,19 @@ pub struct Layout {
     pub placement: Rect,
     /// Where each crewmate goes inside it, in the order they were given.
     pub sprites: Vec<(i32, i32)>,
+    /// Where each name may be drawn, when the position shows names.
+    ///
+    /// One box per crewmate, in the same order, and empty when names are off. A box rather
+    /// than a point because names are not all one width: the caller has the rasterised
+    /// text and fits it in, which is also what clips a name too long for the strip.
+    pub names: Vec<Rect>,
+    /// Whether a name sits against the right edge of its box rather than the left.
+    ///
+    /// `overlay.css:108-114` floats a name to the same side the strip is on, so the names
+    /// in a right-hand column line their *right* edges up against the crewmates and a
+    /// left-hand column lines up its left ones. Ragged on the outside, flush on the
+    /// inside — which is the edge a reader's eye follows down the column.
+    pub names_align_right: bool,
 }
 
 /// How far a crewmate sits from the edge of the strip, and from the next one.
@@ -136,17 +149,26 @@ pub fn lay_out(
     game: Rect,
     count: usize,
     sprite: i32,
+    name_width: i32,
 ) -> Option<Layout> {
     if position == Position::Hidden || count == 0 || sprite <= 0 {
         return None;
     }
     let count = i32::try_from(count).unwrap_or(i32::MAX);
     let along = count * sprite + (count + 1) * GAP;
-    let across = sprite + 2 * GAP;
 
     // In the menu the shipped overlay ignores the position setting and stacks down the
     // left, below the game's own menu.
     let column = in_menu || position.is_column();
+    // Names only in a side column, and never in the menu: the menu strip sits where the
+    // game's own menu is not, and widening it is how it stops doing that. `Overlay.tsx`
+    // draws no name there either -- `showName` is gated on `isOnSide`.
+    let names = if column && !in_menu && name_width > 0 {
+        name_width
+    } else {
+        0
+    };
+    let across = sprite + 2 * GAP + names;
     let (width, height) = if column {
         (across, along)
     } else {
@@ -169,12 +191,49 @@ pub fn lay_out(
         }
     };
 
-    let sprites = (0..count)
+    // The crewmates sit against the *outside* edge, so the names fill the gap between
+    // them and the game -- which is the side a right-hand strip's names have to be on if
+    // they are not to run off the screen.
+    let outside_right = matches!(position, Position::Right | Position::RightNamed);
+    let crewmate_x = if names > 0 && outside_right {
+        GAP + names
+    } else {
+        GAP
+    };
+
+    let sprites: Vec<(i32, i32)> = (0..count)
         .map(|at| {
             let offset = GAP + at * (sprite + GAP);
-            if column { (GAP, offset) } else { (offset, GAP) }
+            if column {
+                (crewmate_x, offset)
+            } else {
+                (offset, GAP)
+            }
         })
         .collect();
+
+    let name_boxes = if names > 0 {
+        let box_x = if outside_right {
+            GAP
+        } else {
+            GAP + sprite + GAP
+        };
+        sprites
+            .iter()
+            .map(|(_, top)| Rect {
+                x: box_x,
+                // Centred on the crewmate rather than dropped by a fraction of the game
+                // window. `overlay.css:83` uses `3vh`, which is a proportion of something
+                // this layout does not work in; beside the thing it labels is what that
+                // number is approximating.
+                y: *top,
+                width: names.saturating_sub(GAP),
+                height: sprite,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Some(Layout {
         placement: Rect {
@@ -184,6 +243,8 @@ pub fn lay_out(
             height,
         },
         sprites,
+        names: name_boxes,
+        names_align_right: outside_right,
     })
 }
 
@@ -373,7 +434,7 @@ mod tests {
     const SPRITE: i32 = 56;
 
     fn laid(position: Position, count: usize) -> Layout {
-        lay_out(position, false, GAME, count, SPRITE).expect("something to draw")
+        lay_out(position, false, GAME, count, SPRITE, 0).expect("something to draw")
     }
 
     /// Every value the settings can hold reads as itself, and the two `1` variants are not
@@ -430,9 +491,92 @@ mod tests {
     /// sitting over the game.
     #[test]
     fn there_is_nothing_to_place_when_there_is_nothing_to_draw() {
-        assert!(lay_out(Position::Hidden, false, GAME, 5, SPRITE).is_none());
-        assert!(lay_out(Position::Top, false, GAME, 0, SPRITE).is_none());
-        assert!(lay_out(Position::Top, false, GAME, 5, 0).is_none());
+        assert!(lay_out(Position::Hidden, false, GAME, 5, SPRITE, 0).is_none());
+        assert!(lay_out(Position::Top, false, GAME, 0, SPRITE, 0).is_none());
+        assert!(lay_out(Position::Top, false, GAME, 5, 0, 0).is_none());
+    }
+
+    /// A name column, which the two side positions get by default.
+    fn named(position: Position, count: usize) -> Layout {
+        lay_out(position, false, GAME, count, SPRITE, NAME_BOX).expect("a strip")
+    }
+
+    /// Wide enough for a ten-character name at this sprite size, which is what Among Us
+    /// allows.
+    const NAME_BOX: i32 = 120;
+
+    #[test]
+    fn a_name_column_widens_the_strip_and_nothing_else() {
+        let plain = laid(Position::Right, 4);
+        let named = named(Position::Right, 4);
+        assert_eq!(
+            named.placement.width,
+            plain.placement.width + NAME_BOX,
+            "the strip grows by exactly the column"
+        );
+        assert_eq!(
+            named.placement.height, plain.placement.height,
+            "and not along the run"
+        );
+        // A right-hand strip is pinned to the right edge, so widening it moves its left
+        // edge out rather than pushing the crewmates off the screen.
+        assert_eq!(
+            named.placement.x + named.placement.width,
+            plain.placement.x + plain.placement.width
+        );
+    }
+
+    #[test]
+    fn the_names_are_between_the_crewmates_and_the_game() {
+        // On the right the strip hugs the screen edge, so a name outboard of the crewmate
+        // would be off it. Inboard for `Right`, outboard for `Left` -- both times towards
+        // the middle of the screen.
+        let right = named(Position::Right, 3);
+        assert_eq!(right.names.len(), right.sprites.len());
+        for (name, (x, _)) in right.names.iter().zip(&right.sprites) {
+            assert!(
+                name.x + name.width <= *x,
+                "the name is left of the crewmate"
+            );
+        }
+        assert!(right.names_align_right, "flush against the crewmates");
+
+        let left = named(Position::Left, 3);
+        for (name, (x, _)) in left.names.iter().zip(&left.sprites) {
+            assert!(name.x >= x + SPRITE, "the name is right of the crewmate");
+        }
+        assert!(!left.names_align_right);
+    }
+
+    #[test]
+    fn a_name_box_lines_up_with_the_crewmate_it_labels() {
+        let laid = named(Position::Right, 5);
+        for (name, (_, y)) in laid.names.iter().zip(&laid.sprites) {
+            assert_eq!(name.y, *y);
+            assert_eq!(name.height, SPRITE);
+        }
+    }
+
+    #[test]
+    fn a_row_and_the_menu_get_no_names() {
+        // `showName` is gated on `isOnSide`, and the menu strip sits where the game's own
+        // menu is not -- widening it is how it stops doing that.
+        let row = lay_out(Position::Top, false, GAME, 4, SPRITE, NAME_BOX).expect("a strip");
+        assert!(row.names.is_empty());
+        assert_eq!(
+            row.placement.height,
+            laid(Position::Top, 4).placement.height
+        );
+
+        let menu = lay_out(Position::Right, true, GAME, 4, SPRITE, NAME_BOX).expect("a strip");
+        assert!(menu.names.is_empty());
+        assert_eq!(
+            menu.placement.width,
+            lay_out(Position::Right, true, GAME, 4, SPRITE, 0)
+                .expect("a strip")
+                .placement
+                .width
+        );
     }
 
     /// A row runs across and a column runs down, and the strip is shaped to match.
@@ -482,7 +626,7 @@ mod tests {
             width: 1280,
             height: 720,
         };
-        let laid = lay_out(Position::Right, false, windowed, 3, SPRITE).expect("a layout");
+        let laid = lay_out(Position::Right, false, windowed, 3, SPRITE, 0).expect("a layout");
         assert_eq!(
             laid.placement.x + laid.placement.width,
             windowed.x + windowed.width
@@ -502,7 +646,7 @@ mod tests {
             Position::Right,
             Position::RightNamed,
         ] {
-            let laid = lay_out(position, true, GAME, 3, SPRITE).expect("a layout");
+            let laid = lay_out(position, true, GAME, 3, SPRITE, 0).expect("a layout");
             placements.push(laid.placement);
         }
         assert!(
@@ -519,7 +663,7 @@ mod tests {
     /// rather than "somewhere".
     #[test]
     fn hidden_is_hidden_in_the_menu_too() {
-        assert!(lay_out(Position::Hidden, true, GAME, 3, SPRITE).is_none());
+        assert!(lay_out(Position::Hidden, true, GAME, 3, SPRITE, 0).is_none());
     }
 
     /// The strip never leaves the game window. A full lobby is fifteen, which is a row
@@ -533,12 +677,12 @@ mod tests {
             width: 1280,
             height: 720,
         };
-        let laid = lay_out(Position::Top, false, small, 15, SPRITE).expect("a layout");
+        let laid = lay_out(Position::Top, false, small, 15, SPRITE, 0).expect("a layout");
         assert!(laid.placement.width <= small.width);
         assert!(laid.placement.x >= small.x);
         assert!(laid.placement.x + laid.placement.width <= small.x + small.width);
 
-        let column = lay_out(Position::Left, false, small, 15, SPRITE).expect("a layout");
+        let column = lay_out(Position::Left, false, small, 15, SPRITE, 0).expect("a layout");
         assert!(column.placement.height <= small.height);
     }
 

@@ -25,6 +25,8 @@ pub mod server_url;
 pub mod settings;
 pub mod settings_screen;
 pub mod sprite;
+/// Rasterising a line of text, for the overlay's player names.
+pub mod text;
 pub mod views;
 pub mod window_state;
 pub mod worn;

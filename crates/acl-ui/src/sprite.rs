@@ -59,7 +59,11 @@ impl Bitmap {
     /// `coverage` is the antialiasing: how much of the pixel the shape covers, 0 to 1. The
     /// colour is multiplied by it here, which is what makes the result premultiplied
     /// without the caller having to think about it.
-    fn blend(&mut self, x: i32, y: i32, colour: (u8, u8, u8), coverage: f32) {
+    ///
+    /// Public to this crate since 2026-08-29, for [`crate::text`]: a glyph out of the font
+    /// atlas is a coverage value per pixel and needs exactly this, and duplicating it there
+    /// would be a second place for the premultiplication to be got wrong.
+    pub(crate) fn blend(&mut self, x: i32, y: i32, colour: (u8, u8, u8), coverage: f32) {
         if coverage <= 0.0 || x < 0 || y < 0 || x >= self.width || y >= self.height {
             return;
         }

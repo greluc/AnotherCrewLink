@@ -93,13 +93,18 @@ mod platform {
     /// stalled overlay therefore stopped proximity, which is the wrong way round: the
     /// overlay is the decoration and the state is the client.
     ///
-    /// 384 KiB is that frame twice over. It is kernel memory per pipe and there is one
-    /// pipe.
+    /// **Raised to 768 KiB on 2026-08-29, when the overlay learned to draw names.** A name
+    /// plate is its own sprite, and a full lobby's are 15 more of up to 128 by 40 -- 307,200
+    /// bytes, which took the frame to roughly 495,000 and back over 384 KiB. That is the
+    /// same stall as before, arriving by a different route, so the number moved with the
+    /// thing that changed it.
+    ///
+    /// It is kernel memory per pipe and there is one pipe.
     ///
     /// It bounds a *busy* reader, not a stopped one. A helper that stops reading entirely
     /// still blocks the writer once this fills -- and that is now recoverable rather than
     /// permanent: the reader thread notices a lost helper and starts another.
-    const BUFFER: u32 = 384 * 1024;
+    const BUFFER: u32 = 768 * 1024;
     // Written out rather than derived, because deriving it needs a cast and a cast is how
     // a buffer silently becomes too small. This says the same thing at compile time.
     const _: () = assert!(BUFFER as usize >= crate::MAX_FRAME);
