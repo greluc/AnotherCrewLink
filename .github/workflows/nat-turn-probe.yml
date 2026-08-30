@@ -1,0 +1,63 @@
+name: NAT and TURN probe
+
+# Manual only, and deliberately not part of any push or pull_request run. This talks to
+# the live signalling server and takes real relay allocations on it; running it per push
+# would be a standing load on that machine in exchange for a signal about the server
+# rather than about this repository. It also fails for reasons that have nothing to do
+# with the code -- a relay being restarted is not a broken commit.
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: Signalling server to probe
+        default: https://aucl.greluc.me
+        required: true
+
+jobs:
+  probe:
+    # A runner is the point. Asked from the maintainer's own network, "does the relay
+    # refuse its own address as a peer?" and "does it refuse the caller's address?" are
+    # the same question, because the relay and the caller share one public address there
+    # -- so the answer that matters cannot be read off. From here the two are different
+    # addresses, and the CreatePermission results separate them.
+    runs-on: ubuntu-latest
+
+    # Nothing is written, pushed or commented; the whole output is the job log.
+    permissions:
+      contents: read
+
+    # The probe retransmits and waits on several timeouts. Five minutes is far more than
+    # a healthy run needs and stops a blocked UDP path from holding a runner for an hour.
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.x
+
+      # Which egress this runner actually has, recorded before the probe rather than
+      # inferred from it afterwards. A sandbox that drops outbound UDP produces exactly
+      # the same output as a relay that is down, and that is the one confusion this whole
+      # exercise exists to avoid.
+      - name: Show the runner's own vantage point
+        run: |
+          echo "runner public address, over HTTPS:"
+          curl -s --max-time 10 https://api.ipify.org || echo "  (could not determine)"
+          echo
+          echo "server address:"
+          getent hosts aucl.greluc.me || echo "  (could not resolve)"
+
+      # No npm install. The probe speaks STUN, TURN and Engine.IO with Node built-ins
+      # only, which is why it can run here at all: this repository's dependencies build
+      # three native modules against a Windows toolchain.
+      - name: Probe NAT and TURN
+        env:
+          # Through the environment rather than interpolated into the shell line: the
+          # input is attacker-controlled on a public repository, and `run:` interpolation
+          # is how that becomes command execution.
+          SERVER: ${{ inputs.server }}
+        run: node scripts/nat-turn-probe.mjs "$SERVER"
