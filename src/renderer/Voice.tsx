@@ -303,6 +303,8 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	const relayCandidatesSeen = useRef<Record<string, number>>({});
 	/// Peers whose relay answered but had no reservation left to give.
 	const relayWasFull = useRef<Record<string, boolean>>({});
+	/// Said once per lobby: a relay was asked for and this server advertises none.
+	const warnedRelayUnavailable = useRef(false);
 	// tried, per socket id. See scheduleReconnect.
 	const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 	const reconnectAttempts = useRef<Record<string, number>>({});
@@ -689,6 +691,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		relayedPeers.current = {};
 		relayCandidatesSeen.current = {};
 		relayWasFull.current = {};
+		warnedRelayUnavailable.current = false;
 	}
 
 	function disconnectPeer(peer: string) {
@@ -1172,8 +1175,30 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						previous.destroy();
 					}
 					// Relay when the user asked for it, or when this peer's direct path has
-					// already failed twice and there is a relay to fall back to.
-					const relay = settingsRef.current.natFix || relayedPeers.current[peer] === true;
+					// already failed twice -- and only when there is a relay to force the
+					// connection through.
+					//
+					// `forceRelay` sets `iceTransportPolicy: 'relay'`, which discards every
+					// candidate that is not a relay one. With no relay advertised that leaves
+					// the connection with nothing to offer at all, so it cannot even attempt a
+					// path: the player hears nobody and nobody hears them, and the cause is the
+					// setting they turned on to fix exactly that.
+					//
+					// The other two ways into relay mode already check. The server-forced one
+					// checks when `clientPeerConfig` arrives, and the escalation below checks
+					// `hasRelay` before it sets `relayedPeers`. The user's own switch was the
+					// way through without a check, and it is the likeliest of the three to be
+					// taken: a player whose voice is broken turns on the setting named after
+					// their problem.
+					const relayWanted = settingsRef.current.natFix || relayedPeers.current[peer] === true;
+					const relay = relayWanted && hasRelay(iceConfig);
+					if (relayWanted && !relay && !warnedRelayUnavailable.current) {
+						warnedRelayUnavailable.current = true;
+						console.warn(
+							'A relay was asked for, but this server advertises none.',
+							'Connecting directly instead: forcing relay-only with no relay would gather no candidates at all.'
+						);
+					}
 					const connection = new Peer({
 						stream,
 						initiator,
