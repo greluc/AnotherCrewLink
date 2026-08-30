@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { OffsetsRejected, validateLookup, validateOffsets } from './offsetsValidator';
 
-// Gate G0 has two halves and they pull against each other: the validator must reject a
-// corpus of bad bundles, and it must accept every real file unchanged. A validator that
-// rejects real data is a self-inflicted outage, so the second half is tested first and
-// against the whole corpus rather than a sample.
+// Two halves that pull against each other: the validator must reject a corpus of bad
+// bundles, and it must accept every real file unchanged. A validator that rejects real
+// data is a self-inflicted outage, so the second half is tested first and against the
+// whole corpus rather than a sample.
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), '../../test/fixtures/offsets');
 

@@ -87,8 +87,8 @@ export const initializeIpcListeners = (): void => {
 // or the caller should be "await"'ing them.  If neither of these are the case
 // consider making it a "listener" instead for performance and readability
 export const initializeIpcHandlers = (): void => {
-	// The same ACL_RECORD that drives the memory recorder, so one variable turns on both
-	// halves of what gate G1 and G2 need and they cannot be captured out of step.
+	// The same ACL_RECORD that drives the memory recorder, so one variable turns on the
+	// frames and the voice decisions together and the two cannot be captured out of step.
 	ipcMain.handle(IpcHandlerMessages.REQUEST_VOICE_RECORDING, () => {
 		const name = process.env.ACL_RECORD;
 		return name ? { userData: app.getPath('userData'), name } : null;

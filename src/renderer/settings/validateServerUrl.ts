@@ -18,10 +18,9 @@
  * parse — `javascript:` and `data:` parse — but because they are the only two this client
  * knows how to connect to, and the others reach code that never expected them.
  *
- * `http:` is accepted, which means signalling can run in cleartext. That is recorded in
- * `docs/rust-port/08-dependency-review.md` as a finding rather than defended here; a
- * local server on a LAN is the case it exists for, and removing it is a decision with
- * users behind it.
+ * `http:` is accepted, which means signalling can run in cleartext. That is a known
+ * weakness rather than something defended here; a local server on a LAN is the case it
+ * exists for, and removing it is a decision with users behind it.
  *
  * **`discord.gg` is refused by name.** People paste invite links into text fields, and a
  * server URL field that accepted one would silently point every signal at Discord and

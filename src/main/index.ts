@@ -492,8 +492,7 @@ ${logDirectory()}`
 	// a bad bundle from, so reverting the mirror fixes the next download but not the copy
 	// already cached on a player's machine. This is what they have instead, and it is a
 	// button rather than an instruction to delete a file out of `userData`.
-	// Gate G1 of the Rust port compares the Rust reader against this one, frame for
-	// frame. Recording is off unless ACL_RECORD names a session.
+	// Off unless ACL_RECORD names a session. `recorder.ts` says what it captures and why.
 	startRecordingIfAsked();
 
 	ipcMain.handle(IpcHandlerMessages.RESET_OFFSETS, async () => {

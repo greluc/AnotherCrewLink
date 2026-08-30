@@ -10,6 +10,12 @@ files:
       - package.json
       - out
 
+# Hyphens, not the default `${productName} Setup ${version}.${ext}` with its spaces.
+# GitHub replaces a space in an asset name with a dot on upload, so the file the release
+# holds stops matching the `path` electron-builder wrote into `latest.yml`. It is also the
+# name 1.0.6 went out under, so the download people see does not change.
+artifactName: ${productName}-Setup-${version}.${ext}
+
 # Windows x64 only. Windows 11 is the floor and has no 32-bit edition, so there is no
 # ia32 target; Linux was dropped because nobody here can test it.
 win:

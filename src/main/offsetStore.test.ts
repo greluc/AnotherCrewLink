@@ -147,8 +147,8 @@ describe('fetchOffsetLookup', () => {
 	});
 
 	it('discards a cache that has been edited on disk between runs', async () => {
-		// Gate G0 asks for validation at load and not only at download. This is that
-		// criterion: the cache is written legitimately, then tampered with, then read.
+		// Validation happens at load and not only at download, and this is why: the cache
+		// is written legitimately, then tampered with on disk, then read back.
 		fetchFailingTimes(0);
 		await fetchOffsetLookup();
 

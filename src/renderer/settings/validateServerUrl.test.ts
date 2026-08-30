@@ -18,8 +18,8 @@ describe('validateServerUrl', () => {
 	});
 
 	it('accepts cleartext, which is a decision and not an oversight', () => {
-		// A local server on a LAN is the case it exists for. Recorded in
-		// `docs/rust-port/08-dependency-review.md` rather than defended here.
+		// A local server on a LAN is the case it exists for. A known weakness rather than
+		// something defended here.
 		expect(validateServerUrl('http://192.168.1.10:9736')).toBe(true);
 	});
 

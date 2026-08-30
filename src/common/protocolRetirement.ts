@@ -1,10 +1,8 @@
-// What a 1.x client shows when the server has stopped speaking 1.x.
+// What a client shows when the server has stopped speaking its protocol version.
 //
-// §4.12 item 6: when the switch-off happens the server "answers a 1.x handshake with a
-// message the 1.x client displays rather than closing the socket on it. A client that has
-// not updated must be told why it stopped working, in the app, in its own language — the 37
-// locale directories are already there. This is small work and it is the difference between
-// a sunset and an outage."
+// A client that has not updated must be told why it stopped working, in the app and in its
+// own language, rather than having its socket closed on it. That is the difference between
+// a sunset and an outage.
 //
 // THE ORDERING IS THE WHOLE OF THE DIFFICULTY, AND IT IS NOT SMALL.
 //
@@ -13,8 +11,8 @@
 // `socket.on('error')` does `setError(error.message)` and always has.
 //
 // So this has to be in the fleet's hands *before* the server starts sending it — which
-// means shipping it in an ordinary 1.x release, and waiting for that release to reach
-// people, before the switch-off. Ship the two together and everybody sees the raw sentinel:
+// means shipping it in an ordinary release, and waiting for that release to reach people,
+// before the switch-off. Ship the two together and everybody sees the raw sentinel:
 // technically a message, practically an outage with a serial number.
 //
 // That is why the sentinel is also readable English. If the ordering is got wrong anyway,

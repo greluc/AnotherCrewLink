@@ -12,12 +12,9 @@ jobs:
 
     permissions:
       contents: write
-      # `github-attestations` from §4.9 item 1, the same two `rust-release.yml` grants for
-      # the same action. With no code signing, this is what answers "prove this binary came
-      # from this commit" — and it answers it better than a certificate proves who built it.
-      #
-      # Missing here until the first rehearsal, because the attestation step was added at
-      # the same time as everything above it and the job had only ever needed `contents`.
+      # What the attestation needs. With no code signing, this is what answers "prove this
+      # binary came from this commit" — and it answers it better than a certificate proves
+      # who built it.
       id-token: write
       attestations: write
 
@@ -38,17 +35,13 @@ jobs:
         shell: bash
         run: npm ci || (echo "npm ci failed, retrying once" && npm ci)
 
-      # `--dir` and nothing else. Since 2026-08-27 this release is packaged by this
-      # project's own NSIS script rather than by electron-builder's, which is §4.9's
-      # instruction: "Prove the new NSIS script by shipping an **ordinary 1.0.x release**
-      # with it, so its CLI contract is tested against real 1.x updaters before it carries
-      # anything important."
-      #
-      # It used to be `--publish always`, which built the installer, wrote `latest.yml` and
-      # uploaded both. All three of those are now done below, deliberately and in order,
-      # because the last of them is what moves the fleet.
-      - name: Build the application, unpacked
-        run: npm run compile && npx electron-builder --win --x64 --dir
+      # `--publish never`, not `always`. electron-builder still writes `latest.yml` — the
+      # update info file is produced whenever a publish provider is configured, and only
+      # the upload is skipped — so the installer and the feed both exist here, and neither
+      # reaches anybody until a person publishes the draft below. That distinction is the
+      # whole point: uploading `latest.yml` is the act that moves every installed client.
+      - name: Build App
+        run: npm run dist:64 -- --publish never
 
       - name: Work out the version
         id: version
@@ -69,79 +62,18 @@ jobs:
             exit 1
           fi
 
-      - name: Install NSIS
-        run: choco install nsis --no-progress --yes
-
-      # `installer/legacy.nsi`, the same script `rust.yml` compiles and runs on every push.
-      # `-DOUT_FILE` is not passed: the default is the name 1.x has always published under,
-      # and `findFile` picks the single `.exe` in the release by extension.
-      - name: Package it with this project's own installer
+      # Both halves, before anything is drafted. A release with the installer and no
+      # `latest.yml` looks finished and updates nobody; the fleet goes on being told it is
+      # up to date, and that is discovered weeks later.
+      - name: Both halves of the release exist
         shell: bash
         run: |
-          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
-          "$makensis" -DVERSION=${{ steps.version.outputs.version }} \
-            -DSOURCE_DIR=../dist/win-unpacked installer/legacy.nsi
-          mv installer/AnotherCrewLink-Setup-*.exe dist/
-          ls -l dist/AnotherCrewLink-Setup-*.exe
-
-      # What it produced, installed and removed again before anybody is offered it. The same
-      # command line 1.x's updater will use -- `//S` and not `/S`, because Git Bash rewrites
-      # an argument that looks like a POSIX path before the program sees it, and the
-      # installer would not be silent.
-      - name: It installs and uninstalls silently
-        shell: bash
-        run: |
-          set +e
-          ./dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe --updated //S \
-            /D=$(cygpath -w "$PWD/proof") </dev/null >install.log 2>&1 &
-          installer=$!
-          for _ in $(seq 60); do kill -0 $installer 2>/dev/null || break; sleep 1; done
-          if kill -0 $installer 2>/dev/null; then
-            kill -9 $installer 2>/dev/null; wait $installer 2>/dev/null
-            echo "::error::the installer did not exit under /S; the fleet's updater would hang"
-            exit 1
-          fi
-          wait $installer
-          set -e
-
-          # File for file against what was packaged, not a spot check. `legacy.nsi` copies a
-          # tree, and the way a tree copy goes wrong is by omitting something -- a DLL whose
-          # name changed with the Electron version, a directory the recursion missed. Testing
-          # for the .exe and the asar would pass for an installation that cannot start.
-          (cd dist/win-unpacked && find . -type f | sort) > packaged.txt
-          (cd proof && find . -type f | sort) > installed.txt
-          # One-directional: everything packaged must have arrived, and the installer is
-          # allowed to add its own Uninstall.exe, which is not in the packaged tree.
-          missing=$(comm -23 packaged.txt installed.txt)
-          if [ -n "$missing" ]; then
-            echo "::error::the installer did not lay down every packaged file"
-            echo "$missing"
-            exit 1
-          fi
-          echo "all $(wc -l < packaged.txt) packaged files arrived"
-
-          ./proof/Uninstall.exe //S _?=$(cygpath -w "$PWD/proof") </dev/null >/dev/null 2>&1
-          for _ in $(seq 30); do [ -f proof/AnotherCrewLink.exe ] || break; sleep 1; done
-          test ! -f proof/AnotherCrewLink.exe
-          # And what it left behind. `resources` and `locales` hold everything of any size;
-          # an uninstaller that leaves them leaves most of the installation.
-          test ! -d proof/resources
-          test ! -d proof/locales
-
-      - name: Build the feed generator
-        run: cargo build --locked --release --features ceremony -p acl-updater --bin acl-release
-
-      # `latest.yml`, which electron-builder used to write and no longer does. The digest and
-      # size are read off the artefact; the date is passed in rather than taken from the
-      # clock, so two builds of the same commit produce the same file.
-      - name: Describe the release to the 1.x fleet
-        shell: bash
-        run: |
-          ./target/release/acl-release feed \
-            --version ${{ steps.version.outputs.version }} \
-            --artefact dist/AnotherCrewLink-Setup-${{ steps.version.outputs.version }}.exe \
-            --released "$(date -u -d "$(git log -1 --format=%cI)" +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --into dist/latest.yml
+          version="${{ steps.version.outputs.version }}"
+          test -f "dist/AnotherCrewLink-Setup-$version.exe" || {
+            echo "::error::electron-builder produced no installer for $version"; exit 1; }
+          test -f dist/latest.yml || {
+            echo "::error::no dist/latest.yml. electron-builder writes it from the publish \
+          block in electron-builder.yml; if that block went, the fleet gets no update."; exit 1; }
           cat dist/latest.yml
 
       - name: Attest the installer
@@ -165,8 +97,8 @@ jobs:
           path: 'dist/win-unpacked'
 
       # Drafted, never published, and `latest.yml` is what makes that distinction matter.
-      # Publishing a release containing it is the act that moves every installed 1.x client;
-      # a workflow that did it automatically would be a fleet migration that happened because
+      # Publishing a release containing it is the act that moves every installed client;
+      # a workflow that did it automatically would be a fleet update that happened because
       # somebody clicked "Run workflow". So a person opens the draft and presses the button.
       # The notes come from CHANGELOG.md, at creation, and that is not tidiness.
       #
@@ -192,8 +124,6 @@ jobs:
           cutting the release, not after -- after is where the accident lives."
             exit 1
           fi
-          printf '\n---\n\nPackaged by `installer/legacy.nsi`, not by electron-builder.\n' \
-            >> notes.md
 
           gh release create "v$version" \
             --draft \

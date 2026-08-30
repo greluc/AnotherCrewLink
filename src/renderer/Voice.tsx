@@ -388,8 +388,7 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 	/**
 	 * The voice decision, with its answer written down when recording.
 	 *
-	 * Gate G2's second criterion compares the Rust `voice_params` against this on every
-	 * recorded tuple, and the comparison needs both halves. The answer is not the return
+	 * A recorded tuple has to carry the whole answer, and the answer is not the return
 	 * value alone: pan position, the muffle's settings and whether reverb is in the path
 	 * are all written onto live nodes. They are read back off those nodes here rather
 	 * than captured inside the decision, which leaves the decision untouched and records
@@ -763,9 +762,9 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 		setSocketClients(socketClientsRef.current);
 	};
 
-	// Turned on by the same ACL_RECORD that drives the memory recorder, so gate G1's
-	// frames and gate G2's tuples are captured from the same session and cannot be out of
-	// step with each other.
+	// Turned on by the same ACL_RECORD that drives the memory recorder, so the frames and
+	// the voice decisions come from the same session and cannot be out of step with each
+	// other.
 	useEffect(() => {
 		ipcRenderer
 			.invoke(IpcHandlerMessages.REQUEST_VOICE_RECORDING)
@@ -1723,10 +1722,10 @@ const Voice: React.FC<VoiceProps> = ({ t, error: initialError }: VoiceProps) => 
 						ERROR
 					</Typography>
 					<Typography align="center" style={{ whiteSpace: 'pre-wrap' }}>
-						{/* The switch-off arrives as a server error: §4.12 item 6 answers a 1.x
-						    handshake with a message rather than closing the socket, so the user
-						    is told why they stopped being able to hear anybody. Translated here
-						    rather than where it arrives, so it follows the language setting. */}
+						{/* A retired protocol version arrives as a server error rather than as a
+						    closed socket, so the user is told why they stopped being able to hear
+						    anybody. Translated here rather than where it arrives, so it follows
+						    the language setting. */}
 						{error && retirementMessage(error, t)}
 						{initialError}
 					</Typography>

@@ -6,10 +6,9 @@ import type { ILobbySettings, ISettings } from '../common/ISettings';
 /**
  * Records what the voice decision was asked and what it answered.
  *
- * Gate G2's second criterion is that the Rust `voice_params` matches this client on every
- * recorded tuple. `calculateVoiceAudio` cannot be compared directly: it returns a gain and
- * writes everything else onto live Web Audio nodes, so the answer is spread across a
- * graph. This captures both halves — the inputs, and the node state the call left behind.
+ * `calculateVoiceAudio` cannot be read back after the fact: it returns a gain and writes
+ * everything else onto live Web Audio nodes, so the answer is spread across a graph. This
+ * captures both halves — the inputs, and the node state the call left behind.
  *
  * Most outputs are read back off the nodes rather than captured inside the decision's own
  * branches: it leaves the decision untouched, and it records what actually reached the

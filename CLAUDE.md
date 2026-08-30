@@ -35,7 +35,6 @@ Visual Studio with the "Desktop development with C++" workload, and Python 3.
 | `native/` | Vendored native modules, built from C/C++ at install time |
 | `vendor/structron` | Vendored binary struct parser |
 | `static/locales` | English and German |
-| `docs/rust-port/` | Assessment and plan for a possible Rust rewrite |
 
 The server is a separate repository: `greluc/AnotherCrewLink-server`.
 
@@ -88,14 +87,15 @@ The server is a separate repository: `greluc/AnotherCrewLink-server`.
 - **Connect an effect before disconnecting the direct path.** The other order
   leaves the player with no output at all if the second step throws.
 - **Tests are node-environment only.** Anything touching Electron or the DOM is
-  not unit-tested; it is covered by running the app. Ten files have tests:
-  `ColliderMap`, `reconnectPolicy`, `validateClientPeerConfig`, `offsetStore`,
-  `offsetsValidator`, `vdf`, `keyBindings`, `recorder`, `iceServers` and
-  `signalRoute`. `offsetsValidator` and `vdf` read `test/fixtures/offsets`, a
-  vendored copy of the real offsets tree — gate G0 requires the validator to accept
-  every real file unchanged, so that half is tested against the whole corpus rather
-  than a sample. `keyBindings` reads the vendored `uiohook-napi` declaration and
-  fails if a scancode has drifted.
+  not unit-tested; it is covered by running the app. Fifteen files have tests:
+  `ColliderMap`, `Mods`, `hatCollection`, `protocolRetirement`, `keyBindings`,
+  `offsetStore`, `offsetsValidator`, `recorder`, `windowOverlap`, `sortLobbies`,
+  `iceServers`, `reconnectPolicy`, `validateServerUrl`, `signalRoute` and
+  `validateClientPeerConfig`. `offsetsValidator` and `offsetStore` read
+  `test/fixtures/offsets`, a vendored copy of the real offsets tree: a validator
+  that rejects real data is a self-inflicted outage, so that half is tested against
+  the whole corpus rather than a sample. `keyBindings` reads the vendored
+  `uiohook-napi` declaration and fails if a scancode has drifted.
 - **Native modules are vendored on purpose.** They used to be installed from
   unpinned branch HEADs. Do not replace a `file:native/...` dependency with a
   git or registry one.
@@ -111,10 +111,11 @@ the warning below it.
 `leave`, `id`, `setHost`, `signal`, `VAD`, `lobby`, `remove_lobby`, `join_lobby`,
 `lobbybrowser`, `disconnect`.
 
-Plus two this client adds and 1.x carries over its WebRTC data channel instead:
-`impostorRadio` and `lobbyRules`. Added alongside rather than repurposed, so a
-mixed lobby degrades — 2.x clients agree with each other, and a 1.x client keeps
-its own rules, which is what every client did before either existed.
+Two things do **not** travel over the socket at all: the host's lobby rules and
+the impostor-radio flag. Both go peer to peer as JSON over the WebRTC data
+channel — `peer.send(JSON.stringify(...))` in `Voice.tsx`. The server never sees
+either, which is why a rule change reaches a lobby only once every peer is
+connected.
 
 **Server to client**, which is just as much of the contract, and there are eleven:
 `join`, `left`, `signal`, `setHost`, `setClient`, `setClients`, `clientPeerConfig`,
@@ -122,9 +123,9 @@ its own rules, which is what every client did before either existed.
 
 > **Corrected 2026-08-26.** This list had `lobbybrowser` in it, and the server never
 > emits it — `const BROWSER_ROOM: &str = "lobbybrowser"` is a *room name*, and the only
-> handler for that string is the one a client calls. Found by
-> `every_event_the_server_sends_is_acted_on` in `acl_core::session`, which failed on an
-> event that cannot arrive.
+> handler for that string is the one a client calls. Found by a conformance test that
+> asserted every event the server sends is acted on, and failed on an event that cannot
+> arrive.
 
 Both lists are read out of `src/socket.rs` in the server repository, which is the
 only place that knows all of them.

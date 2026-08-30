@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
 const { endFrame, isRecording, noteRead, noteString, startRecording, startRecordingIfAsked, stopRecording } =
 	await import('./recorder');
 
-/** Where the committed format fixture lives, shared with the Rust side. */
+/** Where the committed format fixture lives. */
 const FIXTURE_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), '../../test/fixtures/recording-format');
 
 function state(overrides: Partial<AmongUsState> = {}): AmongUsState {
@@ -140,10 +140,10 @@ describe('recorder', () => {
 		expect(written[0].frame).toBe(0);
 	});
 
-	it('produces the fixture the Rust parity harness parses', async () => {
-		// Gate G1's replay reads this format. Writing the fixture from the real recorder,
-		// and parsing it from the real Rust harness, is what stops a recording session
-		// being lost to a format change that neither side noticed.
+	it('writes the committed sample of the recording format', async () => {
+		// The fixture is written by the real recorder rather than by hand, so a change to
+		// the format arrives as a diff in a committed file rather than as a pile of old
+		// recordings that silently stopped being readable.
 		const path = startRecording('format') as string;
 		noteRead(0x140001000, Buffer.from([0x4d, 0x5a, 0x00, 0x00]));
 		noteRead(0x140002000, Buffer.from([0xef, 0xbe, 0xad, 0xde]));
@@ -161,8 +161,8 @@ describe('recorder', () => {
 
 	describe('scrubbing names', () => {
 		it('replaces the name in the state and in the bytes it came from', async () => {
-			// The property the gate rests on. Changing one side only would make the Rust
-			// reader disagree with the recorded state and report a bug that is not there.
+			// The property a replay rests on. Changing one side only would make the bytes
+			// and the recorded state disagree, and report a bug that is not there.
 			const path = startRecording('scrub') as string;
 			noteString(0x2000, nameBytes('Player1'));
 			endFrame({ ...state(), players: [player({ name: 'Player1', nameHash: hashCode('Player1') })] }, false);
@@ -214,7 +214,7 @@ describe('recorder', () => {
 
 		it('recomputes the lobby code of a local game', async () => {
 			// A LAN game has no code to decode, so GameReader shows the host's name hash.
-			// Leaving it stale would make the Rust reader disagree on lobbyCode.
+			// Leaving it stale would leave the scrubbed name recoverable from lobbyCode.
 			const path = startRecording('local') as string;
 			noteString(0x5000, nameBytes('Host'));
 			endFrame(

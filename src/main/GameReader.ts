@@ -458,8 +458,8 @@ export default class GameReader {
 				// `(hostId && clientId && hostId === clientId) as boolean` until 2026-08-24,
 				// which is a cast rather than a conversion: with hostId zero the expression is
 				// the number 0, and that is what went into a field declared boolean and out
-				// over IPC. Falsy either way, so nothing misbehaved -- but the Rust reader
-				// produces `false`, and gate G1 compares the two exactly.
+				// over IPC. Falsy either way, so nothing misbehaved -- but a field declared
+				// boolean should hold one, and a recorded frame carries whatever it held.
 				isHost: hostId !== 0 && clientId !== 0 && hostId === clientId,
 				hostId: hostId,
 				clientId: clientId,
@@ -621,8 +621,8 @@ export default class GameReader {
 		//
 		// Scanning for them was not merely wasted: on a build where the signature misses,
 		// `findPattern` returns an unsigned wrap of a negative number, which went into the
-		// bundle as 1.8446744073709552e19 -- a float, in a field the Rust port reads as an
-		// integer, and it is what made gate G1 refuse a whole recording.
+		// bundle as 1.8446744073709552e19 -- a float in a field meant to hold an integer,
+		// and it is what made a whole recording unreplayable.
 		this.offsets.serverManager_currentServer[0] = this.findPattern(
 			this.offsets.signatures.serverManager.sig,
 			this.offsets.signatures.serverManager.patternOffset,

@@ -1,20 +1,17 @@
 /**
- * Turns `assets/icon.svg` into the raster files Windows needs, for both clients.
+ * Turns `assets/icon.svg` into the raster files Windows needs.
  *
- * The design system's mark is an SVG and Windows takes neither an SVG for a taskbar button
- * nor one for an executable's resource. So it is rendered once, here, and the results are
- * committed: `assets/icon.ico` for the three executables and `assets/icon.png` for the
- * window.
+ * The project's mark is an SVG and Windows takes neither an SVG for a taskbar button nor
+ * one for an executable's resource. So it is rendered once, here, and the results are
+ * committed: `assets/icon.ico` for the executable and `assets/icon.png` for the window.
  *
  * Run it with:
  *
  *     npm run icon
  *
- * Inside Electron for the same reason `scripts/golden-vectors` is: Chromium is the renderer
- * the design system is drawn and reviewed in, so what ships is what the designer saw rather
- * than one rasteriser's opinion of the same file. It also costs no new dependency — the
- * only alternative in reach was adding an SVG rasteriser to the Rust build for a file that
- * changes about once a year.
+ * Inside Electron, because Chromium is the renderer the mark is drawn and reviewed in, so
+ * what ships is what the designer saw rather than one rasteriser's opinion of the same
+ * file. It also costs no new dependency, for a file that changes about once a year.
  *
  * Each size is rendered from the vector rather than scaled down from the largest. A 16-pixel
  * icon downsampled from 256 is a grey smudge; one drawn at 16 has its strokes land on
@@ -101,12 +98,10 @@ app.whenReady().then(async () => {
 	console.log(`assets/icon.ico: ${SIZES.join(', ')} at ${readFileSync(ico).length} bytes`);
 	console.log(`  sha256 ${createHash('sha256').update(readFileSync(ico)).digest('hex')}`);
 
-	// The 1.x app's icon, which electron-builder takes by convention: `electron-builder.yml`
-	// sets `buildResources: resources`, and it reads `icon.ico` and `icon.png` out of there
+	// Where electron-builder takes it from by convention: `electron-builder.yml` sets
+	// `buildResources: resources`, and it reads `icon.ico` and `icon.png` out of there
 	// without being told to. They held BetterCrewLink's artwork, inherited through the fork,
-	// so the app that is still the one people use was introducing itself as the project it
-	// forked from. Written from the same render as the 2.x client's, because the two are the
-	// same program to anybody looking at a taskbar.
+	// so the app was introducing itself as the project it forked from.
 	writeFileSync(join(repo, 'resources', 'icon.ico'), readFileSync(ico));
 	writeFileSync(join(repo, 'resources', 'icon.png'), readFileSync(png));
 	console.log('resources/icon.ico, resources/icon.png: the same render, for electron-builder');

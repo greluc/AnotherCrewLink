@@ -35,9 +35,8 @@ export enum IpcHandlerMessages {
 	/**
 	 * Where to record voice decisions, and whether to at all.
 	 *
-	 * Gate G2 compares the Rust `voice_params` against this client on recorded tuples,
-	 * and the decision is made in the renderer while the directory is only known to the
-	 * main process.
+	 * The decision is made in the renderer, and the directory the file goes in is only
+	 * known to the main process.
 	 */
 	REQUEST_VOICE_RECORDING = 'REQUEST_VOICE_RECORDING',
 }

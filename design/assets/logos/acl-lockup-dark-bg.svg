@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 128" width="620" height="128" role="img" aria-label="AnotherCrewLink">
-<rect width="620" height="128" rx="18" fill="#1d1a23"></rect>
-<g fill="none" stroke="#ba68c8" stroke-linecap="round" stroke-width="7">
-<circle cx="64" cy="64" r="20" fill="#ba68c8" stroke="none"></circle>
-<path d="M64 20a44 44 0 0 1 0 88" opacity=".85"></path>
-<path d="M64 4a60 60 0 0 1 0 120" opacity=".35"></path>
-</g>
-<text x="126" y="78" font-family="'Varela Round',system-ui,sans-serif" font-size="46" fill="#ffffff">AnotherCrewLink</text>
-</svg>

@@ -1,6 +1,13 @@
-# Recordings for gate G1
+# Recordings of real play
 
-These files come from real play, and nothing else can produce them.
+These files come from real play, and nothing else can produce them. Each one holds every
+memory region `GameReader` read, frame by frame, beside the `AmongUsState` it made of
+them — enough to read a session back long after it ended, on a machine with no game on it.
+
+**Nothing in `npm test` reads them today.** They are kept because they cannot be remade
+cheaply: each one cost an evening of somebody's friends playing Among Us, and a reader bug
+found after an Among Us update is one of the few things they answer without asking for
+another one.
 
 ## What is here
 
@@ -40,24 +47,18 @@ Worth writing down, because two of these were only found by trying:
   lobby; three lobbies started and abandoned at 15, 10 and 8 is what produced three
   values.
 
-## Do not guess at this list
+## Do not guess at what the corpus covers
 
-It was written by hand once and was wrong in both directions: it said `isDead` had never
-been compared, when freeplay produces it true in 4126 player-frames, and it did not notice
-that `currentCamera` is the constant `7` in every frame of every recording -- compared, and
-never once exercised. Run the measurement instead:
-
-```bash
-cargo test -p acl-game --test corpus_coverage -- --nocapture
-```
-
-It prints what the corpus reaches and what it does not, before a session so you know what
-to go after, and after one so you know whether you got it. A parity run cannot tell you:
-a branch neither reader reaches compares equal on both sides.
+The list above was written by hand once and was wrong in both directions: it said `isDead`
+had never been reached, when freeplay produces it true in 4126 player-frames, and it did
+not notice that `currentCamera` is the constant `7` in every frame of every recording --
+read every time, and never once varying. Measure it rather than reasoning about it; a
+field that never moves is indistinguishable from one that is never read, and only counting
+tells the two apart.
 
 ## Making one
 
-Set `ACL_RECORD` to a session name before starting the Electron client:
+Set `ACL_RECORD` to a session name before starting the client:
 
 ```bash
 set ACL_RECORD=polus-tasks && npm run dev
@@ -65,33 +66,19 @@ set ACL_RECORD=polus-tasks && npm run dev
 
 Play, **close the app rather than killing it** -- the recording is flushed on `will-quit`
 and a killed process leaves the tail of it in a buffer -- then copy
-`userData/recordings/polus-tasks.ndjson` here, gzip it, and:
+`userData/recordings/polus-tasks.ndjson` here and gzip it.
 
-```bash
-cargo test -p acl-game --test parity
-```
+Player names are replaced before a frame is written. A recording carries the nicknames of
+everyone in the lobby, people who did not agree to be committed to a public repository;
+`ACL_RECORD_KEEP_NAMES=1` turns that off, and is for reading a recording yourself rather
+than for one that goes in here.
 
 ## What to cover
 
-The plan asks for one session per map — Skeld, Mira, Polus, Airship, Fungle — and each
-should cover lobby, tasks, meeting, vents, cameras, sabotage and deaths.
+One session per map — Skeld, Mira, Polus, Airship, Fungle — each covering lobby, tasks,
+meeting, vents, cameras, sabotage and deaths.
 
 That list is not thoroughness for its own sake. Each item is a branch of the reader that
 is only reachable in that situation: a recording where nobody dies never exercises the
-dead flag, one that never enters a vent never exercises `inVent`, and a parity run over
-frames that only show a lobby proves the reader agrees about a lobby.
-
-## What the gate compares
-
-Every field of `AmongUsState`, exactly. The one allowance is float positions, within
-1e-6, and that is for JSON's decimal round trip rather than for the reader.
-
-Without recordings the test **skips loudly** rather than passing. A green run that
-compared nothing would report that the gate is met, which is the worst outcome available.
-
-**It earns its keep.** Adding `maps-and-lobbies-x86` took the corpus from 4653 frames to
-12574 and broke the gate on 23 of them, in four places the Rust reader had got wrong and
-nothing else had noticed: the menu hold that keeps reporting a menu until the game rebuilds
-its player table, the 9999 sentinel for a player the reader could not make sense of, a
-player dropped for having a null object pointer, and two fields that are `undefined` in the
-Electron reader and cannot be a `u32` or a `bool` here.
+dead flag, one that never enters a vent never exercises `inVent`, and a corpus of frames
+that only show a lobby says only that the reader handles a lobby.

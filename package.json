@@ -27,11 +27,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"golden": "electron scripts/golden-vectors/main.mjs",
-		"icon": "electron scripts/rasterise-icon/main.mjs",
-		"opus-vectors": "electron scripts/opus-vectors/main.mjs",
-		"receive-reference": "electron scripts/receive-reference/main.mjs",
-		"our-fec": "electron scripts/our-fec/main.mjs"
+		"icon": "electron scripts/rasterise-icon/main.mjs"
 	},
 	"dependencies": {
 		"electron-overlay-window": "file:native/electron-overlay-window",
