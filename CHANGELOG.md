@@ -1,5 +1,59 @@
 # AnotherCrewLink Changelog
 
+## v1.0.7
+
+The setting most likely to be switched on by somebody who cannot be heard could be the
+thing making them inaudible. That is fixed. The language list also shrinks to the two
+anybody here can actually check.
+
+### Fixed
+
+- **The "NAT fix" setting could leave you unable to hear anyone, or be heard by anyone.**
+  The setting routes every connection through a relay, which is the right answer when a
+  direct connection cannot be made. It did that without checking whether the voice server
+  had offered a relay at all — and where none was offered, forcing it left the connection
+  with nothing to try at all. Not a worse connection: no connection.
+
+  It is the kind of fault that hides itself. A player who could not be heard would go
+  looking, find the setting named after their problem, switch it on, and be cut off
+  completely — with the setting looking like the last thing that had not been tried rather
+  than the cause of what happened next.
+
+  The relay is now used only when there is a relay to use, and the log says so once when
+  there is not. If you turned this on and things got worse, this is why.
+
+### Removed
+
+- **The client ships in English and German only.** It carried thirty-seven languages. The
+  other thirty-five were community translations, and nobody working on this project can
+  read them, check them, or tell a current one from a stale one. Shipping a translation
+  under those conditions is a promise this project cannot keep, which is the same reason
+  Linux went in 1.0.6.
+
+  If you were using one of them, the client falls back to English. That is a real loss and
+  it is not being dressed up as an improvement.
+
+### Changed
+
+- **The 2.0 rewrite has been abandoned, and 1.x is the client again.** Six `2.0.0-alpha`
+  builds went out. There will not be a seventh. The rewrite never reached a client that
+  ran faultlessly end to end, and the tests it set itself needed groups of people playing
+  Among Us on demand to finish — which is not something this project can keep asking for.
+  Better to say so than to carry two clients and finish neither.
+
+  Nothing about this changes for you. Your client updates as it always has, and the
+  installer is packaged the way 1.0.5's was. The six alpha entries are out of this file,
+  which starts at 1.0.6 again.
+
+### Note
+
+- **Nine sentences the client says were English in every language.** "Game reader:",
+  "Connecting…", "Try again", "Update and restart" and "Nobody else is here yet." among
+  them. They were written straight into the source with no entry in any catalogue, so no
+  amount of translating could ever have reached them — and no audit of the catalogues
+  could have found them either, because they were in neither. They are translated in both
+  shipped languages now, and a test fails if a new one is added the same way.
+
 ## v1.0.6
 
 This release drops Linux and raises the minimum Windows to 11. If you run AnotherCrewLink
